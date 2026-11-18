@@ -9,10 +9,16 @@
 
 /** Sample every second while the panel is on screen. */
 export const MEMORY_SAMPLE_MS = 1000;
-/** The plot spans the last five minutes. */
+/** The plot spans the last five minutes unless another window is picked. */
 export const MEMORY_WINDOW_MS = 5 * 60 * 1000;
-/** Ring capacity: the window at one sample a second, with slack for late ticks. */
-export const MEMORY_RING_CAPACITY = 360;
+/** The windows the panel offers; `key` is what `localStorage` keeps (display taste, never the `.slp`). */
+export const MEMORY_WINDOWS = [
+    { key: '5m', ms: 5 * 60 * 1000, label: '5 min' },
+    { key: '30m', ms: 30 * 60 * 1000, label: '30 min' },
+    { key: '1h', ms: 60 * 60 * 1000, label: '1 h' },
+];
+/** Ring capacity: the longest window at one sample a second, with slack for late ticks (~300 KB). */
+export const MEMORY_RING_CAPACITY = 3700;
 /** A step between two samples longer than this breaks the line (the panel was folded, or the page was busy). */
 export const MEMORY_GAP_MS = 3 * MEMORY_SAMPLE_MS;
 /** How often to ask `performance.measureUserAgentSpecificMemory()` (it waits for a GC, so it is slow). */
@@ -258,6 +264,57 @@ export function placeRunLabels(spans, width, charW, lanes) {
     return out;
 }
 
+/**
+ * The reading nearest time `t` (binary search; `samples` oldest first), or
+ * null when the nearest is more than half of `MEMORY_GAP_MS` away (inside a
+ * gap in the line, where readings are more than `MEMORY_GAP_MS` apart) or
+ * there are none.
+ */
+export function sampleAt(samples, t) {
+    if (!samples.length || !Number.isFinite(t)) return null;
+    let lo = 0, hi = samples.length - 1;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (samples[mid].t < t) lo = mid + 1; else hi = mid;
+    }
+    let best = samples[lo];
+    if (lo > 0 && Math.abs(samples[lo - 1].t - t) <= Math.abs(best.t - t)) best = samples[lo - 1];
+    return Math.abs(best.t - t) <= MEMORY_GAP_MS / 2 ? best : null;
+}
+
+/** How long ago, for the hover readout: "just now", "12 s ago", "1 min 20 s ago". */
+export function formatAgo(ms) {
+    return ms < 1000 ? 'just now' : formatDuration(ms) + ' ago';
+}
+
+/** A clock time in 12-hour form, as every time LUCID shows: "3:42:15 PM". */
+export function formatClock(epochMs) {
+    const d = new Date(epochMs);
+    const h = d.getHours(), m = d.getMinutes(), s = d.getSeconds();
+    const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return ((h % 12) || 12) + ':' + pad(m) + ':' + pad(s) + (h < 12 ? ' AM' : ' PM');
+}
+
+/**
+ * The readings as CSV, oldest first, for pasting into an issue or a
+ * spreadsheet: `time` (ISO 8601, UTC: `timeOrigin + t`), `clock` (12-hour
+ * local), heap `used_mb` / `allocated_mb` / `js_object_limit_mb`,
+ * `whole_page_mb` (isolated pages only, else empty), and `running` (the run's
+ * name, else empty). MB to one decimal; unknown → empty.
+ */
+export function readingsCsv(samples, timeOrigin) {
+    const mb = function (v) { return Number.isFinite(v) ? (v / MB).toFixed(1) : ''; };
+    const cell = function (v) { return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const rows = ['time,clock,used_mb,allocated_mb,js_object_limit_mb,whole_page_mb,running'];
+    samples.forEach(function (s) {
+        const at = timeOrigin + s.t;
+        rows.push([
+            new Date(at).toISOString(), formatClock(at), mb(s.used), mb(s.total), mb(s.limit), mb(s.ua), cell(s.run || ''),
+        ].join(','));
+    });
+    return rows.join('\n') + '\n';
+}
+
 /** Bytes → "1,234 MB" (MiB, rounded, en-US grouping). Unknown → "–". */
 export function formatMB(bytes) {
     if (!Number.isFinite(bytes)) return '–';
@@ -293,16 +350,42 @@ export function plotGeometry(samples, opts) {
     if (!(yMax > 0)) yMax = 1;
     const x = function (t) { return (t - t0) / windowMs * width; };
     const y = function (v) { return height - v / yMax * height; };
+    // Over a long window many readings share one unit of width: each column
+    // keeps its first, lowest, highest and last reading (in time order), so
+    // the path stays ~4 points per unit and a one-second spike still shows.
     const path = function (key) {
         let d = '';
         let prevT = -Infinity;
-        shown.forEach(function (s) {
+        let col = null; // { c, move, pts: [{t, v}] } — first, min, max, last
+        const flush = function () {
+            if (!col) return;
+            const p = col.pts;
+            const keep = [p.first];
+            const ext = p.min.i <= p.max.i ? [p.min, p.max] : [p.max, p.min];
+            ext.concat([p.last]).forEach(function (q) { if (!keep.some(function (k) { return k.i === q.i; })) keep.push(q); });
+            keep.forEach(function (q, j) {
+                d += (j === 0 && col.move ? 'M' : 'L') + x(q.t).toFixed(1) + ' ' + y(q.v).toFixed(1);
+            });
+            col = null;
+        };
+        shown.forEach(function (s, i) {
             const v = s[key];
-            if (!Number.isFinite(v)) { prevT = -Infinity; return; }
-            const cmd = s.t - prevT > MEMORY_GAP_MS ? 'M' : 'L';
-            d += cmd + x(s.t).toFixed(1) + ' ' + y(v).toFixed(1);
+            if (!Number.isFinite(v)) { flush(); prevT = -Infinity; return; }
+            const gap = s.t - prevT > MEMORY_GAP_MS;
+            const c = Math.floor(x(s.t));
+            const q = { t: s.t, v: v, i: i };
+            if (gap || !col || c !== col.c) {
+                flush();
+                col = { c: c, move: gap, pts: { first: q, min: q, max: q, last: q } };
+            } else {
+                const p = col.pts;
+                if (v < p.min.v) p.min = q;
+                if (v > p.max.v) p.max = q;
+                p.last = q;
+            }
             prevT = s.t;
         });
+        flush();
         return d;
     };
     return {

@@ -13062,7 +13062,7 @@ throws on an unknown name).
 
 **Purpose.** The Memory panel (`#tabMemory`, last on the right-edge rail): the
 page's JavaScript heap (`performance.memory.usedJSHeapSize`) over the last
-five minutes as an inline-SVG line, V8's limit (`jsHeapSizeLimit`) as a
+five minutes, 30 minutes or hour as an inline-SVG line, V8's limit (`jsHeapSizeLimit`) as a
 dashed reference line named **"JS object limit"** (never "heap limit": it caps
 JavaScript objects only, and `usedJSHeapSize` also counts typed arrays outside
 it, so a big project reads well above it and is fine: 05mice after Track All
@@ -13073,7 +13073,8 @@ groups, the size of the frame-keyed `instanceGroups`; sessions). An ⓘ says wha
 Chrome's GPU and other processes) and that typed arrays count, so it can read
 above the ~4 GB cap.
 - **Reads the heap once a second from app start, open or not**, so opening
-  the panel shows the last five minutes (a run done with it closed included).
+  the panel shows the last five minutes, or up to an hour (a run done with it
+  closed included); the ring keeps an hour (~300 KB).
   A reading is `performance.memory` into the ring: ~6 µs, the same on the demo
   and on a 5.7 GB 8-camera project after Track All.
 - **Marks runs.** Each reading notes what was running
@@ -13109,8 +13110,20 @@ above the ~4 GB cap.
   the rest of the page's life.
 - **Workers** are counted only by `measureUserAgentSpecificMemory()`, so only
   on an isolated page (`server.py --isolated`) in Chrome.
+- **Window switch** (5 min / 30 min / 1 h, in the heading): relabels the axis,
+  the peak row and the plot's `aria-label`. The pick is display taste:
+  `localStorage.lucidMemoryWindow` (`5m`/`30m`/`1h`, best-effort), written
+  only when one is picked, never the `.slp`.
+- **Hover** (`renderHover`): over the plot, a dashed guide and a dot on the
+  reading nearest the pointer (`sampleAt`), and the big number shows that
+  reading with how long ago and what was running ("2 min 5 s ago · Track
+  All"); off the plot it is the current reading again. Redrawn on each
+  reading while the pointer stays.
+- **Copy readings** (`#memoryCopy`): every reading kept (up to an hour) as CSV
+  (`readingsCsv`) to the clipboard (`navigator.clipboard`, else a hidden
+  textarea + `execCommand('copy')`); the button says how many for 2 s.
 - Samples live in a `MemoryRing` in memory only: nothing in the `.slp` or
-  `localStorage` (the rail remembers only whether the panel is open).
+  `localStorage` (which holds only the rail's open panels and the window pick).
 
 **Key exports.** `setupMemoryPanel()` (once, after `setupPanelRail`),
 `syncMemorySampling()`, `MEMORY_INFO_TEXT`. Test hook
@@ -13134,7 +13147,15 @@ above the ~4 GB cap.
 `projectCounts(sessions)` (Map sizes and `lazyLoader.nFrames` only),
 `formatMB`, and `plotGeometry(samples, {width, height, now, windowMs, limit})`
 (SVG path data; y from 0 to max(limit, 1.1 x peak), so the limit line is
-always drawn; a step over `MEMORY_GAP_MS` breaks the line).
+always drawn; a step over `MEMORY_GAP_MS` breaks the line; where several
+readings share one unit of width (30 min, 1 h) each column keeps its first,
+lowest, highest and last, so an hour is ≤ ~4 points per unit and a
+one-second spike still reaches its height).
+Hover and copy: `sampleAt(samples, t)` (nearest reading by binary search,
+null inside a gap), `formatAgo` ("just now", "12 s ago"), `formatClock`
+(12-hour "3:42:15 PM"), `readingsCsv(samples, timeOrigin)` (`time` ISO UTC,
+`clock`, `used_mb`, `allocated_mb`, `js_object_limit_mb`, `whole_page_mb`,
+`running`; MB to one decimal, unknown empty, names quoted as CSV needs).
 Runs: `runName(card)` (the progress card's title, else its message up to the
 first count / colon / ellipsis, cut to 40 characters; null with no card),
 `formatDuration(ms)` ("45 s", "2 min 5 s", "1 h 3 min"),
@@ -13149,7 +13170,9 @@ else right-aligned at its band's end, in the first row where it fits whole,
 else cut; hidden under three characters).
 
 **Key exports.** The above, plus `MEMORY_SAMPLE_MS` (1 s), `MEMORY_WINDOW_MS`
-(5 min), `MEMORY_RING_CAPACITY` (360), `MEMORY_GAP_MS`, `UA_MEMORY_EVERY_MS`.
+(5 min, the default), `MEMORY_WINDOWS` (`{key, ms, label}` for 5 min / 30 min /
+1 h), `MEMORY_RING_CAPACITY` (3,700: an hour with slack), `MEMORY_GAP_MS`,
+`UA_MEMORY_EVERY_MS`.
 
 **Imports from project modules.** None (leaf). **Imported by.**
 `ui/memory-panel.js`, `tests/test-memory-plot.mjs`.

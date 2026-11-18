@@ -7,8 +7,8 @@
  */
 import {
     MemoryRing, isBucketizedHeap, readHeap, summarizeUaMemory, projectCounts, formatMB, plotGeometry,
-    runName, formatDuration, runSpans, placeRunLabels,
-    MEMORY_GAP_MS, MEMORY_WINDOW_MS, MEMORY_SAMPLE_MS,
+    runName, formatDuration, runSpans, placeRunLabels, sampleAt, formatAgo, formatClock, readingsCsv,
+    MEMORY_GAP_MS, MEMORY_WINDOW_MS, MEMORY_SAMPLE_MS, MEMORY_WINDOWS, MEMORY_RING_CAPACITY,
 } from '../ui/memory-plot.js';
 
 let passed = 0, failed = 0;
@@ -204,6 +204,55 @@ const J = JSON.stringify;
         check(pl.every((r, i) => i === 0 || r[0] >= pl[i - 1][1] - 1e-9) && pl.every(r => r[0] >= -1e-9 && r[1] <= W + 1e-9),
             `the room each shown name may take never overlaps the next one's, and stays inside the plot (${sps.map(s => s.name).join(', ')})`);
     }
+}
+
+// ---- §12 longer windows: the ring holds an hour, the line stays light ----
+{
+    const MB = 1048576;
+    check(J(MEMORY_WINDOWS.map(w => w.label)) === '["5 min","30 min","1 h"]' && MEMORY_WINDOWS[0].ms === MEMORY_WINDOW_MS,
+        'the windows offered: 5 min (the default), 30 min, 1 h');
+    const longest = Math.max(...MEMORY_WINDOWS.map(w => w.ms));
+    check(MEMORY_RING_CAPACITY * MEMORY_SAMPLE_MS >= longest, `the ring holds the longest window at one reading a second (${MEMORY_RING_CAPACITY})`);
+    const now = 4000000, hour = 3600000;
+    const samples = [];
+    for (let k = 3600; k >= 0; k--) samples.push({ t: now - k * 1000, used: (k === 1800 ? 900 : 100 + (k % 7)) * MB, ua: NaN });
+    const g = plotGeometry(samples, { width: 260, height: 100, now, windowMs: hour, limit: 1000 * MB });
+    const pts = (g.usedPath.match(/[ML]/g) || []).length;
+    check(pts <= 4 * 261 && pts >= 260, `an hour of readings is ≤ 4 points per unit of width (${pts} for 3,601 readings)`);
+    const ys = [...g.usedPath.matchAll(/[ML][\d.]+ ([\d.]+)/g)].map(m => +m[1]);
+    check(Math.min(...ys) <= 100 - 900 / 1000 * 100 + 0.1, 'a one-second spike in an hour still reaches its height');
+    check((g.usedPath.match(/M/g) || []).length === 1, 'and the thinned line has no false gaps');
+    const short = plotGeometry(samples, { width: 300, height: 100, now, windowMs: MEMORY_WINDOW_MS, limit: 1000 * MB });
+    check((short.usedPath.match(/[ML]/g) || []).length === 301, 'five minutes at one unit a second: every reading drawn');
+}
+
+// ---- §13 the reading under the pointer ----
+{
+    const s = [{ t: 1000 }, { t: 2000 }, { t: 3000 }, { t: 9000 }];
+    check(sampleAt(s, 2400).t === 2000 && sampleAt(s, 2600).t === 3000 && sampleAt(s, 0).t === 1000, 'the nearest reading');
+    check(sampleAt(s, 6000) === null, 'none in a gap longer than MEMORY_GAP_MS (the line is broken there)');
+    check(sampleAt([], 5) === null && sampleAt(s, NaN) === null, 'no readings, or no time → none');
+    check(formatAgo(400) === 'just now' && formatAgo(12000) === '12 s ago' && formatAgo(80000) === '1 min 20 s ago', 'how long ago');
+    const at = (h, m, sec) => new Date(2026, 10, 17, h, m, sec).getTime();
+    check(formatClock(at(0, 5, 9)) === '12:05:09 AM' && formatClock(at(12, 0, 0)) === '12:00:00 PM' && formatClock(at(15, 42, 15)) === '3:42:15 PM',
+        'clock times in 12-hour form');
+}
+
+// ---- §14 copying the readings as CSV ----
+{
+    const MB = 1048576;
+    const origin = Date.UTC(2026, 10, 17, 20, 0, 0);
+    const csv = readingsCsv([
+        { t: 0, used: 100 * MB, total: 120 * MB, limit: 4192 * MB, ua: NaN, run: null },
+        { t: 1500, used: 150.25 * MB, total: NaN, limit: 4192 * MB, ua: 300 * MB, run: 'Save, then "check"' },
+    ], origin);
+    const lines = csv.trimEnd().split('\n');
+    check(lines[0] === 'time,clock,used_mb,allocated_mb,js_object_limit_mb,whole_page_mb,running', 'a header row');
+    check(lines.length === 3 && lines[1].startsWith('2026-11-17T20:00:00.000Z,') && lines[2].startsWith('2026-11-17T20:00:01.500Z,'),
+        "one row per reading, oldest first, ISO times from the page's time origin");
+    check(lines[1].endsWith(',100.0,120.0,4192.0,,') && lines[2].endsWith(',150.3,,4192.0,300.0,"Save, then ""check"""'),
+        'MB to one decimal, unknown left empty, a name with a comma or quote quoted');
+    check(/^[^,]+,\d{1,2}:\d\d:\d\d [AP]M,/.test(lines[1]), 'a 12-hour local clock column');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
