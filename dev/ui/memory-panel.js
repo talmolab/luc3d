@@ -40,15 +40,15 @@
  * The samples live in a ring in memory (`MemoryRing`): nothing goes to the
  * `.slp` or `localStorage`. Test hook: `window.__lucidMemoryPanel`.
  */
-import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=f8b70e0b2488';
-import { setInfoTip, ICON_INFO } from './info-tip.js?v=f8b70e0b2488';
-import { state } from './app-state.js?v=f8b70e0b2488';
-import { loadingCardText } from './loading-overlay.js?v=f8b70e0b2488';
+import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=35646fe2a8aa';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=35646fe2a8aa';
+import { state } from './app-state.js?v=35646fe2a8aa';
+import { loadingCardText } from './loading-overlay.js?v=35646fe2a8aa';
 import {
     MEMORY_SAMPLE_MS, MEMORY_WINDOW_MS, UA_MEMORY_EVERY_MS,
     MemoryRing, readHeap, summarizeUaMemory, projectCounts, formatMB, plotGeometry,
     runName, runSpans, placeRunLabels, formatDuration,
-} from './memory-plot.js?v=f8b70e0b2488';
+} from './memory-plot.js?v=35646fe2a8aa';
 
 const TAB = 'tabMemory';
 const PLOT_W = 260;
