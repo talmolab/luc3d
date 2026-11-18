@@ -3071,6 +3071,7 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, {
             onCount: function (done, total) { return openProgress('groups', done, total); },
             fileIdentities: identitiesFromFile ? labels.identities : null,
+            labels: labels, // members are read from its lazy store's rows
         });
         // A LUC3D project that stored only the identities its groups do not
         // imply: rebuild the rest from the groups just restored.
