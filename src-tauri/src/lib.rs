@@ -276,9 +276,10 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         let window = window.hidden_title(true);
         let window = window.build()?;
-        // Record the paths of files the user picks through the page's own
-        // file inputs (macOS; see input_paths.rs). AFTER the window: wry
-        // registers the Objective-C class it patches when it makes a webview.
+        // Learn the paths of files the user picks through the page's own
+        // file inputs (macOS, Linux, Windows; see input_paths.rs). AFTER the
+        // window: it hooks the live webview (on macOS wry registers the
+        // Objective-C class it patches when it makes a webview).
         input_paths::install(&window, Arc::clone(&app.state::<Arc<files::GrantState>>()));
         Ok(())
     });

@@ -2559,7 +2559,9 @@ dependencies = [
  "base64 0.22.1",
  "block2",
  "dirs",
+ "gtk",
  "iroh",
+ "javascriptcore-rs",
  "libc",
  "objc2",
  "reqwest",
@@ -2573,6 +2575,9 @@ dependencies = [
  "tauri-plugin-localhost",
  "tauri-plugin-updater",
  "tokio",
+ "webkit2gtk",
+ "webview2-com",
+ "windows-core 0.61.2",
  "windows-sys 0.60.2",
 ]
 
