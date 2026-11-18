@@ -1610,6 +1610,29 @@ export function adoptLabeledFrameCount() {
 // `enumerateDirectoryHandle` moved to ./recording-folder.js; re-exported for existing importers.
 export { enumerateDirectoryHandle };
 
+/**
+ * The final status of a multi-session load from each session's outcome
+ * (`handleLoadSessionFolderPerCamera`'s return): plain success when every
+ * session loaded cleanly, else the count that loaded plus each other
+ * session's own message, as an error when any failed or reported an error.
+ *
+ * @param {Array<{name: string, outcome: {ok: boolean, message: string, kind: string}}>} outcomes
+ * @returns {{message: string, kind: string}}
+ */
+export function multiSessionStatus(outcomes) {
+    var loaded = outcomes.filter(function (o) { return o.outcome.ok; }).length;
+    var problems = outcomes.filter(function (o) { return !o.outcome.ok || o.outcome.kind !== 'success'; });
+    if (problems.length === 0) return { message: 'Loaded ' + outcomes.length + ' sessions', kind: 'success' };
+    var kind = problems.some(function (o) { return !o.outcome.ok || o.outcome.kind === 'error'; }) ? 'error' : 'warning';
+    var head = loaded === outcomes.length
+        ? 'Loaded ' + loaded + ' sessions'
+        : 'Loaded ' + loaded + ' of ' + outcomes.length + ' sessions';
+    return {
+        message: head + ' — ' + problems.map(function (o) { return o.name + ': ' + o.outcome.message; }).join(' | '),
+        kind: kind,
+    };
+}
+
 export async function handleLoadMultiSession() {
     try {
         setStatus('Pick parent folder containing session subfolders...', 'warning');
@@ -1683,10 +1706,6 @@ export async function handleLoadMultiSession() {
 
         showLoading('Loading ' + sessionDirs.length + ' sessions...');
         console.log('[multi-session] Found sessions:', sessionDirs.map(function (d) { return d.name; }));
-        // Starting a project: the tab takes the parent folder's name. Added to
-        // an open project, the sessions keep that project's name.
-        if (state.sessions.length === 0) setPageProject(parentHandle.name);
-
         // Scan every session first, so ONE data-file dialog covers them all
         // (one tab per session) before anything loads — Cancel leaves the app
         // as it was (#413).
@@ -1710,8 +1729,13 @@ export async function handleLoadMultiSession() {
             setStatus('Load cancelled — no data files chosen', 'warning');
             return;
         }
+        // Starting a project: the tab takes the parent folder's name. Added to
+        // an open project, the sessions keep that project's name. (After the
+        // chooser, so a Cancel there changes nothing.)
+        if (state.sessions.length === 0) setPageProject(parentHandle.name);
 
         // Load each session — first gets full video init, rest defer decoders
+        var sessionOutcomes = [];
         for (var si = 0; si < sessionDirs.length; si++) {
             var sess = sessionDirs[si];
             showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
@@ -1720,12 +1744,17 @@ export async function handleLoadMultiSession() {
             state.totalFrames = 0;
             state.fps = 0;
 
-            await handleLoadSessionFolderPerCamera(sessionFilesList[si], si > 0,
+            var outcome = await handleLoadSessionFolderPerCamera(sessionFilesList[si], si > 0,
                 { dataFiles: dataFilesBySession[sess.name], folderHandle: sess.handle });
+            sessionOutcomes.push({ name: sess.name, outcome: outcome || { ok: false, message: 'no result', kind: 'error' } });
         }
 
         hideLoading();
-        setStatus('Loaded ' + sessionDirs.length + ' sessions', 'success');
+        // Each session's own status was overwritten by the next one's, and a
+        // plain "Loaded N sessions" success then hid a session that failed or
+        // lost a camera (#415). Name every session that did not load cleanly.
+        var msStatus = multiSessionStatus(sessionOutcomes);
+        setStatus(msStatus.message, msStatus.kind);
 
         // Display first session's grid (it has live decoders from eager load)
         if (state.sessions.length > 1) {
@@ -1761,8 +1790,11 @@ export async function handleLoadMultiSession() {
                         autoLoadedSkeleton = true;
                         drawAllOverlays(state.currentFrame);
                         updateInfoPanel();
-                        setStatus('Loaded skeleton from ' + parentSkeletonHandle.name +
-                            ' for all ' + state.sessions.length + ' sessions', 'success');
+                        var skMsg = 'Loaded skeleton from ' + parentSkeletonHandle.name +
+                            ' for all ' + state.sessions.length + ' sessions';
+                        // Never cover a session that did not load (msStatus).
+                        if (msStatus.kind === 'success') setStatus(skMsg, 'success');
+                        else setStatus(msStatus.message + ' — ' + skMsg, msStatus.kind);
                     }
                 } catch (e) {
                     console.warn('[multi-session] parent skeleton auto-load failed:', e);
@@ -3467,6 +3499,20 @@ export function sessionDataFilePlan(key, folderName, matchedCameraDirs) {
     };
 }
 
+/**
+ * Load a per-camera session folder (`<session>/<cam>/<video + data file>`),
+ * as a new session.
+ *
+ * @param {File[]} [preloadedFiles] - the folder's files; absent → pick a folder
+ * @param {boolean} [deferVideos] - store the videos without opening decoders
+ * @param {{dataFiles?: Object, folderHandle?: FileSystemDirectoryHandle}} [opts]
+ *   `dataFiles`: this session's entry of `resolveDataFiles`' answer (the
+ *   multi-session loader settles every session up front); `folderHandle`: the
+ *   folder Save opens in.
+ * @returns {Promise<{ok: boolean, cancelled?: boolean, message: string, kind: string}>}
+ *   how the load ended, with the status it set — so a multi-session load can
+ *   say which session failed instead of covering it with its own success line.
+ */
 export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos, opts) {
     opts = opts || {};
     // The folder Save opens in (multi-session hands each session's handle in).
@@ -3477,14 +3523,49 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
     var loadEnded = false;
     var previousSession = state.session;
     var lazyLoader = null;
+    var videoInits = null;
+    // End the load: set the status and say how it went (see @returns).
+    var ended = function (ok, message, kind, cancelled) {
+        loadEnded = true;
+        setStatus(message, kind);
+        return { ok: ok, cancelled: !!cancelled, message: message, kind: kind };
+    };
+    // A load that fails after the open session was stashed (its views taken
+    // off screen, `state.session` cleared) must put that session back, panes
+    // and all — otherwise the app is left with no active session and an empty
+    // grid under the error.
+    var restorePreviousSession = function () {
+        if (state.session || !previousSession) return;
+        state.session = previousSession;
+        state.triangulationResults = previousSession.triangulationResults || new Map();
+        if (!previousSession._views) return;
+        state.views = previousSession._views;
+        setVideoController(previousSession._videoController);
+        if (previousSession.totalFrames) state.totalFrames = previousSession.totalFrames;
+        if (previousSession.fps) state.fps = previousSession.fps;
+        try {
+            paneManager.clearAll();
+            populateViewStrip();
+            populateSessionStrip();
+            if (state.views.length > 0) {
+                paneManager.addAllViewsAsGrid();
+                rebuildVideoController();
+                updateTotalFrames();
+                fitCanvasesToCells();
+                if (interactionManager) { interactionManager.detach(); interactionManager.attach(state.views); }
+                if (videoController) Promise.resolve(videoController.seekToFrame(state.currentFrame)).catch(function () { });
+            }
+        } catch (e) {
+            console.warn('[session-folder] Could not re-show the previous session:', e);
+        }
+    };
     try {
         var allFiles;
         if (preloadedFiles) {
             allFiles = preloadedFiles;
         } else {
             if (!(await confirmFolderPick())) {
-                setStatus('No folder selected', 'warning');
-                return;
+                return ended(false, 'No folder selected', 'warning', true);
             }
             setStatus('Pick session folder...', 'warning');
             // With showDirectoryPicker the folder's handle comes too: Save opens there.
@@ -3492,8 +3573,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             allFiles = picked.files;
             folderHandle = picked.dirHandle;
             if (allFiles.length === 0) {
-                setStatus('No folder selected', 'warning');
-                return;
+                return ended(false, 'No folder selected', 'warning', true);
             }
         }
 
@@ -3531,10 +3611,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 onAnswered: function () { showLoading('Loading session...'); },
             });
             if (!resolvedAll) {
-                loadEnded = true;
                 hideLoading();
-                setStatus('Load cancelled — no data files chosen', 'warning');
-                return;
+                return ended(false, 'Load cancelled — no data files chosen', 'warning', true);
             }
             dataFiles = resolvedAll[dfKey];
         }
@@ -3615,8 +3693,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
         if (matchedCameraDirs.length === 0) {
             hideLoading();
-            setStatus('No camera directories with videos found in folder', 'error');
-            return;
+            return ended(false, 'No camera directories with videos found in folder', 'error');
         }
 
         // Views in campy's camera order (session.json), not the calibration's
@@ -3670,6 +3747,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         // or the user's answer in the chooser). A camera set to "None" loads
         // no annotations.
         var slpChoices = [];
+        // camName -> the data file it loads: what the session records as each
+        // video's `slpFilename` (the Videos table's source, and the stem File ▸
+        // Export SLEAP File By Cam names `<source>_proofread.slp` after).
+        var loadedDataFileByCam = {};
         for (var cdi = 0; cdi < matchedCameraDirs.length; cdi++) {
             var camDir = matchedCameraDirs[cdi];
             if (camDir.slps.length === 0) continue;
@@ -3686,6 +3767,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     + ((dataFiles.how && dataFiles.how[camDir.camName]) || 'auto') + ').');
             }
             slpChoices.push({ camName: camDir.camName, file: chosenFile });
+            loadedDataFileByCam[camDir.camName] = chosenFile.name;
         }
 
         // Pass 2 — route the WHOLE FOLDER one way. Deciding per file let one
@@ -3830,9 +3912,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 loadEnded = true;
                 try { lazyLoader.close(); } catch (e) { /* nothing open */ }
                 lazyLoader = null;
+                restorePreviousSession();
                 hideLoading();
-                setStatus('Failed to load annotations (lazy): ' + (lazyFirstError && lazyFirstError.message || lazyFirstError), 'error');
-                return;
+                return ended(false, 'Failed to load annotations (lazy): ' + (lazyFirstError && lazyFirstError.message || lazyFirstError), 'error');
             }
         }
 
@@ -3982,7 +4064,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         // so a failed camera cannot become an unhandled rejection while an
         // earlier camera is still being awaited.
         var videosLoaded = 0;
-        var videoInits = matchedCameraDirs.map(function (cd) {
+        videoInits = matchedCameraDirs.map(function (cd) {
             if (deferVideos || cd.videos.length === 0) return null;
             var dec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
             return dec.init(cd.videos[0]).then(function () {
@@ -3991,8 +4073,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 return { error: err };
             }).then(function (r) {
                 videosLoaded++;
-                showLoadingProgress('Loading videos', videosLoaded, nVideosToLoad,
-                    loadStep(LOAD_STEPS, 'videos'));
+                // A video finishing after the load has ended (a throw sent it
+                // to the catch below) must not reopen the card (#415).
+                if (!loadEnded) {
+                    showLoadingProgress('Loading videos', videosLoaded, nVideosToLoad,
+                        loadStep(LOAD_STEPS, 'videos'));
+                }
                 return r;
             });
         });
@@ -4003,10 +4089,14 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             var camDir = matchedCameraDirs[vdi];
             var camName = camDir.camName;
 
-            // Scan SLP files for highest version (for export naming)
-            var slpFilenameForCam = null;
+            // The file this camera loaded. With none ("None", or a camera with
+            // no data file), the highest `_vN` in the folder, as before. The
+            // scan alone used to name a file the chooser had NOT picked (the
+            // first one listed when nothing is versioned, e.g. a reprojection
+            // file), and By Cam then named its export after that file.
+            var slpFilenameForCam = loadedDataFileByCam[camName] || null;
             var highestVersion = 0;
-            for (var sfi = 0; sfi < camDir.slps.length; sfi++) {
+            for (var sfi = 0; !loadedDataFileByCam[camName] && sfi < camDir.slps.length; sfi++) {
                 var slpName = camDir.slps[sfi].name;
                 if (!slpFilenameForCam) slpFilenameForCam = slpName;
                 var slpStem = slpName.replace(/\.[^.]+$/, '');
@@ -4341,8 +4431,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             statusKind = 'error';
         }
         var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
-        setStatus(campyStatus.message, campyStatus.kind);
+        var done = ended(true, campyStatus.message, campyStatus.kind);
         noteUnplayableVideos(videoFailures, nVideosToLoad);
+        return done;
 
     } catch (err) {
         loadEnded = true;
@@ -4352,17 +4443,19 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         if (lazyLoader && !(state.session && state.session.lazyLoader === lazyLoader)) {
             try { lazyLoader.close(); } catch (e) { /* nothing open */ }
         }
-        // Restore previous session if new one failed
-        if (!state.session && previousSession) {
-            state.session = previousSession;
-            if (previousSession._views) {
-                state.views = previousSession._views;
-                setVideoController(previousSession._videoController);
-            }
-            state.triangulationResults = previousSession.triangulationResults || new Map();
-        }
+        // Decoders still opening, or opened and never handed to a view, would
+        // otherwise run on with nothing to close them.
+        (videoInits || []).forEach(function (p) {
+            if (!p) return;
+            p.then(function (r) {
+                if (r && r.decoder && state.decoderPool.indexOf(r.decoder) < 0) {
+                    try { r.decoder.close(); } catch (e) { /* closed */ }
+                }
+            });
+        });
+        restorePreviousSession();
         hideLoading();
-        setStatus('Session folder error: ' + err.message, 'error');
+        return ended(false, 'Session folder error: ' + err.message, 'error');
     }
 }
 

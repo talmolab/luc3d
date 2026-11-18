@@ -13263,9 +13263,13 @@ exactly the old suffix rule. See the `loading/session-loader.js` entry for why
 `isProofreadSlp(name)`; `chooseProofreadSource(slps, loadedName)` — the `.slp` in a
 camera folder the project's 2D came from: never a `_proofread` output, the
 recorded `loadedName` (`videoFiles[].slpFilename`) while it is there, else
-`chooseCameraSlp`. The loaders do NOT skip `_proofread` files: a camera folder
-holding one is loaded from the newer of the two (same version 0, `lastModified`
-breaks the tie). Test: `tests/test-proofread-export-name.mjs`.
+`chooseCameraSlp`. The loaders do NOT skip `_proofread` files: the per-camera
+loader decides with `planCameraDataFile` like any other file — a By Cam export
+carries LUC3D's export stamp, so it loads without asking while it is also the
+newest file in the folder, and a newer file beside it opens the chooser. The
+per-camera loader records the file each camera actually loaded as
+`videoFiles[].slpFilename`, so `loadedName` is that file. Test:
+`tests/test-proofread-export-name.mjs`.
 
 **Imports from project modules.** None (deliberately).
 
@@ -13637,7 +13641,15 @@ filesystem enumeration, decoder rebuild.
   `handleLoadSessionFolder`, `handleEmptySession`,
   `handleLoadSessionFolderSingleSlp`,
   `handleLoadSessionFolderPerCamera`, `handleLoadProjectSlpLazy`,
-  `attachVideosForLazyReopen`. Also `addColumnarFramesToSession` (the
+  `attachVideosForLazyReopen`. `handleLoadSessionFolderPerCamera(files?,
+  deferVideos?, {dataFiles?, folderHandle?})` resolves to how the load ended,
+  `{ok, cancelled, message, kind}` (the status it set);
+  `handleLoadMultiSession` collects them and ends on
+  `multiSessionStatus(outcomes)` — plain "Loaded N sessions" only when every
+  session loaded cleanly, else "Loaded k of N sessions — <session>: <its
+  message> | …" as an error/warning (a failed session used to be covered by a
+  green "Loaded N sessions", #415; the parent `skeleton.json` status keeps it
+  in front too). Also `addColumnarFramesToSession` (the
   per-camera load's Instance builder from the SLP worker's columnar result;
   exported for `tests/e2e/slp-import-fast-compound.mjs`).
   `scanPerCameraFolder(files)` is the per-camera load's side-effect-free first
@@ -13761,7 +13773,7 @@ filesystem enumeration, decoder rebuild.
   (`pickFolder`). With a handle, the new session keeps it as
   `session._recordingFolder` (in memory only, never in the `.slp`), and
   File ▸ Save / Save As open there. `handleLoadSessionFolderPerCamera(files,
-  deferVideos, folderHandle)` takes the handle as its third argument, which
+  deferVideos, {folderHandle})` takes the handle in its options, which
   `handleLoadMultiSession` passes for each session subfolder. Test:
   `tests/e2e/save-opens-in-recording-folder.mjs`.
 - **campy recordings** (`loading/campy-session.js`):
@@ -13894,7 +13906,12 @@ own: a failed one is named in the status line (`slpFailures`) and the rest
 load; only when none opens does the load fail ("Failed to load annotations
 (lazy): …"). Once the load has ended (`loadEnded`), a straggling camera's
 progress callback is ignored, so it cannot bring the loading card back over the
-result (#415). It plugs into the `state.session.lazyLoader` seam, so
+result (#415); the same goes for the video decoders' progress, and on a throw
+the decoders never handed to a view are closed. A load that fails after the
+open session was stashed (that "none opened" return, or the catch) puts it
+back — `state.session`, its views, panes and video controller
+(`restorePreviousSession`) — instead of leaving no active session and an empty
+grid under the error. It plugs into the `state.session.lazyLoader` seam, so
 rendering/scrubbing are unchanged. Covered by
 `tests/e2e/percam-mixed-format-lazy.mjs`.
 
