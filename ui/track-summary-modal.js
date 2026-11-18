@@ -90,6 +90,7 @@ export function showTrackSummaryModal(summary, checks, opts) {
 
     var overlay = el('div', 'multi-frame-modal-overlay');
     overlay.id = 'trackSummaryOverlay';
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
     var modal = el('div', 'multi-frame-modal track-summary-modal');
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-labelledby', 'trackSummaryTitle');

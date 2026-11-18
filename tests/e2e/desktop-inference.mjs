@@ -229,6 +229,17 @@ try {
         'sections in sleap-app\'s order', p3.sections);
     check(p3.runDisabled, 'Run disabled with no session/model/folder');
     check(/sleap-nn 0\.3\.5/.test(p3.env) && /MPS/.test(p3.env), 'detected sleap-nn and the GPU shown under Remote', p3.env);
+    // Nothing imported: the Models modal has no views, only the message.
+    await page.click('#infAssignModels');
+    await page.waitForSelector('#infModelsModal');
+    const empty = await page.evaluate(() => ({
+        msg: (document.getElementById('infMmNoViews') || {}).textContent,
+        rows: document.querySelectorAll('#infMmViews tbody tr').length,
+        stage: document.querySelector('#infMm3dStage .inf-mm-stagemsg').textContent,
+    }));
+    check(empty.msg === 'Import a session or project first.' && empty.rows === 0, 'no data → "Import a session or project first."', empty);
+    await page.keyboard.press('Escape');
+    check(await page.evaluate(() => !document.getElementById('infModelsModal')), 'Esc closes the Models modal');
 
     // ---------------------------------------------------------------- 4
     console.log('\n4. A two-view session; model; video folder');
@@ -281,19 +292,62 @@ try {
             mkFile([v1], ROOT + '/cam1/cam1.mp4', 'video/mp4'), mkFile([v2], ROOT + '/cam2/cam2.mp4', 'video/mp4'),
             mkFile([await slp('cam1')], ROOT + '/cam1/cam1.slp'), mkFile([await slp('cam2')], ROOT + '/cam2/cam2.slp')];
         AS.state.sessions = []; AS.state.activeSessionIdx = 0; AS.state.videoFiles = []; AS.state.session = null; AS.state.views = [];
-        window.__mock.inputPick('/rec', true);   // the session folder, picked in the page's own dialog
-        await loader.handleLoadSessionFolderPerCamera(files, false);
-        // The same videos on "disk", plus a decoy of another size with cam1's name.
+        // The same videos on "disk" (there before the load, as on a real disk: the panel may
+        // look them up while the session is still loading), plus a decoy of another size.
         const bytes = async (b) => new Uint8Array(await b.arrayBuffer());
         window.__mock.put('/rec/cam1/cam1.mp4', await bytes(v1));
         window.__mock.put('/rec/cam2/cam2.mp4', await bytes(v2));
         window.__mock.put('/rec/old/cam1.mp4', new Uint8Array(10));
         window.__mock.put('/rec/calibration.toml', new TextEncoder().encode(toml));
+        window.__mock.inputPick('/rec', true);   // the session folder, picked in the page's own dialog
+        await loader.handleLoadSessionFolderPerCamera(files, false);
         return { v1: v1.size, v2: v2.size, views: AS.state.views.map((v) => v.name), skel: AS.state.session.skeleton.nodes };
     });
     check(sizes.views.join() === 'cam1,cam2' && sizes.skel.join() === 'A,B', 'session loaded', sizes);
 
-    await page.click('#infAddModel');
+    // Models ▸ Assign models…: every view starts with no model.
+    await page.click('#infAssignModels');
+    await page.waitForSelector('#infMmViews');
+    const m0 = await page.evaluate(() => ({
+        rows: Array.from(document.querySelectorAll('#infMmViews tbody tr')).map((r) => r.dataset.view + '=' + r.querySelector('select').value),
+        shortcutModal: !!document.querySelector('[data-shortcut-modal]'),
+    }));
+    check(m0.rows.join() === 'cam1=,cam2=', 'first open: every view has no model', m0.rows);
+    // Playback keys do nothing while the modal is up.
+    const f0 = await page.evaluate(async () => (await import('/ui/app-state.js')).state.currentFrame);
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('End');
+    const f1 = await page.evaluate(async () => (await import('/ui/app-state.js')).state.currentFrame);
+    check(f0 === f1, 'frame keys are ignored under the modal', { f0, f1 });
+    // Cancel drops edits.
+    await page.click('#infMmAddModel');
+    await page.waitForSelector('#infMmModels');
+    await page.keyboard.press('Escape');
+    check(await page.evaluate(() => document.querySelectorAll('#infModelSummary .inf-model-row').length === 0), 'Esc/Cancel keeps nothing');
+    // Add a model, give it to both views, check hover → 3D, Clear all, assign again, Apply.
+    await page.click('#infAssignModels');
+    await page.waitForSelector('#infMmViews');
+    await page.click('#infMmAddModel');
+    await page.waitForSelector('#infMmModels');
+    await page.hover('#infMmViews tr[data-view="cam1"]');
+    const hv = await page.textContent('#infMm3dFoot');
+    check(hv === 'cam1 \u2192 no model', 'hovering a view names it and its model', hv);
+    await page.click('#infMmSelectAll');
+    await page.click('#infMmBulkAssign');
+    await page.hover('#infMmModels tbody tr');
+    const hm = await page.textContent('#infMm3dFoot');
+    check(hm === 'topdown \u2192 cam1, cam2', 'one model for several views; hovering it names its views', hm);
+    await page.hover('#infMmViews tr[data-view="cam2"]');
+    const lit = await page.evaluate(() => Array.from(document.querySelectorAll('#infModelsModal tr.inf-mm-hl')).map((r) => r.dataset.view || r.dataset.model));
+    check(lit.length === 2 && lit.includes('cam2') && !lit.includes('cam1'), 'hovering a view lights only that view (and its model)', lit);
+    await page.click('#infMmClear');
+    const cleared = await page.evaluate(() => Array.from(document.querySelectorAll('#infMmViews select')).map((x) => x.value).join());
+    check(cleared === ',', 'Clear all → every view back to no model', cleared);
+    await page.selectOption('#infMmViews tr[data-view="cam1"] select', { label: 'topdown' });
+    await page.selectOption('#infMmViews tr[data-view="cam2"] select', { label: 'topdown' });
+    const has3d = await page.evaluate(() => !!document.querySelector('#infMm3dStage canvas'));
+    check(has3d, 'the 3D view is a Viewport3D canvas');
+    await page.click('#infMmApply');
     await page.dispatchEvent('#tabInference', 'pointerenter');
     await page.waitForFunction(() => document.querySelectorAll('#infViewVideos .inf-view .inf-ok').length === 2, null, { timeout: 15000 });
     const auto = await page.evaluate(() => ({
@@ -318,14 +372,14 @@ try {
     await page.waitForFunction(() => window.__mock.calls.some((c) => c.name === 'list_dir'));
     await page.waitForFunction(() => document.querySelectorAll('#infViewVideos .inf-view .inf-ok').length === 2);
     const p4 = await page.evaluate(() => ({
-        models: Array.from(document.querySelectorAll('#tabInference .inf-model-name')).map((e) => e.textContent),
+        models: Array.from(document.querySelectorAll('#infModelSummary .inf-model-name')).map((e) => e.textContent),
         views: Array.from(document.querySelectorAll('#infViewVideos .inf-view')).map((r) => r.textContent),
         runDisabled: document.getElementById('infRun').disabled,
         modelCall: window.__mock.calls.filter((c) => c.name === 'pick_model_directory').length,
         modelGrant: window.__mock.grants.find((g) => g.path === '/models/topdown'),
     }));
-    check(p4.modelCall === 1 && p4.modelGrant && p4.modelGrant.kind === 'model', 'Add opens the READ-ONLY model picker');
-    check(p4.models.join() === 'topdown', 'the model chip shows the folder name', p4.models);
+    check(p4.modelCall === 2 && p4.modelGrant && p4.modelGrant.kind === 'model', 'Add opens the READ-ONLY model picker');
+    check(p4.models.join() === 'topdown', 'the Models summary shows the folder name', p4.models);
     check(p4.views[0] === 'cam1cam1/cam1.mp4' && p4.views[1] === 'cam2cam2/cam2.mp4',
         'Choose folder… matches each view to its own video by path + size (not the decoy)', p4.views);
     check(!p4.runDisabled, 'Run enabled');

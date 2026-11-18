@@ -152,6 +152,7 @@ export function showGroupByTrackModal() {
     // Build modal
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
 
     var modal = document.createElement('div');
     modal.className = 'multi-frame-modal';
@@ -2640,6 +2641,7 @@ export function showTriangulateMultiFrameModal() {
 
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
 
     var modal = document.createElement('div');
     modal.className = 'multi-frame-modal';

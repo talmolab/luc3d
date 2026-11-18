@@ -8,7 +8,7 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js';
+import { shouldIgnorePlaybackKey } from '../ui/keyboard-target.js';
 import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js';
 import { readBlobRange, guardedRangeSource } from './cold-read-guard.js';
 import { playbackSourceFor } from './hev1-retag.js';
@@ -3568,7 +3568,7 @@ export class VideoController {
     setupKeyboardHandlers() {
         var self = this;
         document.addEventListener("keydown", function (e) {
-            if (shouldIgnoreShortcut(e)) return;
+            if (shouldIgnorePlaybackKey(e)) return;
 
             switch (e.key) {
                 case "ArrowRight":

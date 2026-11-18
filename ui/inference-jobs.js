@@ -4,9 +4,9 @@
  *
  * A job is one `sleap-nn` process on one camera view's video:
  *   { id, kind: 'inference', view, videoPath, modelPaths, frames, outputPath, args }
- * Today every view gets the same models (`modelsForView` falls back to the
- * shared list) and the queue runs one job at a time. Both are seams for later:
- *   - per-view models: fill `config.perViewModels[view]`; nothing else changes;
+ * Each view runs with its own models (`config.perViewModels[view]`, set by the
+ * panel's Models modal; `modelsForView` falls back to the shared list), and
+ * the queue runs one job at a time, a seam for later:
  *   - parallel jobs (several GPUs, a remote worker): raise `concurrency`; the
  *     desktop side already keys running processes by job id (up to 4).
  * A Training job would be another `kind` with its own args builder.

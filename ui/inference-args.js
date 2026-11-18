@@ -83,8 +83,9 @@ export function defaultInferenceConfig() {
         c[k] = Array.isArray(v) ? v.slice() : v;
     }
     c.modelPaths = [];
-    // Future per-view models: camera name -> model folder list. Empty = every
-    // view uses `modelPaths` (the only mode the UI offers today).
+    // Per-view models: camera name -> model folder list (the panel's Models
+    // modal fills it for each run, with `modelPaths` empty). A view without an
+    // entry falls back to `modelPaths` (Connect's remote plans use only that).
     c.perViewModels = {};
     return c;
 }

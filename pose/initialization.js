@@ -42,6 +42,7 @@ import {
 } from '../ui/identity-assignment.js';
 import { getTrackColor, getGroupColor } from '../ui/overlays.js';
 import { Viewport3D } from '../ui/viewport3d.js';
+import { viewport3DDisplayOptions } from '../ui/viewport3d-options.js';
 import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js';
 import { Timeline } from '../ui/timeline.js';
 import { InteractionManager } from '../ui/interaction.js';
@@ -928,13 +929,7 @@ export function setup3DViewport() {
         console.log('[3D] Creating Viewport3D with', state.session.cameras.length, 'cameras,',
             'skeleton:', state.session.skeleton.nodes.length, 'nodes');
 
-        var _3dLabel = document.getElementById('vis3dLabelSize');
-        var _3dSphere = document.getElementById('vis3dSphereSize');
-        var _3dPyramid = document.getElementById('vis3dPyramidLength');
-        var _3dLabelShow = document.getElementById('vis3dLabelShow');
-        var _3dSphereShow = document.getElementById('vis3dSphereShow');
-        var _3dPyramidShow = document.getElementById('vis3dPyramidShow');
-        setViewport3D(new Viewport3D(container, {
+        setViewport3D(new Viewport3D(container, Object.assign({
             cameras: state.session.cameras,
             skeleton: state.session.skeleton,
             getTrackColor: getTrackColor,
@@ -943,19 +938,7 @@ export function setup3DViewport() {
                 return getGroupColor(group, state.session, useIdentity, state.currentFrame);
             },
             onCameraClicked: highlightVideoCell,
-            cameraLabelSize: _3dLabel ? parseInt(_3dLabel.value) || 28 : 28,
-            cameraSphereSize: _3dSphere ? parseFloat(_3dSphere.value) || 3 : 3,
-            pyramidLength: _3dPyramid ? parseFloat(_3dPyramid.value) || 40 : 40,
-            showCameraLabels: _3dLabelShow ? _3dLabelShow.checked : true,
-            showCameraSpheres: _3dSphereShow ? _3dSphereShow.checked : true,
-            showCameraPyramids: _3dPyramidShow ? _3dPyramidShow.checked : true,
-            skeletonNodeSize: (function() { var e = document.getElementById('vis3dNodeSize'); return e ? parseFloat(e.value) || 2 : 2; })(),
-            skeletonEdgeWeight: (function() { var e = document.getElementById('vis3dEdgeWeight'); return e ? parseFloat(e.value) || 0.8 : 0.8; })(),
-            skeletonBrightness: (function() { var e = document.getElementById('vis3dBrightness'); var v = e ? parseFloat(e.value) : NaN; return isNaN(v) ? 0.5 : Math.min(100, Math.max(0, v)) / 100; })(),
-            skeletonNodeShape: (function() { var e = document.getElementById('vis3dNodeStyle'); return e ? (e.getAttribute('data-value') || 'circle') : 'circle'; })(),
-            showSkeletonNodes: (function() { var e = document.getElementById('vis3dNodeShow'); return e ? e.checked : true; })(),
-            showSkeletonEdges: (function() { var e = document.getElementById('vis3dEdgeShow'); return e ? e.checked : true; })(),
-        }));
+        }, viewport3DDisplayOptions())));
 
         // Wire up "Show Camera View" button
         document.getElementById('btnShowCameraView').addEventListener('click', function (e) {

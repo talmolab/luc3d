@@ -64,6 +64,7 @@ export function showTrackSetupModal(opts) {
     return new Promise(function (resolve) {
         var overlay = document.createElement('div');
         overlay.className = 'multi-frame-modal-overlay';
+        overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
         var modal = document.createElement('div');
         modal.className = 'multi-frame-modal track-setup-modal';
         modal.setAttribute('role', 'dialog');
