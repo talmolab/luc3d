@@ -4189,6 +4189,30 @@ the worker, Linux caps it at 128 KiB). **Imports.**
 `path-mappings.js`, `remote-visibility.js`, `remote-track-spec.js`. **Imported by.**
 `ui/connect/remote-inference.js`. **Coverage.** `tests/test-connect-remote-inference-plan.mjs`.
 
+#### pose/connect/open-predictions-plan.js
+
+**Purpose.** DOM-free planning behind Connect's "Open as new project" (luc3d #450; sleap-app's "Open predictions"):
+a remote inference RUN (one `track` job per camera sharing `run.id`) becomes ONE session, one camera per video of
+each completed track job. `runJobsToOpen(jobs, jobId)`: the clicked job's run, track jobs only, in run order;
+completed ones open, the rest are `leftOut` with a reason (still queued / still running / failed / canceled).
+`nameCameras(parts)`: camera = the tracked `camera` (this device submitted it), else the view in LUCID's output
+name (`parseLucidOutputName`: `<session>__<view>.<yymmdd_hhmmss>.predictions.slp`, `remoteOutputPath`'s), else the
+video stem, else its folder when stems collide (campy's `0.mp4`) or equal a fixed name, else a `_2`/`_3` suffix
+(first keeps the name), `cam_<n>` with no path at all; a multi-video result (one sleap-app job) is one camera per
+video and ignores the job's tag. Session = the tracked `sessionId` when all agree, else the output names'
+session, else the videos' common folder (the camera folders' parent when cameras were named by folder), else
+`DEFAULT_SESSION_NAME` ("Session 1"). `combinePredictions(parts)`: `parseSlpForImport`-shaped `slpData` for
+`handleLoadSlpFile(file, {slpData})`: videos concatenated (worker paths kept: the video prompt matches by name),
+frames re-pointed, tracks `<camera>: <track>` (as `mergeViewPredictions`), only those used, trackless -1;
+points / occlusion / point scores re-ordered to the first skeleton's node order (sources untouched); one
+synthetic recording session (calibration keys = camera names with no matrices, so the loader makes uncalibrated
+cameras as for a plain SLEAP file; `camcorder_to_video_idx_map`; `metadata.lucid.sessionName`; no
+`frame_group_dicts`, so every prediction lands ungrouped). Throws on no result, different node names (both
+cameras named), or several results with embedded frames. **Exports.** `runJobsToOpen`, `nameCameras`,
+`combinePredictions`, `parseLucidOutputName`, `DEFAULT_SESSION_NAME`. **Imports.** None. **Imported by.**
+`ui/connect/merge-predictions-dialog.js`. **Coverage.** `tests/test-connect-open-predictions-plan.mjs`,
+e2e `connect-open-predictions`.
+
 #### pose/connect/timestamp.js
 
 **Purpose.** Run/elapsed-time formatting. **Exports.** `formatDuration`,
@@ -13286,7 +13310,7 @@ Forget (`forgetWorkerWithConfirm`), or "Pair a worker to see its jobs here.". Th
 (never `selectedWorkerId`; default the backend worker, else the first; re-picked when forgotten). Open and
 Refresh refresh every worker's info (a worker paired while open too); `refreshToken` bumps on Refresh, a
 queue Stop Early / Cancel, and re-pairing an unpaired worker; a queue card click sets the Jobs tab and
-`focusRun {key, nonce}`. Close (Esc, X, click on the dim area, never a drag that began in the card)
+`focusRun {key, nonce}`; the Jobs tab also gets `onCloseWindow` (Open as new project closes the window). Close (Esc, X, click on the dim area, never a drag that began in the card)
 releases idle connections and returns focus; Tab is trapped. **Exports.** `openConnectWindow({workerId?})`.
 **Imports.** `pose/connect/{store,mini-store}.js`,
 `ui/panel-rail-icons.js`, the sibling components, `./connect-panel.js`. **Imported by.** `ui/connect/index.js`
@@ -13378,8 +13402,9 @@ Run again / Fetch & Load by sleap-app's ownership rules; Run again is hidden on 
 training is out of scope, and offered on a failed job of ours that is not a train job). Polls `listJobs` every 10 s; each run card is kept and
 repainted only when its signature changes (scroll, focus and search survive; a refresh never blanks), `focusRun`
 scrolls to and rings a run. "This project" = `lucidProjectTag(openProjectInfo())`; a job this page submitted for a
-view shows `· <view>`. All decisions are `pose/connect/job-groups.js`. **Exports.** `createWorkerJobs(container,
-{workerId, workerLabel, refreshToken, focusRun, pollIntervalMs?, setIntervalImpl?, clearIntervalImpl?})` →
+view shows `· <view>`. Fetch & Load hands `loadJobPredictions` the job list (the run opens with it) and
+`onCloseWindow`. All decisions are `pose/connect/job-groups.js`. **Exports.** `createWorkerJobs(container,
+{workerId, workerLabel, refreshToken, focusRun, onCloseWindow?, pollIntervalMs?, setIntervalImpl?, clearIntervalImpl?})` →
 `{update, destroy, refresh}`. **Imports.** `pose/connect/{store,project-tag,job-groups,worker-ui-helpers}.js`,
 `ui/{ask,panel-rail-icons}.js`, `./{notify,job-viewer,merge-predictions-dialog,remote-inference,new-job-wizard}.js`.
 **Imported by.** `ui/connect/connect-window.js`. **Coverage.** `tests/e2e/connect-jobs.mjs`.
@@ -13402,14 +13427,24 @@ texts and title numbering (`Epoch ${model.epoch}`, best epoch 1-based). **Export
 #### ui/connect/merge-predictions-dialog.js
 **Purpose.** Fetch & Load from a Jobs-tab row (`MergePredictionsDialog.tsx`, adapted to LUCID's views): a job this
 page submitted for a view of the open session merges straight in through `fetchAndLoadJobs` (Replace unless the job
-recorded a mode); one for another session is refused with its name; a job with no LUCID tag opens "Load
+recorded a mode); one for another session is refused with its name (Download .slp only); otherwise "Load
 predictions" (skeleton check, the predictions' video name(s) and frame count, "Merge into view" picker with
 the view named in the job's labels / video preselected, and NO preselection with Merge disabled when no view
-name matches (the stand-in for sleap-app's unmatched-video block), `mergeViewPredictions`, Download .slp through `downloadBytes`). No "Open predictions as a new project".
-**Exports.** `loadJobPredictions({workerId, jobId, mine})`.
-**Imports.** `pose/connect/{store,project-tag}.js`, `ui/{app-state,inference-merge}.js`,
-`import-export/{slp-import,slp-merge,file-io}.js`, `./{remote-inference,notify}.js`. **Imported by.**
-`worker-jobs.js`. **Coverage.** `tests/e2e/connect-jobs.mjs` §E.
+name matches (the stand-in for sleap-app's unmatched-video block), `mergeViewPredictions`, Download .slp through
+`downloadBytes`). **Open as new project** (sleap-app's "Open predictions", luc3d #450), offered with or without a
+project open (primary when none): the job's RUN (`runJobsToOpen` over the Jobs tab's list; the dialog names the
+cameras and the jobs left out) is fetched here, one job after another (`fetchJobPredictions` + `parseSlpForImport`;
+closing the dialog or Esc cancels with nothing changed), combined (`combinePredictions`; a refusal is a toast and
+the choices come back), then, when a project is open (a session, views, or 3D imported without a session) or a
+fetch failed, `askConfirm` names unsaved changes, the session, its cameras and what is left out. Only then: the
+dialog and the Connect window close (`closeWindow`: the load prompts for the videos' folder), `newProject(true)`,
+`state.slpFileHandle = null` (resetProject keeps it; Save must not overwrite the old project), `handleLoadSlpFile(file,
+{slpData})` (`true` = loaded), `markDirty()` (a new, unsaved project), `markJobFetched` per opened job, a toast with
+the session and "No calibration: use Load Calibration to triangulate." Esc waits while merging.
+**Exports.** `loadJobPredictions({workerId, jobId, mine, jobs?, closeWindow?})`.
+**Imports.** `pose/connect/{store,project-tag,open-predictions-plan}.js`, `ui/{app-state,ask,inference-merge}.js`,
+`import-export/{slp-import,slp-merge,file-io,save-load}.js`, `./{remote-inference,notify}.js`. **Imported by.**
+`worker-jobs.js`. **Coverage.** `tests/e2e/connect-jobs.mjs` §E, `tests/e2e/connect-open-predictions.mjs`.
 
 ### loading/frame-worker.js
 
@@ -16434,6 +16469,11 @@ single-camera video is otherwise dropped. Any other unmatched video still gets
 no view, and the final status becomes a warning naming the unused videos and
 the cameras left without one (per session). Test:
 `tests/e2e/slp-load-unmatched-video.mjs`.
+
+**Pre-parsed data / result.** `handleLoadSlpFile(file, {slpData})` skips the parse and loads the given
+`slpData` (Connect's Open as new project: a run combined by `pose/connect/open-predictions-plan.js`; `file` then
+only names the load and holds any embedded frames). It returns `true` once loaded, `false` on an error (status
+bar), `undefined` when cancelled before anything changed.
 
 The `.slp` parse is dispatched by `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js

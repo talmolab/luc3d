@@ -176,7 +176,7 @@ function mountWindow(opts) {
 
     function tabProps(w) {
         return tab === 'jobs'
-            ? { workerId: w.nodeId, workerLabel: w.label, refreshToken: refreshToken, focusRun: focusRun }
+            ? { workerId: w.nodeId, workerLabel: w.label, refreshToken: refreshToken, focusRun: focusRun, onCloseWindow: close }
             : { workerId: w.nodeId, refreshToken: refreshToken };
     }
 

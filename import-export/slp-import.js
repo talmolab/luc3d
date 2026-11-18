@@ -880,7 +880,17 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
     return { hasSessionData: hasSessionData };
 }
 
-export async function handleLoadSlpFile(slpFile) {
+/**
+ * Open `slpFile` as the project (File ▸ Open of a `.slp` / `.h5`).
+ * @param {File} slpFile
+ * @param {{slpData?: object}} [opts]  `slpData`: already parsed (`parseSlpForImport`'s shape), so the file is
+ *   not read again; Connect's "Open as new project" passes a run's predictions combined into one session
+ *   (`pose/connect/open-predictions-plan.js`). `slpFile` then only names the load and, for embedded frames,
+ *   is the file they are read from.
+ * @returns {Promise<boolean | undefined>}  true once loaded; false on an error (in the status bar);
+ *   undefined when the user cancelled or nothing was picked
+ */
+export async function handleLoadSlpFile(slpFile, opts) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
@@ -898,7 +908,7 @@ export async function handleLoadSlpFile(slpFile) {
         // as fallback) — both yield the identical slpData shape.
         var slpData;
         try {
-            slpData = await parseSlpForImport(slpFile, function (msg) {
+            slpData = (opts && opts.slpData) ? opts.slpData : await parseSlpForImport(slpFile, function (msg) {
                 showLoading(msg);
             });
         } catch (parseErr) {
@@ -1748,10 +1758,12 @@ export async function handleLoadSlpFile(slpFile) {
                 noteSessionCalibrationDivergence(state.sessions);
             });
         }
+        return true;
     } catch (err) {
         console.error('[load-slp] FATAL:', err);
         hideLoading();
         setStatus('SLP load error: ' + err.message, 'error');
+        return false;
     }
 }
 
