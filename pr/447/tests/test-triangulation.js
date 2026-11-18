@@ -164,8 +164,17 @@
     });
 
     describe('Linear algebra helpers', function () {
+        // matMul / matTranspose are not window globals (they are not public
+        // exports); they reach the page only through the core's test export.
+        // A missing one fails the test rather than skipping it.
+        function kernel(name) {
+            const K = window.__triangulationKernelsForTest;
+            assertTrue(!!K && typeof K[name] === 'function', name + ' is exposed via __triangulationKernelsForTest');
+            return K[name];
+        }
+
         it('matMul computes correct product (identity * A = A)', function () {
-            if (typeof matMul !== 'function') return;
+            const matMul = kernel('matMul');
             const I = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
             const A = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
             const result = matMul(I, A);
@@ -175,7 +184,7 @@
         });
 
         it('matMul 3x3 * 3x4 produces 3x4 result', function () {
-            if (typeof matMul !== 'function') return;
+            const matMul = kernel('matMul');
             const I = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
             const B = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]];
             const result = matMul(I, B);
@@ -185,7 +194,7 @@
         });
 
         it('matTranspose transposes correctly', function () {
-            if (typeof matTranspose !== 'function') return;
+            const matTranspose = kernel('matTranspose');
             const A = [[1, 2, 3], [4, 5, 6]];
             const T = matTranspose(A);
             assertEqual(T.length, 3);

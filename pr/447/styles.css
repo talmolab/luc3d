@@ -600,10 +600,36 @@ body {
   color: var(--text-muted);
   font-size: 13px;
   pointer-events: none;
-  z-index: 1;
+  /* Above dockview's own empty-state layer (`.dv-watermark-container`,
+     z-index 1, later in the DOM), or the demo button below cannot be clicked.
+     The rest of this layer ignores the pointer, so drops still reach the dock. */
+  z-index: 2;
 }
 
 .video-dock-empty.hidden {
+  display: none;
+}
+
+/* The empty dock ignores the pointer; its demo button must not. */
+.dock-demo-btn {
+  pointer-events: auto;
+  margin-top: 16px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dock-demo-btn:hover {
+  background: var(--bg-button-hover);
+  border-color: var(--accent);
+}
+
+.dock-demo-btn[hidden] {
   display: none;
 }
 
@@ -1804,6 +1830,61 @@ button.tri-dropdown-item:disabled {
 .track-setup-options .track-setup-switch-row {
   margin: 0;
   font-size: 12px;
+}
+
+/* The two compute caps share a row, and Try WebNN starts the row under them
+   (each starts a row; the cell beside "Views per animal" stays empty). */
+.track-setup-options .settings-node-weight-row[data-row="imageCheckGpuTimePct"],
+.track-setup-options .settings-node-weight-row[data-row="imageCheckWebNN"] {
+  grid-column-start: 1;
+}
+
+/* A label and its ⓘ, together on the left of the row; the label keeps its full width. */
+.track-setup-option-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.track-setup-option-head .settings-kbd-label {
+  flex: none;
+}
+
+/* An ⓘ outside the plane panel: the same look as .plane-pin-info. */
+.info-tip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.info-tip-btn:hover,
+.info-tip-btn:focus-visible {
+  color: var(--text-primary);
+}
+
+/* Inside a dialog, undo `.multi-frame-modal button` (padding, border, fill). */
+.multi-frame-modal .info-tip-btn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: inherit;
+}
+
+.multi-frame-modal .info-tip-btn:hover,
+.multi-frame-modal .info-tip-btn:focus-visible {
+  filter: none;
+  color: var(--text-primary);
 }
 
 /* Align Views to References modal (#226). The table grows with the camera
@@ -3645,6 +3726,244 @@ button.tri-dropdown-item:disabled {
 .panel-section .data-table thead th,
 .panel-section .id-switch-toolbar {
   top: var(--panel-section-header-height);
+}
+
+/* ---- Memory panel (ui/memory-panel.js) ---- */
+/* Its rows are .session-info-row (display: flex), which would beat [hidden]. */
+#tabMemory [hidden] {
+  display: none;
+}
+
+.memory-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The plot's window (ui/memory-panel.js setWindow): a small segmented switch at the heading's right. */
+.memory-windows {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.memory-window-btn {
+  padding: 1px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.memory-window-btn + .memory-window-btn {
+  border-left: 1px solid var(--border-color);
+}
+
+.memory-window-btn:hover {
+  color: var(--text-primary);
+}
+
+.memory-window-btn[aria-pressed="true"] {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.memory-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.memory-now {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-now-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.memory-plot {
+  display: block;
+  width: 100%;
+  height: 90px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: visible;
+}
+
+/* The plot and the runs' names along its top (ui/memory-panel.js renderRuns). */
+.memory-plot-wrap {
+  position: relative;
+}
+
+.memory-plot-run {
+  fill: var(--text-muted);
+  fill-opacity: 0.16;
+}
+
+.memory-plot-run-alt {
+  fill-opacity: 0.28;
+}
+
+.memory-run-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.memory-run-label {
+  position: absolute;
+  top: 2px;
+  box-sizing: border-box;
+  padding: 0 3px;
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--text-secondary);
+  /* Readable where the line runs under it. */
+  text-shadow: 0 0 2px var(--bg-tertiary), 0 0 2px var(--bg-tertiary), 0 0 3px var(--bg-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+}
+
+/* Under the pointer (ui/memory-panel.js renderHover). */
+.memory-plot-hover {
+  stroke: var(--text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.memory-plot-hover-dot {
+  fill: var(--accent-color);
+  stroke: var(--bg-tertiary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.memory-readout-hover .memory-now {
+  color: var(--accent-color);
+}
+
+.memory-plot-base {
+  stroke: var(--border-light);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-limit {
+  stroke: var(--error-color);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-used,
+.memory-plot-ua {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-used {
+  stroke: var(--accent);
+}
+
+.memory-plot-ua {
+  stroke: var(--warning-color);
+}
+
+.memory-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.memory-key {
+  display: inline-block;
+  width: 12px;
+  height: 0;
+  border-top: 2px solid var(--accent);
+}
+
+.memory-key-limit,
+.memory-key-ua {
+  margin-left: 8px;
+}
+
+.memory-key-limit {
+  border-top: 1px dashed var(--error-color);
+}
+
+.memory-legend-ua {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-key-ua {
+  border-top-color: var(--warning-color);
+}
+
+.memory-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 4px 0 2px;
+}
+
+.memory-copy-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.memory-copy-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.memory-note {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warning-color);
+}
+
+.memory-note code {
+  white-space: nowrap;
+  font-size: 10px;
 }
 
 /* ---- Data Tables ---- */
@@ -7383,7 +7702,10 @@ kbd {
    the hover, fire `mouseout` on the icon and flicker itself away. */
 .info-tip {
   position: fixed;
-  z-index: 10000;
+  /* Above every layer, modal overlays included (20000, 30000): an ⓘ inside a
+     dialog would otherwise show its tip BEHIND the dialog. Safe because it takes
+     no pointer events and lives only as long as the hover. */
+  z-index: 30001;
   max-width: 260px;
   padding: 6px 9px;
   border: 1px solid var(--border-light);

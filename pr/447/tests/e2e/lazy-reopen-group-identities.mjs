@@ -29,15 +29,15 @@
  *
  * Run: node tests/e2e/lazy-reopen-group-identities.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8247);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FRAMES = Number(process.env.FRAMES || 400);
 const CAMS = 3, ANIMALS = 4, NODES = 3;
 
@@ -47,9 +47,6 @@ const check = (c, m, extra) => {
     if (!c) fails++;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 const fixtures = {
     campy: path.join(repoRoot, '_lazy-group-ids-campy.slp'),
     idxOnly: path.join(repoRoot, '_lazy-group-ids-idx-only.slp'),
@@ -58,7 +55,7 @@ const fixtures = {
 
 let browser;
 try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchBrowser({ headless: true });
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -192,16 +189,26 @@ try {
                 } catch (e) { window.__tstLoad.err = String(e && e.stack || e).slice(0, 500); }
             })();
         }, how);
+        // The lazy reopen's video prompt has "Skip — Load Videos Later"; the
+        // eager Load SLP prompt has no skip button, only Esc (both resolve as
+        // "no videos"). Waiting for a button that never comes held each eager
+        // load for the loop's full 100 s, and the checks then read a load that
+        // had not finished.
         for (let i = 0; i < 400; i++) {
             const s = await page.evaluate(() => {
                 const b = [...document.querySelectorAll('button')].find(x => /Skip|Later/i.test(x.textContent || '') && x.offsetParent);
                 if (b) { b.click(); return 'clicked'; }
+                if (document.getElementById('videoSelectOverlay')) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                    return 'escaped';
+                }
                 return window.__tstLoad.done ? 'done' : (window.__tstLoad.err ? 'err' : 'wait');
             });
             if (s === 'done' || s === 'err') break;
             await new Promise(r => setTimeout(r, 250));
         }
-        return await page.evaluate(() => window.__tstLoad.err);
+        return await page.evaluate(() => window.__tstLoad.err
+            || (window.__tstLoad.done ? null : 'the load did not finish within 100 s'));
     }
 
     /** What the reopened session holds, and the Identity timeline's rows. */

@@ -10,27 +10,34 @@
  *  2. Reopening each with its button restores the size it had before.
  *  3. Both already closed -> Track All leaves them closed (never OPENS them).
  *  4. Track Frame Range and Track Frame leave both open.
+ *  5. The closed timeline's rows are not rebuilt at Track All's end (they walk
+ *     every group, and nobody sees them): they are built in the background, in
+ *     idle-time slices, so reopening rebuilds nothing — and they are the rows a
+ *     fresh rebuild gives (Timeline.refreshTracks / _startBackgroundRows / catchUp).
+ *     Reopened while that build still runs, it is finished on the spot, same rows.
+ *
+ * The 3D viewer's width is a CSS transition (`--transition-normal`, 250 ms):
+ * sizes are read once every transition on the two panels has finished
+ * (`settled`), never after a fixed wait, which under load (e2e files running
+ * in parallel) read the width part-way (317.8 of 320 px).
  *
  * Run: node tests/e2e/track-all-closes-timeline-and-3d.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { answerTrackSetup } from './fixtures/track-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8266);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -90,6 +97,13 @@ try {
                  active: document.getElementById('viewport3dToggleBtn').classList.contains('active'),
                  rendering: v ? v._visible !== false : null };
     });
+    // Wait until no CSS transition or animation runs on either panel.
+    const settled = () => page.waitForFunction(() => ['timelineContainer', 'viewport3dContainer']
+        .every(id => { const el = document.getElementById(id); return !el || el.getAnimations().length === 0; }),
+        null, { timeout: 10000 });
+    // Poll `pred` (in the page) until it holds or `ms` pass; never throws, so
+    // the check that follows reports what was seen.
+    const until = (pred, ms = 5000) => page.waitForFunction(pred, null, { timeout: ms }).then(() => true, () => false);
     const openTimeline = async () => { if ((await tl()).collapsed) await page.click('#timelineToggleBtn'); };
     const open3d = async () => { if ((await v3()).collapsed) await page.click('#viewport3dToggleBtn'); };
     const runTrackAll = async () => {
@@ -110,20 +124,32 @@ try {
         document.getElementById('timelineContainer').style.height = '180px';
         document.getElementById('viewport3dContainer').style.width = '320px';
     });
-    await page.waitForTimeout(400);   // width transition
+    await settled();
     let s = await tl();
     check(!s.collapsed && s.height > 0, `precondition: Timeline is open (${s.height}px)`);
     const openHeight = s.height;
     let d = await v3();
     check(!d.collapsed && d.width > 0 && d.active, `precondition: 3D viewer is open (${d.width}px)`);
     const openWidth = d.width;
+    // Count the timeline's row rebuilds (§5).
+    await page.evaluate(() => {
+        const t = window.__lucid.timeline, orig = t._rebuildSegments.bind(t);
+        window.__rebuilds = 0;
+        t._rebuildSegments = (sess) => { window.__rebuilds++; return orig(sess); };
+    });
     await runTrackAll();
+    const rebuildsInTrackAll = await page.evaluate(() => window.__rebuilds);
+    // the background build finishes in idle time
+    const bgDone = await page.waitForFunction(() => { const t = window.__lucid.timeline; return !t._bgRows && !t._staleRows; }, null, { timeout: 10000 })
+        .then(() => true, () => false);
     const ids = await page.evaluate(() => window.__lucid.state.session.identities.length);
     check(ids === 2, `Track All assigned identities (${ids})`);
     s = await tl();
     check(s.collapsed && s.height === 0, `after Track All the Timeline is collapsed (${s.height}px)`);
     check(!s.btnActive, 'the Timeline toolbar button no longer reads active');
-    await page.waitForTimeout(100);   // let the MutationObserver update the button
+    // The 3D button follows the panel through a MutationObserver.
+    await until(() => !document.getElementById('viewport3dToggleBtn').classList.contains('active'));
+    await settled();
     d = await v3();
     check(d.collapsed, 'after Track All the 3D viewer is collapsed');
     check(!d.active, 'the 3D toolbar button is no longer highlighted');
@@ -132,14 +158,43 @@ try {
 
     // ---- 2. reopening restores the prior height -------------------------------------------
     await page.click('#timelineToggleBtn');
+    await settled();
+    // §5: rebuilt once on reopening, with what a fresh rebuild gives
+    const reopened = await page.evaluate(() => {
+        const t = window.__lucid.timeline;
+        const rows = () => JSON.stringify((t._trackSegments || []).map(r => [r.cameraName, r.trackIdx, r.trackName, r.color, r.segments]));
+        const n = window.__rebuilds, got = rows();
+        t._rebuildSegments(window.__lucid.state.session);
+        return { n, got, fresh: rows(), count: (t._trackSegments || []).length };
+    });
     s = await tl();
     check(!s.collapsed && Math.abs(s.height - openHeight) < 1, `reopening restores ${openHeight}px (${s.height}px)`);
     check(s.btnActive, 'and the button reads active again');
     await page.click('#viewport3dToggleBtn');
-    await page.waitForTimeout(400);   // width transition
+    await settled();
     d = await v3();
     check(!d.collapsed && Math.abs(d.width - openWidth) < 1, `reopening the 3D viewer restores ${openWidth}px (${d.width}px)`);
     if (d.rendering !== null) check(d.rendering === true, 'and its render loop resumes');
+    check(rebuildsInTrackAll === 0, `5. Track All's end does not rebuild the closed timeline's rows (${rebuildsInTrackAll} rebuilds)`);
+    check(bgDone, '5. the rows are built in the background while it is closed');
+    check(reopened.n === 0, `5. so reopening it rebuilds nothing (${reopened.n} rebuilds)`);
+    check(reopened.count > 0 && reopened.got === reopened.fresh, `5. the same rows a fresh rebuild gives (${reopened.count} rows)`);
+
+    // §5, reopened while the background build still runs: finished on the spot, same rows
+    const early = await page.evaluate(() => {
+        const t = window.__lucid.timeline, s = window.__lucid.state.session;
+        const rows = () => JSON.stringify((t._trackSegments || []).map(r => [r.cameraName, r.trackIdx, r.trackName, r.color, r.segments]));
+        const want = (t._rebuildSegments(s), rows());
+        document.getElementById('timelineContainer').classList.add('collapsed');
+        t.refreshTracks(s, { cap: true });               // collapsed: starts a background build
+        const running = !!t._bgRows;
+        t._trackSegments = []; t._trackNames = [];        // so only the finished build can bring them back
+        const caught = t.catchUp();
+        document.getElementById('timelineContainer').classList.remove('collapsed');
+        return { running, caught, same: rows() === want, left: !!t._bgRows || !!t._staleRows };
+    });
+    check(early.running && early.caught && early.same && !early.left,
+        `5. reopened mid-build: finished on the spot, the same rows (${JSON.stringify(early)})`);
 
     // ---- 3. already closed -> stays closed ---------------------------------------------------
     await page.click('#timelineToggleBtn');

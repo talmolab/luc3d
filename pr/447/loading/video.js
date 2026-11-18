@@ -8,9 +8,9 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=54eeb4ba7f82';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=54eeb4ba7f82';
-import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=54eeb4ba7f82';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=bcf95f53457b';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=bcf95f53457b';
+import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=bcf95f53457b';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -818,7 +818,7 @@ export class OnDemandVideoDecoder {
         this._lastStepFrame = frameIndex;
         var back = prev != null && prev - frameIndex >= 1 && prev - frameIndex <= 3;   // a step BACK
         // anything but a step back makes the background chunk moot: stop it (frees its decoder)
-        if (!back && this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        if (!back) this._cancelBackPrefetch();
         if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
         var hit = be.cache.get(frameIndex);
         if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); if (back) this._prefetchBack(frameIndex); return hit; }
@@ -925,7 +925,10 @@ export class OnDemandVideoDecoder {
         var times = be._frameTimes;
         var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : 0;
         var out = null;
-        for await (var sample of be.sink.samples(times[start], times[end] + half)) {
+        if (job && job.cancelled) return null;
+        var it = be.sink.samples(times[start], times[end] + half)[Symbol.asyncIterator]();
+        if (job) job.it = it;   // so a cancel can close it at once (`_cancelBackPrefetch`)
+        for await (var sample of { [Symbol.asyncIterator]: function () { return it; } }) {
             if (this._mbBackend !== be || (job && job.cancelled)) { sample.close(); break; }   // closed / switched / moved on
             var i = frameNearTime(times, sample.timestamp);
             if (i < start || i > end || be.cache.has(i)) { sample.close(); continue; }
@@ -999,8 +1002,27 @@ export class OnDemandVideoDecoder {
      */
     releaseStepCursor() {
         if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
-        if (this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        this._cancelBackPrefetch();
         this._closeStepStream();
+    }
+
+    /**
+     * Stop the background back-step prefetch NOW. Setting `cancelled` alone is not
+     * enough: mediabunny's `samples(start, end)` decodes from the keyframe but yields
+     * nothing before `start`, so the prefetch loop — which checks `cancelled` per
+     * yielded frame — kept the decoder busy through the whole run (up to ~250 frames
+     * per camera on the field recordings) and the next jump decoded alongside it.
+     * Closing the stream stops mediabunny feeding packets and closes its decoder.
+     */
+    _cancelBackPrefetch() {
+        var job = this._backPrefetch;
+        this._backPrefetch = null;
+        if (!job) return;
+        job.cancelled = true;
+        try {
+            var closing = job.it && job.it.return ? job.it.return() : null;
+            if (closing && closing.catch) closing.catch(function () { /* ignore */ });
+        } catch (_) { /* ignore */ }
     }
 
     /**

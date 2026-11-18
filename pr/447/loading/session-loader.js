@@ -18,96 +18,98 @@
  * can then be retargeted.
  */
 
-import { withCompactNote } from '../import-export/compact-save.js?v=54eeb4ba7f82';
+import { withCompactNote } from '../import-export/compact-save.js?v=bcf95f53457b';
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=54eeb4ba7f82';
+} from '../ui/app-state.js?v=bcf95f53457b';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=54eeb4ba7f82';
+} from '../pose/pose-data.js?v=bcf95f53457b';
 import {
     makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras,
-} from '../pose/placeholder-cameras.js?v=54eeb4ba7f82';
+} from '../pose/placeholder-cameras.js?v=bcf95f53457b';
 
-import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js?v=54eeb4ba7f82';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=54eeb4ba7f82';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=54eeb4ba7f82';
-import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=54eeb4ba7f82';
-import { enumerateDirectoryHandle, pickRecordingFolder } from './recording-folder.js?v=54eeb4ba7f82';
+import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js?v=bcf95f53457b';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=bcf95f53457b';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=bcf95f53457b';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=bcf95f53457b';
+import { enumerateDirectoryHandle, pickRecordingFolder } from './recording-folder.js?v=bcf95f53457b';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=54eeb4ba7f82';
+} from '../import-export/file-io.js?v=bcf95f53457b';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=54eeb4ba7f82';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=bcf95f53457b';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=54eeb4ba7f82';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=bcf95f53457b';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=54eeb4ba7f82';
-import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=54eeb4ba7f82';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=54eeb4ba7f82';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=bcf95f53457b';
+import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=bcf95f53457b';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=bcf95f53457b';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=54eeb4ba7f82';
+    isVideoFileName,
+} from './video-file-pick.js?v=bcf95f53457b';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, shouldUseLazySlpFolder, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=54eeb4ba7f82';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=54eeb4ba7f82';
-import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=54eeb4ba7f82';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=54eeb4ba7f82';
+} from '../pose/triangulation.js?v=bcf95f53457b';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=bcf95f53457b';
+import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=bcf95f53457b';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=bcf95f53457b';
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
     compareCampyCameraNames, compareCalibrationSha256, sha256Hex, frameRatesDisagree,
     withCampyWarnings, findCampyManifestFiles,
-} from './campy-session.js?v=54eeb4ba7f82';
-import { readBlobArrayBuffer } from './cold-read-guard.js?v=54eeb4ba7f82';
-import { projectFolderStart } from './folder-picker-start.js?v=54eeb4ba7f82';
+} from './campy-session.js?v=bcf95f53457b';
+import { readBlobArrayBuffer } from './cold-read-guard.js?v=bcf95f53457b';
+import { projectFolderStart } from './folder-picker-start.js?v=bcf95f53457b';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=54eeb4ba7f82';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=54eeb4ba7f82';
+} from '../import-export/save-load.js?v=bcf95f53457b';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=bcf95f53457b';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=54eeb4ba7f82';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=54eeb4ba7f82';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=54eeb4ba7f82';
-import { noteUnplayableVideos } from '../ui/video-codec-notice.js?v=54eeb4ba7f82';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=54eeb4ba7f82';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=54eeb4ba7f82';
+import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=bcf95f53457b';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=bcf95f53457b';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=bcf95f53457b';
+import { noteUnplayableVideos } from '../ui/video-codec-notice.js?v=bcf95f53457b';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=bcf95f53457b';
+import { setPageProject } from '../ui/page-title.js?v=bcf95f53457b';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=bcf95f53457b';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=54eeb4ba7f82';
+} from '../pose/initialization.js?v=bcf95f53457b';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=54eeb4ba7f82';
+} from '../ui/sessions-panes.js?v=bcf95f53457b';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=54eeb4ba7f82';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=54eeb4ba7f82';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=54eeb4ba7f82';
-import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js?v=54eeb4ba7f82';
-import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=54eeb4ba7f82';
+} from '../ui/ui-wiring.js?v=bcf95f53457b';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=bcf95f53457b';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=bcf95f53457b';
+import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js?v=bcf95f53457b';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=bcf95f53457b';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -526,6 +528,12 @@ export function autoAssignVideosToCameras() {
  * @param {object} [options]
  * @param {string} [options.title] - Overlay title (default is neutral, since
  *   callers load both `.slp` and project `.json` files).
+ * @param {boolean} [options.folder] - Also offer "Select Session Folder": every
+ *   camera's video at once when each sits in its own camera folder (a file
+ *   picker cannot multi-select across folders). It resolves to
+ *   `pickSessionFolderVideos`'s list — the folder's videos plus any campy
+ *   manifests — so the caller must keep only the videos it can place on a
+ *   camera (`assignFolderVideos`, `loading/video-file-pick.js`).
  */
 export function forceVideoSelection(refInfo, options) {
     return new Promise(function (resolve) {
@@ -562,8 +570,24 @@ export function forceVideoSelection(refInfo, options) {
         var btnRow = document.createElement('div');
         btnRow.style.cssText = 'display:flex;gap:16px;flex-wrap:wrap;justify-content:center;';
 
+        var withFolder = !!(options && options.folder);
+        if (withFolder) {
+            var btnFolder = document.createElement('button');
+            btnFolder.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
+            btnFolder.textContent = 'Select Session Folder';
+            btnRow.appendChild(btnFolder);
+            btnFolder.addEventListener('click', async function () {
+                var picked = null;
+                try { picked = await pickSessionFolderVideos(); } catch (e) { /* cancelled */ }
+                if (picked) finish(picked);
+                // A cancelled pick, or a folder with no video, leaves the overlay up.
+            });
+        }
+
         var btn = document.createElement('button');
-        btn.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
+        btn.style.cssText = withFolder
+            ? 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:var(--bg-tertiary,#333);color:#fff;border:1px solid var(--border-color,#555);border-radius:8px;'
+            : 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
         btn.textContent = 'Select Video Files';
         btnRow.appendChild(btn);
 
@@ -583,6 +607,57 @@ export function forceVideoSelection(refInfo, options) {
         overlay.appendChild(btnRow);
         document.body.appendChild(overlay);
     });
+}
+
+/**
+ * The files a session-folder pick keeps: every video in the picked folder or
+ * below it, except calibration clips (`isCalibrationVideoFile`), plus the
+ * root-level campy manifests (`campyManifestsAmong`) so the caller can read the
+ * recording's details. The videos are ALL of them — cameras the project does
+ * not name included; matching them to cameras is the caller's job.
+ *
+ * @param {ArrayLike<File>} allFiles - what `pickFolder` returned
+ * @returns {File[]} videos first (in the order given), then the manifests
+ */
+export function sessionFolderVideos(allFiles) {
+    var videos = [];
+    for (var fi = 0; fi < allFiles.length; fi++) {
+        var file = allFiles[fi];
+        var parts = (file.webkitRelativePath || file.name).split('/');
+        if (parts.length < 2) continue;
+        if (isVideoFileName(parts[parts.length - 1]) && !isCalibrationVideoFile(file)) videos.push(file);
+    }
+    return videos.length ? videos.concat(campyManifestsAmong(allFiles)) : [];
+}
+
+/**
+ * "Select Session Folder", shared by both video prompts: the folder-pick tip
+ * (`confirmFolderPick`), the folder picker, then `sessionFolderVideos`.
+ *
+ * @param {FileSystemHandle} [startIn] - open the picker in the folder holding
+ *   this (`folderPickerStartFor`, `pickFolderNear`) instead: no tip, and a
+ *   failure other than a cancel goes on the status.
+ * @returns {Promise<File[]|null>} null when the pick was cancelled or the
+ *   folder holds no video.
+ */
+export async function pickSessionFolderVideos(startIn) {
+    var allFiles;
+    if (startIn) {
+        // Opens in the project's own folder (folderPickerStartFor): confirm it, no navigating.
+        try { allFiles = await pickFolderNear(startIn); } catch (e) {
+            if (!e || e.name !== 'AbortError') {
+                console.warn('[videos] folder picker failed:', e);
+                setStatus('Could not open that folder (' + ((e && e.message) || e) + ') — try Select Video Files', 'warning');
+            }
+            return null;
+        }
+    } else {
+        if (!(await confirmFolderPick())) return null;
+        allFiles = await pickFolder();
+    }
+    if (!allFiles || allFiles.length === 0) return null;
+    var kept = sessionFolderVideos(allFiles);
+    return kept.length ? kept : null;
 }
 
 /**
@@ -899,43 +974,9 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
 
         // Folder button — scan for videos in camera subdirs
         btnFolder.addEventListener('click', async function () {
-            var allFiles;
-            if (startIn) {
-                // Opens in the project's own folder (folderPickerStartFor): confirm it, no navigating.
-                try { allFiles = await pickFolderNear(startIn); } catch (e) {
-                    if (!e || e.name !== 'AbortError') {
-                        console.warn('[videos] folder picker failed:', e);
-                        setStatus('Could not open that folder (' + ((e && e.message) || e) + ') — try Select Video Files', 'warning');
-                    }
-                    return;
-                }
-            } else {
-                if (!(await confirmFolderPick())) return;
-                try { allFiles = await pickFolder(); } catch (e) { return; }
-            }
-            if (!allFiles || allFiles.length === 0) return;
-
-            var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
-            var matchedFiles = [];
-
-            // Build map: camera subdirs -> video files
-            for (var fi = 0; fi < allFiles.length; fi++) {
-                var file = allFiles[fi];
-                var relPath = file.webkitRelativePath || file.name;
-                var parts = relPath.split('/');
-                if (parts.length < 2) continue;
-                var fnLower = parts[parts.length - 1].toLowerCase();
-                var ext = fnLower.substring(fnLower.lastIndexOf('.'));
-                if (videoExtensions.indexOf(ext) >= 0 && !isCalibrationVideoFile(file)) {
-                    matchedFiles.push(file);
-                }
-            }
-
-            if (matchedFiles.length > 0) {
-                // A campy recording's session.json (+ campy-live's manifests)
-                // rides along so the caller can read the recording's details.
-                finish(matchedFiles.concat(campyManifestsAmong(allFiles)));
-            }
+            var picked = null;
+            try { picked = await pickSessionFolderVideos(startIn); } catch (e) { return; }
+            if (picked) finish(picked);
         });
 
         // Files button — fallback to individual file picker
@@ -1640,6 +1681,9 @@ export async function handleLoadMultiSession() {
 
         showLoading('Loading ' + sessionDirs.length + ' sessions...');
         console.log('[multi-session] Found sessions:', sessionDirs.map(function (d) { return d.name; }));
+        // Starting a project: the tab takes the parent folder's name. Added to
+        // an open project, the sessions keep that project's name.
+        if (state.sessions.length === 0) setPageProject(parentHandle.name);
 
         // Load each session — first gets full video init, rest defer decoders
         for (var si = 0; si < sessionDirs.length; si++) {
@@ -2193,7 +2237,8 @@ export async function handleLoadSessionFolderSingleSlp() {
         // in it, e.g. one folder per camera — so nobody picks the same folder twice.
         if (!campyRec && shouldUseLazySlp(slpFile)) {
             hideLoading();
-            await handleLoadProjectSlpLazy(slpFile, { folderFiles: allFiles });
+            var lazyFolder = allFiles[0].webkitRelativePath ? allFiles[0].webkitRelativePath.split('/')[0] : '';
+            await handleLoadProjectSlpLazy(slpFile, { folderFiles: allFiles, projectName: lazyFolder });
             return;
         }
         var campyVideoCam = new Map();
@@ -2377,6 +2422,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             && slpData.sessions[0].metadata.lucid) || {};
         var startsProject = state.sessions.length === 0;
         if (startsProject) resetPlaneState();
+        if (startsProject) setPageProject(folderName);
         readVisibilityMetadata(session, sessLucid);
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
@@ -2891,9 +2937,12 @@ export function createOpenProgress(fileName) {
 
 /**
  * @param {File} slpFile
- * @param {{folderFiles?: File[]}} [opts]  `folderFiles`: the files of a folder the user
- *   already picked (the session-folder loader); the videos are matched from them instead
- *   of asking for a folder again.
+ * @param {{folderFiles?: File[], projectName?: string, fileHandle?: FileSystemFileHandle}} [opts]
+ *   `folderFiles`: the files of a folder the user already picked (the session-folder
+ *   loader); the videos are matched from them instead of asking for a folder again.
+ *   `projectName`: the tab's name for the project (that folder's), else the file's name.
+ *   `fileHandle`: the `.slp`'s own handle, File ▸ Save's target from then on (none: Save
+ *   asks where to write).
  */
 export async function handleLoadProjectSlpLazy(slpFile, opts) {
     try {
@@ -2935,9 +2984,14 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         }
         state._decoderPoolCold = [];
         state.sessions = [];
+        // Save writes back to THIS file (when opened with its handle), never
+        // the replaced project's.
+        state.slpFileHandle = (opts && opts.fileHandle) || null;
         state.session = null;
         state.views = [];
         state.videoFiles = [];
+        // The tab: the folder it was picked from (opts.projectName), else the file.
+        setPageProject((opts && opts.projectName) || slpFile.name);
         state.triangulationResults = new Map();
         // Plane state is project-scoped and lives on a module singleton, so
         // it does NOT go away with `state.sessions`. `readPlaneMetadata`
@@ -3017,6 +3071,7 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, {
             onCount: function (done, total) { return openProgress('groups', done, total); },
             fileIdentities: identitiesFromFile ? labels.identities : null,
+            labels: labels, // members are read from its lazy store's rows
         });
         // A LUC3D project that stored only the identities its groups do not
         // imply: rebuild the rest from the groups just restored.
@@ -3207,6 +3262,11 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             if (firstParts.length > 1) {
                 folderName = firstParts[0];
             }
+        }
+        // A folder that starts a project names the tab; the multi-session
+        // loader (preloadedFiles) names it after the parent folder instead.
+        if (!preloadedFiles && !previousSession && state.sessions.length === 0 && folderName) {
+            setPageProject(folderName);
         }
 
         // Categorize files into per-camera directories

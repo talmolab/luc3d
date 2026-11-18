@@ -27,27 +27,24 @@
  * command, so the chord goes through CDP with `commands: ['Copy']`, which IS
  * cancelled by `preventDefault` and therefore discriminates the two cases.
  *
- * Run: node copy-panel-text.mjs   (spawns its own http.server)
+ * Run: node copy-panel-text.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8247);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const ORIGIN = `http://localhost:${PORT}`;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: ORIGIN });
     const page = await ctx.newPage();

@@ -22,10 +22,9 @@
  *
  * Confirmed to fail without the fix.
  *
- * Run: node tests/e2e/node-unhide-visible.mjs   (spawns its own http.server)
+ * Run: node tests/e2e/node-unhide-visible.mjs   (serves the app itself via tests/e2e/lib/harness.mjs)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,7 +32,6 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8293);
 const CAMS = ['side', 'back', 'mid'];
 const HID = 1;                       // the hidden node ("neck")
 let fails = 0;
@@ -50,8 +48,8 @@ function calibrationToml() {
     return out + `[metadata]\nadjusted = false\n`;
 }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: REPO, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
+const server = await startServer(REPO);
+const PORT = server.port;
 const BASE = `http://localhost:${PORT}/index.html`;
 
 // In-page helpers: build the project, save through the real Save As, read back.
@@ -146,7 +144,7 @@ async function installHelpers(page) {
     });
 }
 
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 let tmp = null;
 try {
     // ---------------------------------------------------------------- A. eager

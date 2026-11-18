@@ -19,15 +19,15 @@
  *
  * Run: node tests/e2e/ungroup-trackless-reopen.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8246);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FRAMES = Number(process.env.FRAMES || 500);
 const CAMS = 3, NODES = 3;
 
@@ -37,14 +37,11 @@ const check = (c, m, extra) => {
     if (!c) fails++;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 const fixturePath = path.join(repoRoot, '_ungroup-trackless-fixture.slp');
 
 let browser;
 try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchBrowser({ headless: true });
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));

@@ -22,10 +22,9 @@
  * File ▸ Load SLP) and lazily (`handleLoadProjectSlpLazy`, where a member's hidden nodes are
  * settled when its 2D arrives, `adoptMemberRow`).
  *
- * Run: node tests/e2e/sleap-visibility-grouped.mjs   (spawns its own http.server)
+ * Run: node tests/e2e/sleap-visibility-grouped.mjs   (serves the app itself via tests/e2e/lib/harness.mjs)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,7 +32,6 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8297);
 const CAMS = ['side', 'back', 'mid'];
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
@@ -49,8 +47,8 @@ function calibrationToml() {
     return out + `[metadata]\nadjusted = false\n`;
 }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: REPO, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
+const server = await startServer(REPO);
+const PORT = server.port;
 const BASE = `http://localhost:${PORT}/index.html`;
 
 async function boot(browser) {
@@ -124,7 +122,7 @@ async function boot(browser) {
     return page;
 }
 
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 let tmp = null;
 try {
     const page = await boot(browser);

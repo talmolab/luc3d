@@ -31,26 +31,24 @@
  *   §7  Open and folded sections are remembered across a reload
  *       (localStorage); the info panel still starts shown.
  *
- * Run: node panel-rail.mjs   (spawns its own http.server)
+ * Run: node panel-rail.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8241);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 const EXPECTED = [
     ['tabInstances', 'Instances'], ['tabVisibility', 'Visibility'], ['tabIdSwitches', 'ID Switches'],
     ['tabVideos', 'Videos'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
+    ['tabMemory', 'Memory'],
 ];
 // First path of the Lucide glyph each panel must show. Instances/Visibility/
 // Videos/Skeleton are sleap-app's Users/Eye/Film/Bone; ID Switches is the
@@ -63,17 +61,26 @@ const FIRST_PATH = {
     tabCameras: 'M13.997 4a2 2 0 0 1',
     tabSkeleton: 'M17 10c.7-.7 1.69 0 2.5 0',
     tabSession: 'M20 10a1 1 0 0 0 1-1V6',
+    tabMemory: 'M12 12v-2', // memory-stick
 };
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.waitForTimeout(300);
+
+    // The rail widens / narrows (`--transition-fast`, 150 ms) and the info panel
+    // opens / closes (250 ms) through CSS transitions; sizes and opacities are
+    // read once none runs anywhere in the page, never after a fixed wait, which
+    // under load (e2e files in parallel) read them part-way.
+    const settled = () => page.waitForFunction(
+        () => !document.getAnimations().some(a => a instanceof CSSTransition), null, { timeout: 10000 });
+    await settled();
 
     const railState = () => page.evaluate(() => {
         const wrap = document.getElementById('infoPanelWrapper');
@@ -147,7 +154,7 @@ try {
         'every pane sits in its own section, in rail order, under a header with a fold chevron, its name and a ✕');
 
     await page.hover('#panelRail .panel-rail-btn[data-tab="tabVideos"] .panel-rail-icon');
-    await page.waitForTimeout(300);
+    await settled();
     const hover = await page.evaluate(() => ({
         w: Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width),
         op: getComputedStyle(document.querySelector('#panelRail .panel-rail-btn[data-tab="tabVideos"] .panel-rail-label')).opacity,
@@ -167,7 +174,7 @@ try {
     const nameBox = await page.locator('#panelRail .panel-rail-btn[data-tab="tabVideos"] .panel-rail-label').boundingBox();
     const stripX = Math.round(nameBox.x + 10), stripY = Math.round(nameBox.y + nameBox.height / 2);
     await page.mouse.move(stripX, stripY);
-    await page.waitForTimeout(300);
+    await settled();
     const strip = await page.evaluate(([x, y]) => ({
         btn: (document.elementFromPoint(x, y).closest('.panel-rail-btn') || {}).dataset?.tab,
         w: Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width),
@@ -175,7 +182,7 @@ try {
     check(strip.btn === 'tabVideos' && strip.w === 132,
         `over a name the rail stays wide and the pointer is on that panel's button (${strip.btn}, ${strip.w})`);
     await moveAway();
-    await page.waitForTimeout(300);
+    await settled();
     const unhover = await page.evaluate(() =>
         Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
     check(unhover === 44, `leaving the rail narrows it again (${unhover})`);
@@ -187,14 +194,14 @@ try {
     const railW = () => page.evaluate(() =>
         Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width));
     await page.hover(vidBtn);
-    await page.waitForTimeout(300);
+    await settled();
     await page.click(vidBtn);
-    await page.waitForTimeout(300);
+    await settled();
     const afterClick = await railW();
     const focusIn = await page.evaluate(() => !!document.activeElement.closest('#panelRail'));
     check(afterClick === 132, `a click keeps the rail wide while the pointer is on it (${afterClick})`);
     await moveAway();
-    await page.waitForTimeout(300);
+    await settled();
     const leftW = await railW();
     check(leftW === 44, `leaving with the mouse narrows it${focusIn ? ' though the clicked button keeps focus' : ''} (${leftW})`);
     await close('tabVideos');                       // undo: back to Instances alone, expanded
@@ -214,9 +221,10 @@ try {
             J(s.active) === J(opened) && J(s.pressed) === J(opened),
             `clicking ${tab} opens + expands it and folds the others; every open icon is active`);
     }
-    check(J(s.ariaExpanded) === J(opened.map(t => t === 'tabSession' ? 'true' : 'false')),
+    const lastTab = EXPECTED[EXPECTED.length - 1][0];
+    check(J(s.ariaExpanded) === J(opened.map(t => t === lastTab ? 'true' : 'false')),
         'the header chevrons say which section is expanded (aria-expanded)');
-    await click('tabSession');
+    await click(lastTab);
     s = await railState();
     check(!s.collapsed && s.content.length === 0 && J(s.open) === J(opened) && J(s.active) === J(opened),
         'clicking the expanded panel folds it to its header; the panel stays shown and every section stays open');
@@ -246,7 +254,7 @@ try {
     check(J(s.open) === J(opened.filter(t => t !== 'tabVideos')) && !s.active.includes('tabVideos') && s.content.length === 0,
         '✕ closes a panel: its section leaves the stack and its icon goes inactive');
     for (const t of opened.filter(t => t !== 'tabVideos')) await close(t);
-    await page.waitForTimeout(400);            // the panel's 250ms width transition
+    await settled();
     s = await railState();
     check(s.collapsed && s.open.length === 0 && s.active.length === 0 && s.wrapWidth === 0 && s.panelBtn === 'false' && s.topName === 'Show panel',
         `closing the last panel hides the info panel; the Panel button and the rail top button follow (wrapper ${s.wrapWidth}px)`);
@@ -304,7 +312,7 @@ try {
         await page.click(sel);
         await page.keyboard.press('i');
         await moveAway();
-        await page.waitForTimeout(250);              // past the width transition
+        await settled();
         check(await innerW() === 44, `click the rail's ${what}, press I, move away: the rail narrows (${await innerW()})`);
         if ((await railState()).collapsed) await page.keyboard.press('i');
     }
@@ -315,7 +323,7 @@ try {
     await moveAway();
     await page.evaluate(() => document.querySelector('#panelRail .panel-rail-btn[data-tab="tabSession"]').focus());
     await page.keyboard.press('Shift+Tab');      // a real keyboard move, so :focus-visible applies
-    await page.waitForTimeout(250);              // past the width transition
+    await settled();
     const kb = await page.evaluate(() => ({
         focused: document.activeElement && document.activeElement.dataset.tab,
         w: Math.round(document.querySelector('#panelRail .panel-rail-inner').getBoundingClientRect().width),
@@ -372,6 +380,7 @@ try {
     await page.reload();
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.waitForTimeout(300);
+    await settled();
     s = await railState();
     check(!s.collapsed && J(s.open) === J(saved.open) && J(s.content) === J(saved.content),
         `the open and folded sections are restored after a reload, with the info panel shown (${J(s.open)})`);

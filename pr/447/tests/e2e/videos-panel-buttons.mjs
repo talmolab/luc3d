@@ -32,8 +32,8 @@
  *
  * Run: node tests/e2e/videos-panel-buttons.mjs
  */
-import { chromium } from 'playwright';
-import { spawn, spawnSync } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -41,7 +41,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8152);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -58,13 +59,10 @@ const camA = mk('camA.mp4', 'testsrc');
 const camB = mk('camB.mp4', 'testsrc2');
 const camC = mk('camC.mp4', 'smptebars');
 if (!camA || !camB || !camC) {
-    console.log('  (ffmpeg unavailable — skipping videos-panel-buttons.mjs)');
+    console.log('SKIP — ffmpeg is not installed');
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(0);
 }
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 const snapshot = (page) => page.evaluate(() => {
     const s = window.__lucid.state;
@@ -87,7 +85,7 @@ const snapshot = (page) => page.evaluate(() => {
 });
 
 try {
-    const browser = await chromium.launch();
+    const browser = await launchBrowser();
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`);

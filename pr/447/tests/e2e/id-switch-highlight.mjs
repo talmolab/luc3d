@@ -32,23 +32,20 @@
  *
  * Run: node tests/e2e/id-switch-highlight.mjs     (HL_SHOT=/path.png saves a screenshot)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser, waitForAnimations } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8278);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
@@ -167,6 +164,7 @@ try {
     await page.click('#idSwitchPanel .id-switch-row .id-switch-end');               // frame 50, in range
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 50, null, { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(150);
+    await waitForAnimations(page);   // the bar grows in (160 ms keyframes) before it is measured
     const close = await census();
     const head = await page.evaluate(() => {
         const b = document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar');

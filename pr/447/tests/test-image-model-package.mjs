@@ -145,6 +145,106 @@ group('the transformers.js fetch hook');
     eq(P.modelPackageTransfer({ builtin: true }), null, 'no transfer for the built-in model');
 }
 
+group('a URL package\'s downloads are checked against its manifest');
+{
+    P.clearModelPackages();
+    const W = new Uint8Array(200000).map((_, i) => (i * 31 + 7) & 255);   // the weights the manifest names
+    const BAD = W.slice(); BAD[123456] ^= 1;                              // one bit changed
+    const CFG = new TextEncoder().encode('{"model_type":"dinov2"}');
+    const manifest = Object.assign({}, BASE, { sha256: { 'onnx/model.onnx': sha(W) } });
+    const realFetch = globalThis.fetch;
+    let serve = W, served = [];
+    globalThis.fetch = async (u) => {                                     // the package's server (the manifest)
+        if (String(u).endsWith('lucid-model.json')) return new Response(JSON.stringify(manifest), { status: 200 });
+        return new Response('', { status: 404 });
+    };
+    const pkg = await P.loadModelPackageFromUrl('https://models.example/rig1/');
+    globalThis.fetch = realFetch;
+    // transformers.js's fetch, as the network answers: the weights (in 7 chunks, as a download arrives), config, a Range read
+    const chunked = (bytes, headers) => new Response(new ReadableStream({
+        start(c) { for (let i = 0; i < bytes.length; i += 30000) c.enqueue(bytes.slice(i, i + 30000)); c.close(); } }), { status: 200, headers });
+    const T = { env: { useBrowserCache: true, fetch: async (u, init) => {
+        served.push(String(u));
+        if (init && init.headers && init.headers.Range) return new Response(serve.slice(0, 1), { status: 206, headers: { 'content-range': 'bytes 0-0/' + serve.length } });
+        if (String(u).endsWith('config.json')) return new Response(CFG, { status: 200 });
+        return chunked(serve, { 'content-length': String(serve.length) });
+    } } };
+    P.installModelPackageFetch(T);
+    const url = (p) => 'https://huggingface.co/' + pkg.id + '/resolve/main/' + p;
+    const read = async (r) => { const rd = r.body.getReader(); const got = []; let n = 0;   // as readResponse does
+        for (;;) { const { done, value } = await rd.read(); if (done) break; got.push(value); n += value.length; }
+        return { n, bytes: new Uint8Array(await new Blob(got).arrayBuffer()) }; };
+
+    const good = await read(await T.env.fetch(url('onnx/model.onnx')));
+    ok(good.n === W.length && good.bytes.every((v, i) => v === W[i]), 'the right weights pass through unchanged, chunk by chunk');
+    eq(served[0], 'https://models.example/rig1/onnx/model.onnx', 'fetched from the package\'s own URL');
+
+    serve = BAD;
+    let err = null;
+    try { await read(await T.env.fetch(url('onnx/model.onnx'))); } catch (e) { err = e; }
+    ok(!!err && /does not match the SHA-256 in lucid-model\.json/.test(err.message), 'weights that differ by one bit fail the read: ' + (err && err.message));
+    err = null;
+    try { await (await T.env.fetch(url('onnx/model.onnx'))).arrayBuffer(); } catch (e) { err = e; }
+    ok(!!err, '…also read whole (arrayBuffer), as transformers.js does without a progress callback');
+    // a compressed transfer: the body is longer than content-length says
+    serve = W;
+    const T2 = { env: { useBrowserCache: true, fetch: async () => chunked(W, { 'content-length': '1000' }) } };
+    P.installModelPackageFetch(T2);
+    const comp = await read(await T2.env.fetch(url('onnx/model.onnx')));
+    ok(comp.n === W.length, 'a body longer than its content-length is still checked whole, and passes');
+    serve = BAD;
+    const partial = await T.env.fetch(url('onnx/model.onnx'), { headers: { Range: 'bytes=0-0' } });
+    eq(partial.status, 206, 'a Range read (a 206, not the whole file) is left alone');
+    const cfg = await read(await T.env.fetch(url('config.json')));
+    ok(cfg.n === CFG.length, 'a file with no SHA-256 in the manifest passes unchecked');
+    eq(P.verifiedResponse(new Response('x', { status: 404 }), sha(W), 'onnx/model.onnx', 'b').status, 404, 'an error status passes as it is');
+    // the CPU workers get the hashes too
+    const tr = P.modelPackageTransfer(pkg);
+    eq(tr.source.kind, 'url', 'transfer: a URL package');
+    eq(tr.source.sha256['onnx/model.onnx'], sha(W), 'transfer: carries the SHA-256 for the worker\'s own hook');
+    // a worker realm: serve from the transfer alone
+    P.clearModelPackages();
+    P.serveModelPackage(tr.repo, tr.source);
+    err = null;
+    try { await read(await T.env.fetch(url('onnx/model.onnx'))); } catch (e) { err = e; }
+    ok(!!err, 'a worker serving from the transfer checks too (tampered weights fail)');
+
+    group('…and copies already in the browser cache');
+    P.clearModelPackages();
+    globalThis.fetch = async (u) => String(u).endsWith('lucid-model.json') ? new Response(JSON.stringify(manifest), { status: 200 }) : new Response('', { status: 404 });
+    const pkg2 = await P.loadModelPackageFromUrl('https://models.example/rig1/');
+    globalThis.fetch = realFetch;
+    const store = new Map(), opened = [], deletes = [];
+    let reads = 0;
+    globalThis.caches = { open: async (name) => { opened.push(name); return {
+        match: async (u) => { if (!store.has(u)) return undefined; reads++; return new Response(store.get(u)); },
+        delete: async (u) => { deletes.push(u); return store.delete(u); } }; } };
+    const cacheUrl = P.packageCacheUrl(null, pkg2.id, 'onnx/model.onnx');
+    eq(cacheUrl, 'https://huggingface.co/' + pkg2.id + '/resolve/main/onnx/model.onnx', 'the cache key is transformers.js\'s remote URL for the file');
+    store.set(cacheUrl, BAD);
+    const del = await P.checkCachedPackageFiles(null, pkg2);
+    ok(JSON.stringify(del) === JSON.stringify(['onnx/model.onnx']) && !store.has(cacheUrl) && opened[0] === 'transformers-cache',
+       'a wrong cached copy (cached before this check existed) is deleted, so it is downloaded again (' + JSON.stringify(del) + ')');
+    store.set(cacheUrl, W);
+    reads = 0;
+    eq((await P.checkCachedPackageFiles(null, pkg2)).length, 0, 'a right cached copy is kept');
+    const r1 = reads;
+    await P.checkCachedPackageFiles(null, pkg2);
+    ok(r1 === 1 && reads === 1, 'and is read once per page, not on every load (' + reads + ' reads)');
+    let loaded = false;
+    store.set(cacheUrl, BAD); P.clearModelPackages();
+    globalThis.fetch = async (u) => String(u).endsWith('lucid-model.json') ? new Response(JSON.stringify(manifest), { status: 200 }) : new Response('', { status: 404 });
+    const pkg3 = await P.loadModelPackageFromUrl('https://models.example/rig1/');
+    globalThis.fetch = realFetch;
+    await P.withPackageCachePolicy(T, pkg3, async () => { loaded = !store.has(cacheUrl); });
+    ok(loaded, 'withPackageCachePolicy checks the cache before the load starts');
+    deletes.length = 0;
+    const folderPkg = await P.loadModelPackageFromFiles(folder(BASE));
+    eq((await P.checkCachedPackageFiles(null, folderPkg)).length + deletes.length, 0, 'a folder package is not looked up in the cache');
+    delete globalThis.caches;
+    eq((await P.checkCachedPackageFiles(null, pkg3)).length, 0, 'no Cache Storage (Node, a private window): nothing to check');
+}
+
 group('the saved choice');
 {
     P.clearModelPackages();

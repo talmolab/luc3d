@@ -28,22 +28,23 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=54eeb4ba7f82';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=54eeb4ba7f82';
-import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=54eeb4ba7f82';
+} from './app-state.js?v=bcf95f53457b';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=bcf95f53457b';
+import { setPageProject } from './page-title.js?v=bcf95f53457b';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=bcf95f53457b';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod, triangulationSettingsKey,
-} from '../pose/triangulation.js?v=54eeb4ba7f82';
+} from '../pose/triangulation.js?v=bcf95f53457b';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=54eeb4ba7f82';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=54eeb4ba7f82';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=54eeb4ba7f82';
+} from '../loading/session-loader.js?v=bcf95f53457b';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=bcf95f53457b';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=bcf95f53457b';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,23 +52,23 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=54eeb4ba7f82';
+} from './video-filters.js?v=bcf95f53457b';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=54eeb4ba7f82';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=bcf95f53457b';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=54eeb4ba7f82';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=54eeb4ba7f82';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=54eeb4ba7f82';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=54eeb4ba7f82';
+import { setSoloView } from './ui-wiring.js?v=bcf95f53457b';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=bcf95f53457b';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=bcf95f53457b';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=bcf95f53457b';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=54eeb4ba7f82';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=54eeb4ba7f82';
+import { setup3DViewport } from '../pose/initialization.js?v=bcf95f53457b';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=bcf95f53457b';
 
 // ============================================
 // Dockview Pane Manager
@@ -1713,7 +1714,10 @@ export function removeSession(idx) {
     if (state.sessions.length === 0) {
         // Last session removed — full reset to fresh state
         state.session = null;
+        setPageProject(null);
         state.activeSessionIdx = 0;
+        // Nothing left of the project: a new one must not Save over its file.
+        state.slpFileHandle = null;
         state.triangulationResults = new Map();
         state.views = [];
         state.videoFiles = [];
