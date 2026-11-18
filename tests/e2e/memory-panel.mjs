@@ -25,6 +25,11 @@
  *       count), and the plot shades each run with its name along the top and
  *       a tooltip with its length and peak; a run done with the panel closed
  *       is marked too.
+ *   §8  The window switch (5 min / 30 min / 1 h) relabels the axis and the
+ *       peak and is remembered in this browser only after a pick; hovering
+ *       the plot shows the reading under the pointer (guide, dot, the big
+ *       number with how long ago); Copy readings puts every reading kept on
+ *       the clipboard as CSV.
  *   §6  A cross-origin-isolated page with `measureUserAgentSpecificMemory`
  *       (stubbed here; LUCID sends no COOP/COEP) shows the whole page and its
  *       workers as rows and a second line, asking only while the panel is on
@@ -224,6 +229,75 @@ try {
             'the newest run\'s name runs along the top of the plot', runs.labels);
         check(runs.runs.includes(null) && runs.runs.includes('Track All') && runs.runs.includes('Loading SLP files'),
             'readings note what was running, and nothing when no card is up');
+        await context.close();
+    }
+
+    // ---- §8 the window, the reading under the pointer, and copying the readings ----
+    {
+        const { context, page } = await openApp(precise);
+        await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: `http://localhost:${server.port}` });
+        await openPanel(page);
+        await page.mouse.move(400, 400); // off the rail, which widens over the panel's edge while hovered
+        await waitTaken(page, 4);
+        const view = () => page.evaluate(() => ({
+            pressed: [...document.querySelectorAll('.memory-window-btn')].filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.textContent),
+            axis: document.getElementById('memoryAxisStart').textContent,
+            peak: document.getElementById('memoryPeak').previousElementSibling.textContent,
+            stored: (() => { try { return localStorage.getItem('lucidMemoryWindow'); } catch (e) { return 'ERR'; } })(),
+        }));
+        let v = await view();
+        check(v.pressed.join() === '5 min' && v.axis === '−5 min' && v.peak === 'Peak (5 min)' && v.stored === null,
+            'five minutes by default, and nothing stored until a window is picked', v);
+        await page.click('.memory-window-btn[data-window="30m"]');
+        v = await view();
+        check(v.pressed.join() === '30 min' && v.axis === '−30 min' && v.peak === 'Peak (30 min)' && v.stored === '30m',
+            'picking 30 min relabels the axis and the peak, and is remembered in this browser', v);
+        await page.reload();
+        await page.waitForFunction(() => window.__lucidMemoryPanel, null, { timeout: 30000 });
+        await page.mouse.move(400, 400);
+        await waitTaken(page, 2);
+        v = await view();
+        check(v.pressed.join() === '30 min' && v.axis === '−30 min', 'a reload keeps the pick (display taste, never the .slp)', v);
+        await page.click('.memory-window-btn[data-window="1h"]');
+        v = await view();
+        check(v.pressed.join() === '1 h' && v.axis === '−1 h', 'and 1 h', v);
+        await page.click('.memory-window-btn[data-window="5m"]');
+        await waitTaken(page, (await panelState(page)).taken + 2);
+
+        // Hover: the newest readings are at the right edge.
+        const box = await page.locator('#memoryPlot').boundingBox();
+        await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2);
+        const hov = await page.evaluate(() => ({
+            line: document.getElementById('memoryHoverLine').getAttribute('visibility'),
+            dot: document.getElementById('memoryHoverDot').getAttribute('visibility'),
+            now: document.getElementById('memoryNow').textContent,
+            label: document.getElementById('memoryNowLabel').textContent,
+        }));
+        check(hov.line === 'visible' && hov.dot === 'visible' && MB_RE.test(hov.now) && /^(just now|\d+ s ago)$/.test(hov.label),
+            `under the pointer: a guide and a dot, and the big number shows that reading (${hov.now}, ${hov.label})`, hov);
+        await page.mouse.move(box.x + 2, box.y + box.height / 2);
+        const empty = await page.evaluate(() => ({
+            line: document.getElementById('memoryHoverLine').getAttribute('visibility'),
+            label: document.getElementById('memoryNowLabel').textContent,
+        }));
+        check(empty.line === 'hidden' && empty.label === 'used', 'where there is no reading (five minutes ago, before the page opened), no guide', empty);
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height + 60);
+        const off = await page.evaluate(() => document.getElementById('memoryNowLabel').textContent);
+        check(off === 'used', 'off the plot, the big number is the current reading again');
+
+        // Copy.
+        await page.click('#memoryCopy');
+        await page.waitForFunction(() => /^Copied [\d,]+ readings$/.test(document.getElementById('memoryCopy').textContent), null, { timeout: 5000 });
+        const copied = await page.evaluate(async () => ({
+            btn: document.getElementById('memoryCopy').textContent,
+            text: await navigator.clipboard.readText(),
+            n: window.__lucidMemoryPanel.samples().length,
+        }));
+        const lines = copied.text.trimEnd().split('\n');
+        const nCopied = +copied.btn.match(/[\d,]+/)[0].replace(/,/g, '');
+        check(lines[0] === 'time,clock,used_mb,allocated_mb,js_object_limit_mb,whole_page_mb,running' &&
+            lines.length - 1 === nCopied && nCopied >= copied.n - 1 && /^\d{4}-\d\d-\d\dT[\d:.]+Z,\d{1,2}:\d\d:\d\d [AP]M,\d+\.\d,/.test(lines[1]),
+            `Copy readings puts every reading kept on the clipboard as CSV (${copied.btn})`, lines.slice(0, 3));
         await context.close();
     }
 

@@ -3740,6 +3740,40 @@ button.tri-dropdown-item:disabled {
   gap: 4px;
 }
 
+/* The plot's window (ui/memory-panel.js setWindow): a small segmented switch at the heading's right. */
+.memory-windows {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.memory-window-btn {
+  padding: 1px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.memory-window-btn + .memory-window-btn {
+  border-left: 1px solid var(--border-color);
+}
+
+.memory-window-btn:hover {
+  color: var(--text-primary);
+}
+
+.memory-window-btn[aria-pressed="true"] {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
 .memory-readout {
   display: flex;
   align-items: baseline;
@@ -3802,6 +3836,27 @@ button.tri-dropdown-item:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: auto;
+}
+
+/* Under the pointer (ui/memory-panel.js renderHover). */
+.memory-plot-hover {
+  stroke: var(--text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.memory-plot-hover-dot {
+  fill: var(--accent-color);
+  stroke: var(--bg-tertiary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.memory-readout-hover .memory-now {
+  color: var(--accent-color);
 }
 
 .memory-plot-base {
@@ -3876,6 +3931,27 @@ button.tri-dropdown-item:disabled {
 
 .memory-key-ua {
   border-top-color: var(--warning-color);
+}
+
+.memory-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 4px 0 2px;
+}
+
+.memory-copy-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.memory-copy-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
 }
 
 .memory-note {
