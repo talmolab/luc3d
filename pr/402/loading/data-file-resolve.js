@@ -21,11 +21,11 @@
 //      default selected. "Save Options" saves the rows the user had to decide
 //      or changed; rows the rule settled stay automatic.
 
-import { readSlpProvenances } from '../import-export/file-io.js?v=9aab3ba0af2d';
-import { lucidExportedAt } from '../import-export/slp-provenance.js?v=9aab3ba0af2d';
-import { planCameraDataFile } from './percam-slp-choice.js?v=9aab3ba0af2d';
-import { savedDataFileChoices, saveDataFileChoices, applySavedChoice } from './data-file-choices.js?v=9aab3ba0af2d';
-import { showDataFileChooser, dataFileKindLabel } from '../ui/data-file-chooser.js?v=9aab3ba0af2d';
+import { readSlpProvenances } from '../import-export/file-io.js?v=0ed78cea414c';
+import { lucidExportedAt } from '../import-export/slp-provenance.js?v=0ed78cea414c';
+import { planCameraDataFile } from './percam-slp-choice.js?v=0ed78cea414c';
+import { savedDataFileChoices, saveDataFileChoices, applySavedChoice } from './data-file-choices.js?v=0ed78cea414c';
+import { showDataFileChooser, dataFileKindLabel } from '../ui/data-file-chooser.js?v=0ed78cea414c';
 
 /**
  * @param {Array<{key: string, title: string, folderName: string|null,

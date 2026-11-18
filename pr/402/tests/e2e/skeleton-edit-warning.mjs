@@ -40,26 +40,23 @@
  *     can set and never unset is a trap, and this one hides a warning about
  *     silent data loss.
  *
- * Run: node skeleton-edit-warning.mjs   (spawns its own http.server)
+ * Run: node skeleton-edit-warning.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8247);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => {
@@ -122,7 +119,8 @@ try {
 
     // The Skeleton tab, since the edit controls live in it and Playwright will
     // not type into a hidden input.
-    await page.click('.panel-tab[data-tab="tabSkeleton"]');
+    await page.click('.panel-rail-btn[data-tab="tabSkeleton"]');
+    await page.mouse.move(300, 300);   // off the rail: widened, it covers + Node
     await page.waitForTimeout(120);
 
     const modalOpen = () => page.evaluate(() => !!document.getElementById('skeletonEditConfirm'));

@@ -36,25 +36,28 @@
  *     one that streams every sample in every camera (same flags, scores and
  *     vectors bit for bit).
  *
+ *  7. The cache is per MODEL: another model (a package, ui/image-model-package.js)
+ *     reuses none of the built-in model's vectors, has its own, and switching back
+ *     finds the built-in ones again bit for bit. The built-in model re-pinned to
+ *     another revision (cache key `builtin@<12 hex>`) is another model too. A 168-px package's input side
+ *     reaches every crop the crop workers cut and every sample crop.
+ *
  * Run: node tests/e2e/image-check-cache.mjs   (PORT=… to pick the server port)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8291);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -65,21 +68,23 @@ try {
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js'), AS = await import('/ui/app-state.js');
         const E = await import('/ui/image-embedder.js'), SC = await import('/pose/id-switch-check.js');
-        // ---- a tracked session with 2D: 3 animals, 3 cameras, one pair's labels swapped after encounter #16
+        // ---- a tracked session with 2D: 3 animals, 3 cameras, one pair's labels swapped after encounter #8
+        // (12 encounters, ~3,300 crops a run: every floor below holds, and each of the ~17 runs costs half what
+        // 24 encounters did; the checks compare runs with each other, never a count of this size)
         const NODES = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2',
             'Shoulder_left', 'Shoulder_right', 'Haunch_left', 'Haunch_right', 'Neck'];
         const TEMPLATE = { Nose: [45, 0, 0], Ear_R: [25, -11, 4], Ear_L: [25, 11, 4], Head: [30, 0, 3], Neck: [20, 0, 2],
             Trunk: [-5, 0, 4], TTI: [-40, 0, 0], Shoulder_left: [10, 12, 0], Shoulder_right: [10, -12, 0],
             Haunch_left: [-25, 15, 0], Haunch_right: [-25, -15, 0], Tail_0: [-65, 0, 0], Tail_1: [-88, 0, 0],
             Tail_2: [-110, 0, 0], TailTip: [-132, 0, 0] };
-        const CAMS = ['camA', 'camB', 'camC'], STEP = 4, SWAP = 16, FPS = 60;
+        const CAMS = ['camA', 'camB', 'camC'], STEP = 4, SWAP = 8, FPS = 60, ENCOUNTERS = 12;
         const pose = (cx, cy, h) => { const out = new Float64Array(45), c = Math.cos(h), s = Math.sin(h);
             NODES.forEach((n, i) => { const [x, y, z] = TEMPLATE[n]; out[i * 3] = cx + c * x - s * y; out[i * 3 + 1] = cy + s * x + c * y; out[i * 3 + 2] = z; }); return out; };
         const inst = (P, ci) => { const pts = []; for (let i = 0; i < NODES.length; i++) pts.push([130 + 12 * ci + 0.8 * P[i * 3], 130 + 8 * ci + 0.8 * P[i * 3 + 1]]);
             return { getPoint: (i) => pts[i] }; };
         const home = [[0, 0], [400, 0], [200, 350]], PAIRS = [[0, 1], [1, 2], [0, 2]];
-        const events = []; for (let e = 0; e < 24; e++) events.push({ pair: PAIRS[e % 3], t0: 300 + e * 260 });
-        const T = 300 + 24 * 260 + 300;
+        const events = []; for (let e = 0; e < ENCOUNTERS; e++) events.push({ pair: PAIRS[e % 3], t0: 300 + e * 260 });
+        const T = 300 + ENCOUNTERS * 260 + 300;
         const session = new pd.Session([], new pd.Skeleton('m', NODES, []), [], 'CacheFixture');
         for (let i = 0; i < 3; i++) session.addIdentity('id_' + i);
         let gid = 1; const label = [0, 1, 2];
@@ -349,6 +354,62 @@ try {
           `(streaming every sample: ${r6.all.camA}/${r6.all.camB}/${r6.all.camC})`);
     check(r6.same.result && r6.same.vecDiff === 0 && r6.same.missing === 0 && r6.same.sizes[0] === r6.same.sizes[1] && r6.modelSkip === r6.modelAll,
           `…and the run equals one streaming every frame in every camera: same flags, scores and ${r6.same.sizes[0]} vectors bit for bit (${JSON.stringify(r6.same)})`);
+
+    // ---- 7. another model never reuses this one's vectors; a package's input side reaches every crop
+    const r7 = await page.evaluate(async () => {
+        const { E } = window.__fx;
+        const saved = window.__embedOpts;
+        const pkg = (input, ch) => ({ key: ch.repeat(64), id: 'lucid-pkg/' + ch.repeat(16), builtin: false, name: 'test package ' + input,
+            input, threshold: -1, fp16: false, mb: {}, source: { kind: 'url', base: 'http://localhost/' } });
+        try {
+            window.__embedOpts = Object.assign({}, saved, { imageModel: null });
+            const warm = await window.__run(true);                         // the built-in model: fills the cache
+            const builtinAgain = await window.__run(true);
+            window.__embedOpts = Object.assign({}, saved, { imageModel: pkg(192, 'b') });
+            const other = await window.__run(true);                        // same input side, another model
+            const otherAgain = await window.__run(true);
+            window.__embedOpts = Object.assign({}, saved, { imageModel: null });
+            const back = await window.__run(true);
+            // the built-in model at another pinned revision (IMAGE_MODEL_REVISION moved): another model to the cache
+            window.__embedOpts = Object.assign({}, saved, { imageModel: Object.assign({}, E.BUILTIN_IMAGE_MODEL, { revision: 'f'.repeat(40) }) });
+            const repinned = await window.__run(true);
+            window.__embedOpts = Object.assign({}, saved, { imageModel: null });
+            const pinnedBack = await window.__run(true);
+            const keys = [E.cacheModelKey(E.BUILTIN_IMAGE_MODEL), E.cacheModelKey(Object.assign({}, E.BUILTIN_IMAGE_MODEL, { revision: 'f'.repeat(40) }))];
+            // a 168-px package: what reaches the model, and the sample crops, are 168 x 168
+            const sides = new Set(); let smallCrops = 0;
+            const sideModel = async (data, n) => {
+                smallCrops += n; const side = Math.round(Math.sqrt(data.length / n / 3)); sides.add(side);
+                return Array.from({ length: n }, (_, c) => { const v = new Float32Array(64);
+                    for (let d = 0; d < 64; d++) v[d] = data[c * 3 * side * side + ((d * 997) % (side * side))]; return v; });
+            };
+            window.__embedOpts = Object.assign({}, saved, { model: sideModel, imageModel: pkg(168, 'a') });
+            const small = await window.__run(false);
+            const sampleSides = window.__samples.map(c => Math.round(Math.sqrt(c.tensor.length / 3)));
+            return { warmModel: warm.modelCrops, builtinCached: builtinAgain.stats.cachedCrops, builtinModel: builtinAgain.modelCrops,
+                     otherCached: other.stats.cachedCrops, otherModel: other.modelCrops, otherAgainCached: otherAgain.stats.cachedCrops, otherAgainModel: otherAgain.modelCrops,
+                     backCached: back.stats.cachedCrops, backModel: back.modelCrops, sameBack: window.__same(builtinAgain, back),
+                     repinnedCached: repinned.stats.cachedCrops, repinnedModel: repinned.modelCrops,
+                     pinnedBackCached: pinnedBack.stats.cachedCrops, pinnedBackModel: pinnedBack.modelCrops, keys,
+                     revision: E.IMAGE_MODEL_REVISION,
+                     sides: [...sides], sampleSides: [...new Set(sampleSides)], smallCrops, smallOk: !!small.res };
+        } finally { window.__embedOpts = saved; E.setActiveImageModel(null); }
+    });
+    r7.input = await page.evaluate(() => window.__fx.E.INPUT);
+    check(r7.builtinModel === 0 && r7.builtinCached > 0, `built-in model, again: all ${r7.builtinCached} crops from the cache`);
+    check(r7.otherCached === 0 && r7.otherModel === r7.builtinCached, `another model (same input side): nothing reused, all ${r7.otherModel} crops embedded`);
+    check(r7.otherAgainModel === 0 && r7.otherAgainCached === r7.otherModel, `…and its own second run is all cached (${r7.otherAgainCached})`);
+    check(r7.backModel === 0 && r7.backCached === r7.builtinCached && r7.sameBack.vecDiff === 0 && r7.sameBack.missing === 0,
+          `back to the built-in model: its own vectors, all cached and bit for bit (${JSON.stringify(r7.sameBack)})`);
+    check(r7.keys[0] === 'builtin@' + r7.revision.slice(0, 12) && r7.keys[1] === 'builtin@ffffffffffff',
+          `the built-in model's cache key names its pinned revision (${r7.keys.join(' vs ')})`);
+    check(r7.repinnedCached === 0 && r7.repinnedModel === r7.builtinCached,
+          `the built-in model re-pinned to another revision: nothing reused, all ${r7.repinnedModel} crops embedded`);
+    check(r7.pinnedBackModel === 0 && r7.pinnedBackCached === r7.builtinCached,
+          `…and back at the pinned revision, its own vectors are still all cached (${r7.pinnedBackCached})`);
+    check(r7.sides.length === 1 && r7.sides[0] === 168 && r7.sampleSides.length === 1 && r7.sampleSides[0] === 168 && r7.smallCrops > 1000,
+          `a 168-px package: every model input (${r7.smallCrops} crops, sides ${r7.sides}) and sample crop (sides ${r7.sampleSides}) is 168 x 168`);
+    check(r7.input === 192, `the built-in model's 192-px input is back afterwards (INPUT ${r7.input})`);
 
     check(errs.length === 0, `no page errors${errs.length ? ': ' + errs.join(' | ') : ''}`);
 } catch (e) {

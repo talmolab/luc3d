@@ -24,22 +24,19 @@
  *     needs it), with an untrusted click as the negative control.
  *  6. NEGATIVE CONTROLS: Windows, and an automated macOS browser, never see it.
  *
- * Run: node tests/e2e/folder-confirm-tip.mjs   (spawns its own http.server)
+ * Run: node tests/e2e/folder-confirm-tip.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8347);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 /** A page on `platform`, optionally still flagged as automated. */
 async function open(browser, platform, automated) {
@@ -51,6 +48,12 @@ async function open(browser, platform, automated) {
         });
         if (!automated) {
             Object.defineProperty(Navigator.prototype, 'webdriver', { configurable: true, get: () => false });
+            // A person's browser picks a recording folder with showDirectoryPicker
+            // (loading/recording-folder.js), whose native dialog Playwright cannot
+            // answer: take it away so the loaders use the folder input, which the
+            // file chooser fills. §5 puts a stub back to watch that picker.
+            delete window.showDirectoryPicker;
+            delete Window.prototype.showDirectoryPicker;
         }
     }, { platform, automated });
     const page = await ctx.newPage();
@@ -82,7 +85,7 @@ const settle = (page) => page.waitForTimeout(250);
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
 
     console.log('\n--- 1. macOS: the menu item opens the tip first ---');
     const mac = await open(browser, 'macOS', false);

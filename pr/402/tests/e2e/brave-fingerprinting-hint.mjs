@@ -20,7 +20,7 @@
  * Run: node tests/e2e/brave-fingerprinting-hint.mjs   (BRAVE=/path/to/Brave overrides the macOS default)
  */
 import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,14 +28,12 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8286);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const BRAVE = process.env.BRAVE || '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
 if (!fs.existsSync(BRAVE)) { console.log('SKIP — Brave not found at ' + BRAVE + ' (set BRAVE=)'); process.exit(0); }
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 /** A fresh headless profile — Brave or Chromium, optionally with this site allowed to fingerprint. */
 async function open(brave, allowSite) {

@@ -28,22 +28,23 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=9aab3ba0af2d';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=9aab3ba0af2d';
-import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=9aab3ba0af2d';
+} from './app-state.js?v=0ed78cea414c';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=0ed78cea414c';
+import { setPageProject } from './page-title.js?v=0ed78cea414c';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=0ed78cea414c';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
-    sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=9aab3ba0af2d';
+    sessionHasCalibration, resolveTriangulationMethod, triangulationSettingsKey,
+} from '../pose/triangulation.js?v=0ed78cea414c';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=9aab3ba0af2d';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=9aab3ba0af2d';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=9aab3ba0af2d';
+} from '../loading/session-loader.js?v=0ed78cea414c';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=0ed78cea414c';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=0ed78cea414c';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,23 +52,23 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=9aab3ba0af2d';
+} from './video-filters.js?v=0ed78cea414c';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=9aab3ba0af2d';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=0ed78cea414c';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=9aab3ba0af2d';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=9aab3ba0af2d';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=9aab3ba0af2d';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=9aab3ba0af2d';
+import { setSoloView } from './ui-wiring.js?v=0ed78cea414c';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=0ed78cea414c';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=0ed78cea414c';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=0ed78cea414c';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=9aab3ba0af2d';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=9aab3ba0af2d';
+import { setup3DViewport } from '../pose/initialization.js?v=0ed78cea414c';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=0ed78cea414c';
 
 // ============================================
 // Dockview Pane Manager
@@ -689,7 +690,19 @@ function renderDuplicatePanels() {
 
         if (panelOverlay && primaryView.overlayCanvas && panelOverlay !== primaryView.overlayCanvas) {
             var octx = panelOverlay.getContext('2d');
-            try { octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height); }
+            // A zoomed-in primary overlay is a window onto the full canvas
+            // (`ui/overlay-window.js`): copy it to the same place in the mirror.
+            var plan = primaryView._overlayPlan;
+            try {
+                if (plan && plan.windowed) {
+                    var kx = panelOverlay.width / plan.boxW, ky = panelOverlay.height / plan.boxH;
+                    octx.clearRect(0, 0, panelOverlay.width, panelOverlay.height);
+                    octx.drawImage(primaryView.overlayCanvas, plan.cssLeft * kx, plan.cssTop * ky,
+                        plan.cssW * kx, plan.cssH * ky);
+                } else {
+                    octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height);
+                }
+            }
             catch (e) { /* canvas not ready */ }
         }
     }
@@ -1577,6 +1590,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                             if (valid) {
                                 group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
+                                group.solveSettings = triangulationSettingsKey(fromSession.cameras);
                             }
                             group.markClean();
                             totalRetriangulated++;
@@ -1700,7 +1714,10 @@ export function removeSession(idx) {
     if (state.sessions.length === 0) {
         // Last session removed — full reset to fresh state
         state.session = null;
+        setPageProject(null);
         state.activeSessionIdx = 0;
+        // Nothing left of the project: a new one must not Save over its file.
+        state.slpFileHandle = null;
         state.triangulationResults = new Map();
         state.views = [];
         state.videoFiles = [];

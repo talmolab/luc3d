@@ -25,8 +25,8 @@
  *
  * Run: node tests/e2e/stamped-build.mjs
  */
-import { chromium } from 'playwright';
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,7 +34,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8277);
 const TOKEN = 'e2etest0001';
 const RELEASE = 'v9.8.7';
 let fails = 0;
@@ -42,6 +41,8 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 
 // ---- build the artifact: the tracked files of the working tree, stamped
 const site = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-stamped-'));
+const server = await startServer(site);
+const PORT = server.port;
 const files = execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot }).toString().split('\0').filter(Boolean);
 for (const f of files) {
     const src = path.join(repoRoot, f);
@@ -59,9 +60,6 @@ const preloads = graph.local.map(u => new URL(u, `http://localhost:${PORT}/`));
 check(preloads.length > 100 && graph.missing.length === 0 && preloads.every(u => u.searchParams.get('v') === TOKEN),
     `modulepreload: ${preloads.length} same-site + ${graph.remote.length} CDN links, all stamped${graph.missing.length ? ' — missing: ' + graph.missing.join(', ') : ''}`);
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: site, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 /**
  * Same-site code LOADS (script / stylesheet / worker requests — not `fetch()`es of
  * source text, which some browser tests do to read a module's code) — and the
@@ -78,7 +76,7 @@ function audit(reqs) {
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     // ---- 2 + 3: the app
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [], urls = [];

@@ -332,6 +332,33 @@ export class FrameIdentityMap extends Map {
     forEach(cb, thisArg) {
         for (var e of this._iter(0)) cb.call(thisArg, e[1], e[0], this);
     }
+
+    /**
+     * `cb(key, value)` for every live entry, in insertion order, with no
+     * allocation per entry (the iterators build a `[k, v]` array each, ~4M of
+     * them on a large project). `cb` must not modify the map.
+     * `from` / `to` (entry positions, default 0 / `entrySpan()`) visit a stretch,
+     * so a long scan can be done in pieces: consecutive stretches visit what one
+     * call visits, in the same order, while `layoutStamp()` is unchanged.
+     * @returns {number} where the next stretch starts (`to`)
+     */
+    forEachKeyValue(cb, from, to) {
+        var end = to == null ? this._n : Math.min(to, this._n);
+        for (var i = from > 0 ? from : 0; i < end; i++) {
+            if (!(this._state[i] & FIM_LIVE)) continue;
+            cb(this._keyAt(i), this._valAt(i));
+        }
+        return end;
+    }
+
+    /** Entry positions in use (live + deleted): `forEachKeyValue`'s whole range. */
+    entrySpan() { return this._n; }
+
+    /**
+     * Changes when entries move to other positions (a clear or a compaction), so a
+     * scan done in stretches knows its positions no longer mean the same entries.
+     */
+    layoutStamp() { return this._clears + ':' + this._compactions; }
 }
 
 export class Skeleton {
@@ -1573,6 +1600,14 @@ export class InstanceGroup {
          */
         this.triangulationMethod = undefined;
         /**
+         * The solve settings `points3d` was produced under
+         * (`triangulationSettingsKey`, pose/triangulation.js): `adoptPrior3d` only
+         * reuses 3D solved under the settings in force now. In memory only, so 3D
+         * read from a file has none and is re-solved rather than trusted.
+         * @type {string|undefined}
+         */
+        this.solveSettings = undefined;
+        /**
          * @type {Map<string, Instance>} camera name -> reprojected instance.
          * Starts as the shared read-only `NO_REPROJECTED_INSTANCES`; write
          * through `addReprojectedInstance`.
@@ -1819,6 +1854,29 @@ export class Session {
          */
         this.numAnimals = null;
         /**
+         * Which identity has the tail marks ("id_0"), for Track All's tail-mark
+         * pass (pose/tail-mark.js), or null for off. Persisted as
+         * `metadata.lucid.tailMarkedIdentity`.
+         * @type {?string}
+         */
+        this.tailMarkedIdentity = null;
+        /**
+         * What each identity should show, per identity cue (pose/identity-cues.js):
+         * `{tailBands: {id_0: 0, id_1: 1, ...}}` (cue id -> identity name -> class), or
+         * null for none. Track All then relabels so each identity holds the animal that
+         * shows it. Persisted as `metadata.lucid.identityMarks`.
+         * @type {?Object<string, Object<string, *>>}
+         */
+        this.identityMarks = null;
+        /**
+         * The image ID-switch check's model for this session: null = the
+         * built-in one; else a package choice (`modelChoiceOf`,
+         * pose/image-model-manifest.js: key, name, input, threshold, url or
+         * folder). Persisted as `metadata.lucid.imageModel`.
+         * @type {?Object}
+         */
+        this.imageModel = null;
+        /**
          * @type {Object<string, string|null>|null} For each camera whose data
          * file the user chose in the per-camera folder loader's chooser (#413):
          * `"<camera dir>/<file name>"`, or null for "None". Null when the
@@ -1997,6 +2055,47 @@ export class Session {
     }
 
     /**
+     * The tracks that "Propagate IDs → Tracks" would make: one per identity
+     * assigned anywhere in the project, in identities-array order so the indices
+     * are stable. Reads `frameIdentityMap`, which is whole-project and never
+     * evicted. The SLP exporters use the same plan, so an export writes the same
+     * tracks whether or not the command was run. Changes nothing.
+     *
+     * @returns {{names: string[], idToTrackIdx: Map<number, number>}} `names` is
+     *   empty when no identity is assigned.
+     */
+    identityTrackPlan() {
+        var usedSet = new Set();
+        for (var idVal of this.frameIdentityMap.values()) {
+            if (idVal != null && idVal >= 0) usedSet.add(idVal);
+        }
+        var names = [];
+        var idToTrackIdx = new Map();
+        var nameSeen = {};
+        // Auto-generated identity names look like "id_<identityId>" (the
+        // placeholder `getOrCreateIdentityForTrack` stamps when "Propagate
+        // Tracks → IDs" ran with no custom naming) — using that literally as
+        // a track name breaks the app's normal "track_N" naming convention
+        // (e.g. a Tracks-→-IDs-→-Tracks round trip would otherwise rename
+        // track_0/track_1 to id_0/id_1 instead of restoring track_0/track_1).
+        // A genuinely user-given name (e.g. "Alice") is still preserved as-is.
+        var AUTO_IDENTITY_NAME_RE = /^id_\d+$/;
+        for (var ix = 0; ix < this.identities.length; ix++) {
+            var ident = this.identities[ix];
+            if (!usedSet.has(ident.id)) continue;
+            var trimmedName = ident.name != null ? String(ident.name).trim() : '';
+            var base = (trimmedName !== '' && !AUTO_IDENTITY_NAME_RE.test(trimmedName))
+                ? trimmedName : ('track_' + names.length);
+            var name = base, dup = 2;
+            while (nameSeen[name]) { name = base + '_' + dup; dup++; }  // de-dup
+            nameSeen[name] = true;
+            idToTrackIdx.set(ident.id, names.length);
+            names.push(name);
+        }
+        return { names: names, idToTrackIdx: idToTrackIdx };
+    }
+
+    /**
      * "Propagate IDs → Tracks": overwrite every instance's track with its
      * identity. Identity/grouping is the source of truth here — each instance
      * that belongs to an identity-bearing InstanceGroup gets a trackIdx whose
@@ -2036,36 +2135,10 @@ export class Session {
         // data for every frame outside the resident window.
         var self = this;
 
-        // 1. Which identities are actually assigned anywhere, project-wide.
-        //    Preserves identities-array order for stable, reproducible track
-        //    indices. Build new tracks = identity names (unique + non-empty).
-        var usedSet = new Set();
-        for (var idVal of this.frameIdentityMap.values()) {
-            if (idVal != null && idVal >= 0) usedSet.add(idVal);
-        }
-        var newTracks = [];
-        var idToTrackIdx = new Map();   // identityId → new trackIdx
-        var nameSeen = {};
-        // Auto-generated identity names look like "id_<identityId>" (the
-        // placeholder `getOrCreateIdentityForTrack` stamps when "Propagate
-        // Tracks → IDs" ran with no custom naming) — using that literally as
-        // a track name breaks the app's normal "track_N" naming convention
-        // (e.g. a Tracks-→-IDs-→-Tracks round trip would otherwise rename
-        // track_0/track_1 to id_0/id_1 instead of restoring track_0/track_1).
-        // A genuinely user-given name (e.g. "Alice") is still preserved as-is.
-        var AUTO_IDENTITY_NAME_RE = /^id_\d+$/;
-        for (var ix = 0; ix < this.identities.length; ix++) {
-            var ident = this.identities[ix];
-            if (!usedSet.has(ident.id)) continue;
-            var trimmedName = ident.name != null ? String(ident.name).trim() : '';
-            var base = (trimmedName !== '' && !AUTO_IDENTITY_NAME_RE.test(trimmedName))
-                ? trimmedName : ('track_' + newTracks.length);
-            var name = base, dup = 2;
-            while (nameSeen[name]) { name = base + '_' + dup; dup++; }  // de-dup
-            nameSeen[name] = true;
-            idToTrackIdx.set(ident.id, newTracks.length);
-            newTracks.push(name);
-        }
+        // 1. Which identities are assigned, and the track each one becomes.
+        var plan = this.identityTrackPlan();
+        var newTracks = plan.names;
+        var idToTrackIdx = plan.idToTrackIdx;   // identityId → new trackIdx
 
         // 2. Remap the EXISTING, complete frameIdentityMap onto the new track
         //    indices. No frameGroups walk needed for this — every
@@ -2657,6 +2730,48 @@ export class Session {
     }
 
     /**
+     * The records of `frameIdentityEntries()`, same order and same skips, as
+     * `cb(frameIdx, camName, trackIdx, identityId)`: no record object, no
+     * `[k, v]` pair and no generator step per entry. For whole-map scans that
+     * run in one task (the ID timeline's rebuild). `cb` must not modify the map.
+     * `from` / `to` scan a stretch of positions (see `frameIdentityScan`).
+     * @param {function(number, string, number, number): void} cb
+     * @returns {number} where the next stretch starts
+     */
+    forEachFrameIdentity(cb, from, to) {
+        var self = this, map = this.frameIdentityMap;
+        if (!map) return 0;
+        var visit = function (key, identityId) {
+            if (_fimIsPacked(key)) {
+                // _fimUnpack + _fimDecode, inlined
+                var frameIdx = Math.floor(key / FIM_CAM_STRIDE);
+                var rem = key - frameIdx * FIM_CAM_STRIDE;
+                var camIdx = Math.floor(rem / FIM_TRACK_STRIDE);
+                var cam = self.cameras[camIdx];
+                cb(frameIdx, cam ? cam.name : String(camIdx), (rem - camIdx * FIM_TRACK_STRIDE) - 1, identityId);
+                return;
+            }
+            var parts = self._fimDecode(key);
+            if (parts) cb(parts.frameIdx, parts.camName, parts.trackIdx, identityId);
+        };
+        if (typeof map.forEachKeyValue === 'function') return map.forEachKeyValue(visit, from, to);
+        for (var e of map) visit(e[0], e[1]);
+        return Infinity;
+    }
+
+    /**
+     * `forEachFrameIdentity`'s whole range of positions for a scan in stretches
+     * (`from` / `to`), and a stamp that changes when the positions stop meaning
+     * the same entries; null when the map cannot be scanned in stretches.
+     * @returns {?{span: number, stamp: string}}
+     */
+    frameIdentityScan() {
+        var map = this.frameIdentityMap;
+        if (!map || typeof map.entrySpan !== 'function') return null;
+        return { span: map.entrySpan(), stamp: map.layoutStamp() };
+    }
+
+    /**
      * Raw per-frame identity value (may be the negative "explicit no identity"
      * sentinel), or undefined when there is no entry.
      * @returns {number|undefined}
@@ -3181,6 +3296,39 @@ export class Session {
         const name = this.skeleton && this.skeleton.nodes ? this.skeleton.nodes[k] : undefined;
         if (name == null) return NaN;
         return loader.predictedPointScore(cameraName, frameIdx, inst._rawInstIndex, name);
+    }
+
+    /**
+     * `predictedNodeScore` for every node of one instance: the function maps a
+     * node index `k` to exactly what `predictedNodeScore(cameraName, frameIdx,
+     * inst, k)` returns, with the instance's store row (lazy) resolved once
+     * instead of per node (By Cam's per-frame pass asks for every node).
+     *
+     * @param {string} cameraName
+     * @param {number} frameIdx
+     * @param {Instance} inst
+     * @returns {(k: number) => number}
+     */
+    predictedNodeScorer(cameraName, frameIdx, inst) {
+        const none = function () { return NaN; };
+        if (!inst || inst.type !== 'predicted') return none;
+        const n = inst.numNodes;
+        const inRange = function (k) { return Number.isInteger(k) && k >= 0 && k < n; };
+        if (inst.hasPointScores()) return function (k) { return inRange(k) ? inst.pointScore(k) : NaN; };
+        const loader = this.lazyLoader;
+        if (!loader || !Number.isInteger(inst._rawInstIndex) || inst._rawInstIndex < 0) return none;
+        if (typeof loader.predictedPointScorer !== 'function') {
+            if (typeof loader.predictedPointScore !== 'function') return none;
+            return (k) => this.predictedNodeScore(cameraName, frameIdx, inst, k);
+        }
+        const scoreOf = loader.predictedPointScorer(cameraName, frameIdx, inst._rawInstIndex);
+        if (!scoreOf) return none;
+        const nodes = this.skeleton && this.skeleton.nodes;
+        return function (k) {
+            if (!inRange(k)) return NaN;
+            const name = nodes ? nodes[k] : undefined;
+            return name == null ? NaN : scoreOf(name);
+        };
     }
 
     /**

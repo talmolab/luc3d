@@ -16,7 +16,11 @@
  * returned, and cameras finishing afterwards reopened the loading card, which
  * then sat over the error forever. Each camera now opens on its own: a broken
  * one is reported in the status line and the others load; only when none open
- * does the load fail — and in both cases the card stays down.
+ * does the load fail — and in both cases the card stays down. A failed load
+ * with a session already open puts that session back on screen (§4; it used
+ * to leave no active session and an empty grid under the error), and Load
+ * Multi-Session names a session that failed instead of reporting "Loaded N
+ * sessions" over it (§5).
  *
  * The `.h5` is pushed over the 20 MB threshold by trailing zero padding (HDF5
  * ignores bytes past its end-of-file address; `shouldUseLazyH5` reads only the
@@ -106,7 +110,7 @@ try {
             garbage: new Blob([new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])]),
             garbageBig: new Blob([new Uint8Array([9, 9, 9, 9]), PAD]),
         };
-        window.__load = async function (root, entries) {
+        window.__load = async function (root, entries, keep) {
             const sl = await import('/loading/session-loader.js');
             const mk = (blob, rel) => { const f = new File([blob], rel.split('/').pop(), { lastModified: 1 }); Object.defineProperty(f, 'webkitRelativePath', { value: rel }); return f; };
             const F = window.__F;
@@ -114,7 +118,7 @@ try {
             for (const cn of CAMS) files.push(mk(F.mp4, root + '/' + cn + '/' + cn + '.mp4'));
             for (const [rel, key] of entries) files.push(mk(F[key], root + '/' + rel));
             const AS = window.__lucid.state;
-            AS.sessions = []; AS.activeSessionIdx = 0; AS.videoFiles = []; AS.session = null; AS.views = [];
+            if (!keep) { AS.sessions = []; AS.activeSessionIdx = 0; AS.videoFiles = []; AS.session = null; AS.views = []; }
             await sl.handleLoadSessionFolderPerCamera(files, false);
             // Let any straggling worker finish, then look at the card.
             await new Promise(r => setTimeout(r, 2500));
@@ -124,6 +128,8 @@ try {
                 status: document.getElementById('statusText').textContent,
                 statusDot: document.getElementById('statusDot').className,
                 cardVisible: !document.getElementById('loadingOverlay').classList.contains('hidden'),
+                session: s ? s.name : null, nSessions: AS.sessions.length,
+                panes: document.querySelectorAll('#videoDock canvas.overlay-canvas').length,
                 lazy: !!(s && s.lazyLoader), loader: s && s.lazyLoader ? s.lazyLoader.constructor.name : null,
                 store: {}, shown: {}, tracks: s ? s.tracks.slice() : null, score: null,
             };
@@ -151,7 +157,7 @@ try {
         `every camera's rows are in the store (got ${JSON.stringify(r1.store)})`);
     check(r1.shown.cam1 === 8 && r1.shown.cam2 === 12 && r1.shown.cam3 === 4,
         `and come up on screen (got ${JSON.stringify(r1.shown)})`);
-    check(r1.tracks.indexOf('H5_0') >= 0 && r1.tracks.indexOf('H5_1') >= 0, `the .h5's tracks are in the session (got ${r1.tracks})`);
+    check((r1.tracks || []).indexOf('H5_0') >= 0 && (r1.tracks || []).indexOf('H5_1') >= 0, `the .h5's tracks are in the session (got ${r1.tracks})`);
     check(r1.score && r1.score.type === 'predicted' && r1.score.x0 === 10 && r1.score.has2 === false,
         `the converted .h5 keeps its predictions, positions and missing nodes (got ${JSON.stringify(r1.score)})`);
     check(r1.score && Number.isNaN(r1.score.node0),
@@ -163,6 +169,7 @@ try {
         ['cam1/cam1.analysis.h5', 'h5big'], ['cam2/cam2.slp', 'garbage'], ['cam3/cam3.predictions.slp', 'sleap3']]));
     console.log('  ' + JSON.stringify(r2).slice(0, 600));
     check(r2.views.length === 3, 'all three views');
+    r2.store = r2.store || {};
     check(r2.store.cam1 === 8 && r2.store.cam3 === 4 && !r2.store.cam2, `cam1 and cam3 load (got ${JSON.stringify(r2.store)})`);
     check(/could not be read: cam2 \(cam2\.slp\)/.test(r2.status) && /error/.test(r2.statusDot),
         `the status names cam2's file as an error (got "${r2.status}")`);
@@ -174,6 +181,48 @@ try {
     console.log('  ' + JSON.stringify(r3).slice(0, 400));
     check(/^Failed to load annotations \(lazy\)/.test(r3.status), `the failure is in the status line (got "${r3.status}")`);
     check(!r3.cardVisible, 'and the loading card does not come back over it');
+
+    console.log('\n-- §4 a failed load with a session open puts that session back on screen (#415) --');
+    const r4a = await page.evaluate(() => window.__load('first', [
+        ['cam1/cam1.analysis.h5', 'h5big'], ['cam2/cam2.slp', 'lucid2'], ['cam3/cam3.predictions.slp', 'sleap3']]));
+    check(r4a.session === 'first' && r4a.views.length === 3 && r4a.panes === 3, `a session is open (got ${r4a.session}, ${r4a.panes} panes)`);
+    const r4 = await page.evaluate(() => window.__load('allbad2', [
+        ['cam1/cam1.analysis.h5', 'garbageBig'], ['cam2/cam2.slp', 'garbage']], true));
+    console.log('  ' + JSON.stringify(r4).slice(0, 400));
+    check(/^Failed to load annotations \(lazy\)/.test(r4.status) && !r4.cardVisible, `the failure shows, card down (got "${r4.status}")`);
+    check(r4.session === 'first' && r4.nSessions === 1, `the open session is active again (got ${r4.session}, ${r4.nSessions} session(s))`);
+    check(r4.views.length === 3 && r4.panes === 3, `with its views back on screen (got ${JSON.stringify(r4.views)}, ${r4.panes} panes)`);
+    check(r4.store.cam1 === 8 && r4.store.cam2 === 12, `and its poses (got ${JSON.stringify(r4.store)})`);
+
+    console.log('\n-- §5 Load Multi-Session names a session that failed (#415) --');
+    const r5 = await page.evaluate(async () => {
+        const F = window.__F;
+        const fh = (name, blob) => ({ kind: 'file', name, getFile: async () => new File([blob], name, { lastModified: 1 }) });
+        const dh = (name, entries) => ({ kind: 'directory', name, [Symbol.asyncIterator]: async function* () { for (const e of entries) yield [e.name, e]; } });
+        const sess = (name, data) => dh(name, [fh('calibration.toml', new Blob([F.toml]))].concat(
+            ['cam1', 'cam2', 'cam3'].map(cn => dh(cn, [fh(cn + '.mp4', F.mp4)].concat(data[cn] ? [fh(data[cn][0], F[data[cn][1]])] : [])))));
+        const parent = dh('parent', [
+            sess('sessGood', { cam1: ['cam1.analysis.h5', 'h5big'], cam2: ['cam2.slp', 'lucid2'], cam3: ['cam3.predictions.slp', 'sleap3'] }),
+            sess('sessBad', { cam1: ['cam1.analysis.h5', 'garbageBig'], cam2: ['cam2.slp', 'garbage'] }),
+        ]);
+        const AS = window.__lucid.state;
+        AS.sessions = []; AS.activeSessionIdx = 0; AS.videoFiles = []; AS.session = null; AS.views = [];
+        window.showDirectoryPicker = async () => parent;
+        const sl = await import('/loading/session-loader.js');
+        await sl.handleLoadMultiSession();
+        await new Promise(r => setTimeout(r, 2500));
+        return {
+            status: document.getElementById('statusText').textContent,
+            statusDot: document.getElementById('statusDot').className,
+            cardVisible: !document.getElementById('loadingOverlay').classList.contains('hidden'),
+            sessions: AS.sessions.map(s => s.name), active: AS.session && AS.session.name,
+        };
+    });
+    console.log('  ' + JSON.stringify(r5).slice(0, 400));
+    check(/^Loaded 1 of 2 sessions — sessBad: Failed to load annotations \(lazy\)/.test(r5.status) && /error/.test(r5.statusDot),
+        `the status names the failed session as an error (got "${r5.status}")`);
+    check(r5.sessions.join() === 'sessGood' && r5.active === 'sessGood', `the good session loaded and is active (got ${JSON.stringify(r5)})`);
+    check(!r5.cardVisible, 'the loading card is down');
 
     check(pageErrs.length === 0, `no uncaught page errors (got ${JSON.stringify(pageErrs.slice(0, 2))})`);
     await browser.close();

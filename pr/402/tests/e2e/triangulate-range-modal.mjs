@@ -1,7 +1,7 @@
 /**
  * triangulate-range-modal.mjs — Analysis ▸ Triangulate Multiple Frames, through
  * its real modal, re-solves exactly the frames it SHOWS, with the method
- * Settings ▸ Default Triangulation names; and Group by Track survives a frame
+ * Settings ▸ Triangulation Wizard names; and Group by Track survives a frame
  * that has 3D grouping but no 2D.
  *
  * ## The bugs (all in ui/export-modals.js)
@@ -14,7 +14,7 @@
  *      21 … 40 (displayed 22 … 41), and never checked displayed frame 21.
  *   2. `runMultiFrameTriangulation` called `triangulateMultiFrameInstances`
  *      without a method, so it always solved with DLT whatever Settings ▸
- *      Default Triangulation said — the "every caller states its method" rule
+ *      Triangulation Wizard said — the "every caller states its method" rule
  *      (`resolveTriangulationMethod`, tests/test-triangulation-method-
  *      propagation.mjs). The summary did not name a method, so nothing showed it.
  *   3. `groupByTrackAndTriangulateAll`'s sweep callback dereferenced `fg`
@@ -30,7 +30,7 @@
  *   C. A displayed frame with no groups is refused under its displayed number,
  *      and only when it is IN the typed range: no groups on index 20 refuses
  *      Start 21 ("Frame 21"), and Start 22 runs.
- *   D. With Settings ▸ Default Triangulation set to Refined in the real Settings
+ *   D. With Settings ▸ Triangulation Wizard set to Refined in the real Settings
  *      dialog, every re-solved group is BA — bit-identical to an independent BA
  *      solve of its member cameras — and the summary and status name "Refined".
  *      Back on DLT, the same names "DLT".
@@ -44,24 +44,22 @@
  *
  * Run:  PORT=8411 node tests/e2e/triangulate-range-modal.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8311);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
 const NF = 60;
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 let browser;
 try {
-  browser = await chromium.launch();
+  browser = await launchBrowser();
   const page = await browser.newPage();
   const errs = [];
   page.on('pageerror', e => errs.push(String(e)));
@@ -173,12 +171,13 @@ try {
     `Start 22 runs, over indices 21 … 39 (error: ${JSON.stringify(C2.error)}; ${brief(C2.resolved)})`);
 
   // ---- D. the Settings method ------------------------------------------------
-  console.log('D. Settings ▸ Default Triangulation:');
+  console.log('D. Settings ▸ Triangulation Wizard:');
   async function setDefaultMethod(method) {
     await page.locator('#menuSettings').dispatchEvent('click');
-    await page.locator('.settings-overlay').getByText('Default Triangulation', { exact: true }).first().click();
+    await page.locator('.settings-overlay').getByText('Triangulation Wizard', { exact: true }).first().click();
     await page.click(`.tri-method-choice[data-method="${method}"]`);
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     return page.evaluate(async () => (await import('/ui/settings.js')).getDefaultTriangulationMethod());
   }
   const now = await setDefaultMethod('ba');

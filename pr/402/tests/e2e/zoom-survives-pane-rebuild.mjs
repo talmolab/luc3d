@@ -49,28 +49,25 @@
  * next camera joins does not depend on whether the View menu (which also
  * re-derives it) happened to be opened in between.
  *
- * Run: node tests/e2e/zoom-survives-pane-rebuild.mjs   (spawns its own http.server)
+ * Run: node tests/e2e/zoom-survives-pane-rebuild.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8317);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
 const fmt = (p) => p ? `(${p[0].toFixed(1)}, ${p[1].toFixed(1)})` : String(p);
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => {
@@ -150,7 +147,9 @@ try {
         // preset menu) is display:none at fit, so ask for rendered boxes
         // rather than reading one element's inline style.
         const badge = cell.querySelector('.unzoom-btn');
-        const r = v.overlayCanvas.getBoundingClientRect();
+        // The VIDEO canvas: a zoomed-in overlay canvas covers only the part of
+        // the video on screen (ui/overlay-window.js).
+        const r = v.canvas.getBoundingClientRect();
         return {
             z, shown, centre,
             cell: [c.width, c.height],
@@ -223,7 +222,7 @@ try {
         const AS = await import('/ui/app-state.js');
         const v = AS.state.views.find(x => x.name === name);
         const c = v.canvas.closest('.video-cell').getBoundingClientRect();
-        const r = v.overlayCanvas.getBoundingClientRect();
+        const r = v.canvas.getBoundingClientRect();   // the video, not the overlay window
         return Math.min(c.left - r.left, r.right - c.right, c.top - r.top, r.bottom - c.bottom);
     }, name);
     const gridB = await look('camB');
@@ -369,7 +368,7 @@ try {
             shown, native: !!v.zoom.native, scale: v.zoom.scale, natX: n ? n.x : null,
             mode: !!AS.state.nativeResolution,
             // On-screen width of the whole video: its own width at 1:1 (dpr 1).
-            width: shown ? v.overlayCanvas.getBoundingClientRect().width : null,
+            width: shown ? v.canvas.getBoundingClientRect().width : null,
         };
     }, name);
     const zoomBy = (name, factor) => page.evaluate(async ([name, factor]) => {

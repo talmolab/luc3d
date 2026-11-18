@@ -9,29 +9,26 @@
  *  2. The Speed popover offers 0.25x and 0.5x presets, they apply, and the
  *     (now wider) popover stays inside the window.
  *  3. The Triangulate / Triangulate All buttons say which method a plain click
- *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Default Triangulation
+ *     runs (in its tooltip; the label stays "Triangulate"), and follow Settings ▸ Triangulation Wizard
  *     when it is changed through the real Settings dialog — immediately, and
  *     after a reload (the setting persists in localStorage).
  *
  * Run: node tests/e2e/ui-requests-138.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8264);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const context = await browser.newContext({ viewport: { width: 1400, height: 860 } });
     const page = await context.newPage();
     const errs = [];
@@ -144,6 +141,7 @@ try {
     l = await labels();
     check(/DLT \(fast\)/.test(l.title) && l.radio === 'dlt', 'picking a card without Apply changes nothing yet');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     l = await labels();
     check(l.text === 'Triangulate' && l.radio === 'ba', `after Apply: "${l.text}", radio ${l.radio}`);
     check(/Ref \(slower; helps when one view is clearly wrong\)/.test(l.title), 'tooltip follows too');

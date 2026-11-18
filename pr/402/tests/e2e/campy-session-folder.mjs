@@ -36,11 +36,10 @@
  *  9. Reopening a project lazily (Load Project), then Select Session Folder;
  *     a recording campy never finished ("recording") is a warning.
  *
- * Run: node tests/e2e/campy-session-folder.mjs   (spawns its own http.server;
+ * Run: node tests/e2e/campy-session-folder.mjs   (serves the app itself;
  * PORT= to move it)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -50,7 +49,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const FIX = path.join(repoRoot, 'tests', 'fixtures', 'campy-recording');
-const PORT = Number(process.env.PORT || 8377);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
@@ -95,12 +95,9 @@ function writeRecording(name, videos, opts = {}) {
     return dir;
 }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => { if (m.type() === 'error') console.log('  [console.error]', m.text().slice(0, 300)); });

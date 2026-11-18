@@ -14,24 +14,21 @@
  *
  * Run: PORT=<free port> node tests/e2e/symmetry-edges.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8198);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e)));
@@ -186,7 +183,7 @@ try {
     const toggled = await page.evaluate(async () => {
         const { state } = window.__lucid;
         const statusText = () => document.getElementById('statusText').textContent;
-        document.querySelector('.panel-tab[data-tab="tabVisibility"]').click();
+        document.querySelector('.panel-rail-btn[data-tab="tabVisibility"]').click();
         const el = document.getElementById('visSymmetryEdges');
         const flip = (on) => { el.checked = on; el.dispatchEvent(new Event('change', { bubbles: true })); };
         const saved = state.session.skeleton;

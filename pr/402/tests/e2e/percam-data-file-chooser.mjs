@@ -252,6 +252,9 @@ try {
             choices: window.__lucid.state.session.dataFileChoices,
             lucid: vm.writeVisibilityMetadata({}, window.__lucid.state.session),
             dialogOpen: !!document.querySelector('.data-file-chooser'),
+            sources: Object.fromEntries(window.__lucid.state.videoFiles
+                .filter(v => v.sessionIdx === window.__lucid.state.sessions.indexOf(window.__lucid.state.session))
+                .map(v => [v.name, v.slpFilename])),
         }));
     });
     console.log('  ' + JSON.stringify(r2).slice(0, 700));
@@ -265,6 +268,11 @@ try {
         `the session carries them for a saved project (got ${JSON.stringify(r2.choices)})`);
     check(JSON.stringify(r2.lucid.dataFileChoices) === JSON.stringify(r2.choices),
         'and they reach metadata.lucid.dataFileChoices');
+    // Each video records the file it LOADED as its source (`slpFilename`: the
+    // Videos table, and the stem By Cam names `<source>_proofread.slp` after),
+    // not the folder's highest `_vN` or first-listed file.
+    check(r2.sources.cam1 === 'cam1.predictions.proofread.slp' && r2.sources.cam2 === 'cam2.predictions.slp',
+        `each video's source is the file it loaded (got ${JSON.stringify(r2.sources)})`);
 
     // ---- §3 saved choice reused; new files ignored -------------------------
     console.log('\n-- §3 the saved choice loads with no dialog, new files ignored --');
