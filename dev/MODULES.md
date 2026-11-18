@@ -16252,7 +16252,16 @@ first track.
   `opts.onCount(done, total)` (optional, awaited; frames) is the Open project
   card's counted hook, called at each yield and at the end; `opts.onProgress`
   still gets the old message. `stampFrameIdentitiesFromGroups` takes the same
-  `opts.onCount`.
+  `opts.onCount`. With `opts.labels` (the open lazy `Labels`;
+  `handleLoadProjectSlpLazy` passes it) each member's type, track and score are
+  read from the lazy store's rows (`lazyMemberStore`, `storeMembers`, private)
+  the way `LazyDataStore.materializeFrame` builds them, instead of through
+  `typedIG.instanceByCamera`, which materializes every grouped frame (points and
+  all) only for those three values: an 8-camera, 108,000-frame project reopened
+  in ~3.7 s instead of ~6 s. The store path stands aside when any frame is
+  already materialized or the group has a concrete instance map. Test:
+  `tests/e2e/lazy-reopen-members-from-store.mjs` (store path = the old path,
+  member for member).
 - `stampFrameIdentitiesFromGroups(session, opts)` — now DEFINED in
   `./frame-identity-metadata.js` and re-exported here for existing callers. For
   files whose identities live only on the groups (campy-live-export: file

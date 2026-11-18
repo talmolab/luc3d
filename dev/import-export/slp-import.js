@@ -4,74 +4,74 @@
 // - handleAddSlp: additive merge of an SLP into the current session
 // - handleLoadPoints3dH5: overlay reprojected 3D points from an H5 file
 
-import { withCompactNote, compactRoundingOf } from './compact-save.js?v=6293df9245de';
+import { withCompactNote, compactRoundingOf } from './compact-save.js?v=edf44db65ab9';
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
     markPoints3dFromFile,
-} from '../pose/pose-data.js?v=6293df9245de';
+} from '../pose/pose-data.js?v=edf44db65ab9';
 import {
     getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=6293df9245de';
-import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=6293df9245de';
+} from '../pose/triangulation.js?v=edf44db65ab9';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=edf44db65ab9';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=6293df9245de';
+} from './file-io.js?v=edf44db65ab9';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=6293df9245de';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=6293df9245de';
+} from './slp-merge.js?v=edf44db65ab9';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=edf44db65ab9';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=6293df9245de';
+} from '../ui/app-state.js?v=edf44db65ab9';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder, folderPickerStartFor,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
-} from '../loading/session-loader.js?v=6293df9245de';
-import { setPageProject } from '../ui/page-title.js?v=6293df9245de';
+} from '../loading/session-loader.js?v=edf44db65ab9';
+import { setPageProject } from '../ui/page-title.js?v=edf44db65ab9';
 import {
     preferNonCalibrationVideos, assignFolderVideos, isFolderPick, isVideoFileName,
-} from '../loading/video-file-pick.js?v=6293df9245de';
+} from '../loading/video-file-pick.js?v=edf44db65ab9';
 import {
     campyVideoFile, orderByCampyCameras, campyRecordingWarnings,
-} from '../loading/campy-session.js?v=6293df9245de';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=6293df9245de';
-import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js?v=6293df9245de';
-import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=6293df9245de';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=6293df9245de';
-import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=6293df9245de';
-import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=6293df9245de';
+} from '../loading/campy-session.js?v=edf44db65ab9';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=edf44db65ab9';
+import { adoptSmoothingSource, readSmoothingMetadata } from './smoothing-metadata.js?v=edf44db65ab9';
+import { dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=edf44db65ab9';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=edf44db65ab9';
+import { fileSessionNames, fileSessionProvenance } from './slp-provenance.js?v=edf44db65ab9';
+import { stampFrameIdentitiesFromGroups, readFrameIdentityMetadata } from './frame-identity-metadata.js?v=edf44db65ab9';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=6293df9245de';
+} from './save-load.js?v=edf44db65ab9';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=6293df9245de';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=6293df9245de';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=6293df9245de';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=edf44db65ab9';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=edf44db65ab9';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=edf44db65ab9';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=6293df9245de';
+import { setup3DViewport } from '../pose/initialization.js?v=edf44db65ab9';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=6293df9245de';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=6293df9245de';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=edf44db65ab9';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=edf44db65ab9';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=6293df9245de';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=edf44db65ab9';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=6293df9245de';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=6293df9245de';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=6293df9245de';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=6293df9245de';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=edf44db65ab9';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=edf44db65ab9';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=edf44db65ab9';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=edf44db65ab9';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -542,6 +542,50 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
  */
+/**
+ * The lazy store behind `labels`, when a group member can be read from its row
+ * exactly as `labels.frameAt(lfIdx)` would build it: a lazy `Labels` whose
+ * frames are all in the store and none materialized yet (a fresh reopen).
+ * Otherwise null, and members resolve through `instanceByCamera`.
+ */
+function lazyMemberStore(labels) {
+    var list = labels && labels._lazyFrameList;
+    var store = labels && labels._lazyDataStore;
+    if (!list || !store || list.store !== store || list.cache.size > 0 ||
+        (list._supplementary && list._supplementary.length > 0)) return null;
+    if (typeof labels.frameAt !== 'function' || typeof store.videoIndexFor !== 'function') return null;
+    if (!store.framesData || !store.instancesData || !store.framesData.instance_id_start) return null;
+    return store;
+}
+
+/**
+ * A group's members as `[camera, info]` pairs, in `refs` order, read from the
+ * store's rows the way `LazyDataStore.materializeFrame` reads them: `info` is
+ * `{ isPredicted, track, score }` (`instance_type` != 0; `tracks[track]` when
+ * the id is >= 0, else null; the `score` column, used for predictions only). A
+ * ref whose frame has no video or whose instance is past the frame's end is
+ * left out, as `instanceByCamera` leaves it out.
+ */
+function storeMembers(store, refs) {
+    var fd = store.framesData, id = store.instancesData;
+    var nFrames = store.frameCount;
+    var out = [];
+    for (var entry of refs) {
+        var lfIdx = entry[1][0], instIdx = entry[1][1];
+        if (!(lfIdx >= 0 && lfIdx < nFrames)) continue;
+        if (!store.videos[store.videoIndexFor(Number(fd.video ? fd.video[lfIdx] : 0))]) continue;
+        var row = Number(fd.instance_id_start[lfIdx]) + instIdx;
+        if (!(instIdx >= 0 && row < Number(fd.instance_id_end[lfIdx]))) continue;
+        var trackId = Number(id.track ? id.track[row] : -1);
+        out.push([entry[0], {
+            isPredicted: Number(id.instance_type ? id.instance_type[row] : 0) !== 0,
+            track: trackId >= 0 ? store.tracks[trackId] : null,
+            score: Number(id.score ? id.score[row] : 0),
+        }]);
+    }
+    return out;
+}
+
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
     opts = opts || {};
     var numNodes = nodeNames.length;
@@ -562,6 +606,11 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     // O(tracks) × 1.25M members ≈ billions of comparisons.
     var trackIdxByName = new Map();
     for (var _tn = 0; _tn < session.tracks.length; _tn++) trackIdxByName.set(session.tracks[_tn], _tn);
+    // Members read from the lazy store's rows (`storeMemberInfo`) instead of
+    // through `typedIG.instanceByCamera`, which materializes every grouped
+    // frame's typed instances, points and all, only for each member's type,
+    // track and score (1.2 s and most of the load's GC on an 8-camera project).
+    var memberStore = lazyMemberStore(opts.labels);
 
     var fgKeys = Array.from(typedSession.frameGroups.keys());
     for (var fki = 0; fki < fgKeys.length; fki++) {
@@ -584,8 +633,10 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
             var refs = typedIG._instanceRefsByCamera || null;
+            var members = (memberStore && refs && !typedIG._instanceByCamera)
+                ? storeMembers(memberStore, refs) : null;
 
-            for (var camEntry of typedIG.instanceByCamera) {
+            for (var camEntry of (members || typedIG.instanceByCamera)) {
                 var typedCam = camEntry[0];
                 var typedInst = camEntry[1];
                 var igCamName = (typedCam && typedCam.name) || '';
@@ -604,7 +655,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 var points = lazyPlaceholderXY(numNodes);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
-                var _isPred = PredI ? (typedInst instanceof PredI)
+                var _isPred = members ? typedInst.isPredicted : PredI ? (typedInst instanceof PredI)
                     : (typedInst && typedInst.pointScores !== undefined);
                 var _tName = (typedInst && typedInst.track && typedInst.track.name != null) ? typedInst.track.name : null;
                 var _derivedTrackIdx = (_tName != null && trackIdxByName.has(_tName)) ? trackIdxByName.get(_tName) : null;
@@ -1262,7 +1313,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=6293df9245de', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=edf44db65ab9', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1967,7 +2018,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=6293df9245de', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=edf44db65ab9', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;

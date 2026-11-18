@@ -20,8 +20,8 @@
  *     `triangulationSummary(result)` when the job's options say `summaryOnly`)
  *   { type: 'error', id, message }
  */
-import { Camera, Instance } from './pose-data.js?v=6293df9245de';
-import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=6293df9245de';
+import { Camera, Instance } from './pose-data.js?v=edf44db65ab9';
+import { triangulateAndReproject, triangulationSummary } from './triangulation-core.js?v=edf44db65ab9';
 
 let cameras = new Map();
 

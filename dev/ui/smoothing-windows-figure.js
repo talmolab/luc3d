@@ -48,8 +48,8 @@
 // `sigmaForWindow`, `buildSegments`), ui/figure-try-controls.js. Colours come from
 // `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from '../pose/temporal-smoothing.js?v=6293df9245de';
-import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js?v=6293df9245de';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from '../pose/temporal-smoothing.js?v=edf44db65ab9';
+import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js?v=edf44db65ab9';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[8, 28]];                 // [frame, mm] one-frame spikes
