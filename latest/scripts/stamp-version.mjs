@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/stamp-version.mjs — make a deployed copy of LUCID cache-safe.
 //
-//   node scripts/stamp-version.mjs <site-dir> <version>
+//   node scripts/stamp-version.mjs <site-dir> <version> [<release-label>]
 //
 // Rewrites, IN PLACE, every same-site code reference in <site-dir> to carry
 // `?v=<version>`: relative ES-module imports (`from`, `import()`, side-effect
@@ -30,10 +30,24 @@
 // and `tests/**/*.mjs`).
 //
 // Idempotent: a stamped specifier has a `?`, which no rule matches again.
+//
+// It also says WHICH build this is: the root index.html's `lucid-commit` and
+// `lucid-release` <meta> tags get <version> and <release-label>, which
+// ui/version-label.js shows beside the menu bar's Settings button ("v1.0.5" on
+// the live page). The workflows pick the label — the release tag when the
+// deployed ref is one, else `dev` or `PR #<n>` — and a missing tag fails the
+// stamp, so a refactor of index.html cannot silently drop the number.
+//
+// The CLI then runs scripts/preload-modules.mjs on the stamped index.html: one
+// `<link rel="modulepreload">` per module of the startup graph, read off the
+// stamped files so every preload names exactly the URL its importer asks for.
+// It is part of this command — not a separate workflow step — so both deploy
+// workflows get it, and it can never run on an unstamped tree by being forgotten.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { preloadSite } from './preload-modules.mjs';
 
 const ABS = '(?![a-z][\\w+.-]*:|//)';            // not a scheme URL, not protocol-relative
 const SPEC_JS = '[^\'"`?#\\s]+\\.m?js';           // a path ending .js / .mjs, no query yet
@@ -53,8 +67,10 @@ export function stampText(text, version, isHtml) {
         // R3: <script src="…js">
         text = text.replace(new RegExp('(<script\\b[^>]*?\\bsrc\\s*=\\s*)(["\'])(' + ABS + SPEC_JS + ')\\2', 'gi'),
             (m, pre, qt, spec) => bump(pre + qt + spec + q + qt));
-        // R4: <link … href="…css"> (stylesheets)
-        text = text.replace(new RegExp('(<link\\b[^>]*?\\bhref\\s*=\\s*)(["\'])(' + ABS + '[^"\'?#\\s]+\\.css)\\2', 'gi'),
+        // R4: <link … href="…css"> (stylesheets) and <link rel="modulepreload" href="…js">
+        // (scripts/preload-modules.mjs; it normally runs after this and copies stamped
+        // URLs, but a preload must name its module's exact URL whichever runs first).
+        text = text.replace(new RegExp('(<link\\b[^>]*?\\bhref\\s*=\\s*)(["\'])(' + ABS + '[^"\'?#\\s]+\\.(?:css|m?js))\\2', 'gi'),
             (m, pre, qt, spec) => bump(pre + qt + spec + q + qt));
         // R5: importmap entries pointing at relative files
         text = text.replace(/(<script\b[^>]*\btype\s*=\s*["']importmap["'][^>]*>)([\s\S]*?)(<\/script>)/gi, (m, open, body, close) =>
@@ -75,9 +91,22 @@ export function findUnstamped(text, isHtml) {
     scan(new RegExp('\\bnew\\s+URL\\(\\s*([\'"])(' + ABS + '[^\'"?#]*?\\.m?js)\\1\\s*,', 'g'));
     if (isHtml) {
         scan(new RegExp('<script\\b[^>]*?\\bsrc\\s*=\\s*(["\'])(' + ABS + '[^"\'?#]*?\\.m?js)\\1', 'gi'));
-        scan(new RegExp('<link\\b[^>]*?\\bhref\\s*=\\s*(["\'])(' + ABS + '[^"\'?#]*?\\.css)\\1', 'gi'));
+        scan(new RegExp('<link\\b[^>]*?\\bhref\\s*=\\s*(["\'])(' + ABS + '[^"\'?#]*?\\.(?:css|m?js))\\1', 'gi'));
     }
     return out;
+}
+
+/**
+ * Fill index.html's build-info <meta> tags (see the header). Returns {text, found},
+ * `found` false unless BOTH tags were there to fill. Re-stamping overwrites.
+ */
+export function stampBuildInfo(text, version, release = '') {
+    let n = 0;
+    for (const [name, value] of [['lucid-commit', version], ['lucid-release', release]]) {
+        text = text.replace(new RegExp('(<meta\\s+name="' + name + '"\\s+content=")[^"]*(")'),
+            (m, open, close) => { n++; return open + value + close; });
+    }
+    return { text, found: n === 2 };
 }
 
 /** Which files under the site the browser can load as code (Node-only code is skipped). */
@@ -99,28 +128,41 @@ function walk(dir, base, out) {
 }
 
 /** Stamp a whole site directory. Returns {files, refs, problems}. */
-export function stampSite(root, version) {
+export function stampSite(root, version, release = '') {
     if (!/^[A-Za-z0-9._-]{4,64}$/.test(version)) throw new Error('version must be 4-64 chars of [A-Za-z0-9._-], got "' + version + '"');
-    let files = 0, refs = 0;
+    // It lands in an HTML attribute unescaped, so nothing that could close one.
+    if (!/^[A-Za-z0-9 #._+-]{0,40}$/.test(release)) throw new Error('release label must be at most 40 chars of [A-Za-z0-9 #._+-], got "' + release + '"');
+    let files = 0, refs = 0, buildInfo = false;
     const problems = [];
     for (const rel of walk(root, root, [])) {
         const abs = path.join(root, rel), isHtml = rel.endsWith('.html');
         const before = fs.readFileSync(abs, 'utf8');
-        const { text, count } = stampText(before, version, isHtml);
-        if (count) { fs.writeFileSync(abs, text); files++; refs += count; }
+        let { text, count } = stampText(before, version, isHtml);
+        if (rel === 'index.html') ({ text, found: buildInfo } = stampBuildInfo(text, version, release));
+        if (text !== before) { fs.writeFileSync(abs, text); files++; refs += count; }
         for (const u of findUnstamped(text, isHtml)) problems.push(rel + ': ' + u);
     }
+    if (!buildInfo) problems.push('index.html: no <meta name="lucid-commit"> + <meta name="lucid-release"> to fill (the menu bar\'s version label)');
     return { files, refs, problems };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    const [root, version] = process.argv.slice(2);
-    if (!root || !version) { console.error('usage: node scripts/stamp-version.mjs <site-dir> <version>'); process.exit(2); }
-    const r = stampSite(path.resolve(root), version);
-    console.log(`stamp-version: ?v=${version} on ${r.refs} references in ${r.files} files under ${root}`);
+    const [root, version, release = ''] = process.argv.slice(2);
+    if (!root || !version) { console.error('usage: node scripts/stamp-version.mjs <site-dir> <version> [<release-label>]'); process.exit(2); }
+    const r = stampSite(path.resolve(root), version, release);
+    console.log(`stamp-version: ?v=${version} on ${r.refs} references in ${r.files} files under ${root}; release label "${release}"`);
     if (r.problems.length) {
-        console.error('stamp-version: relative module references left UNSTAMPED (would load those modules twice):');
+        console.error('stamp-version: relative module references left UNSTAMPED (would load those modules twice), or no build-info tags:');
         r.problems.forEach(p => console.error('  ' + p));
         process.exit(1);
+    }
+    if (fs.existsSync(path.join(root, 'index.html'))) {
+        const g = preloadSite(path.resolve(root));
+        console.log(`stamp-version: ${g.local.length} same-site + ${g.remote.length} CDN modulepreload links in index.html`);
+        if (g.missing.length) {
+            console.error('stamp-version: index.html statically imports files that are not in the site:');
+            g.missing.forEach(u => console.error('  ' + u));
+            process.exit(1);
+        }
     }
 }

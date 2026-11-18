@@ -16,32 +16,29 @@
  * fight the user on a repaint, that Danger Zone is deliberately NOT remembered,
  * and that none of this reaches the project file.
  *
- * Run: node plane-section-state.mjs   (spawns its own http.server)
+ * Run: node plane-section-state.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8233);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const KEY = 'planeSectionsOpen';
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
 
     const boot = async () => {
-        await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+        await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
         await page.evaluate(async () => {
             const P = await import('/ui/plane-definition.js');
             if (!P.planeState.active) P.togglePlaneMode();
@@ -210,7 +207,7 @@ try {
         });
     });
     await p2.goto(`http://localhost:${PORT}/index.html`);
-    await p2.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await p2.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await p2.evaluate(async () => {
         const P = await import('/ui/plane-definition.js');
         if (!P.planeState.active) P.togglePlaneMode();

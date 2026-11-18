@@ -43,15 +43,15 @@
  *   FRAMES=20000 CAMS=4 node tests/e2e/sequence-lazy-workflow.mjs
  *   KEEP=1 ...        # keep the generated .slp files for inspection
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8202);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FRAMES = Number(process.env.FRAMES || 6000);
 const CAMS = Number(process.env.CAMS || 3);
 const NODES = Number(process.env.NODES || 5);
@@ -75,12 +75,9 @@ const outPath = (tag) => {
     return p;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch({ headless: true, args: ['--enable-precise-memory-info'] });
+    browser = await launchBrowser({ headless: true, args: ['--enable-precise-memory-info'] });
     const page = await browser.newPage();
     page.on('pageerror', e => { log('[pageerror] ' + String(e).slice(0, 300)); fails++; });
     page.on('crash', () => { log('*** RENDERER CRASHED ***'); fails++; });
@@ -101,7 +98,7 @@ try {
     const endSink = () => { if (sink.fd !== null) fs.closeSync(sink.fd); return sink.bytes; };
 
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });
-    await page.waitForFunction(() => window.SleapIO && window.h5wasm, { timeout: 120000 });
+    await page.waitForFunction(() => window.SleapIO && window.h5wasm, null, { timeout: 120000 });
     log('app booted');
 
     // Install the save-picker mock + shared page helpers once.
@@ -1046,10 +1043,8 @@ try {
     const trackRes = await runOp('TRACK ALL', async () => {
         // The animal count is saved with the session now, so answering it
         // marks the project dirty by itself — set it BEFORE starting clean, or
-        // the prompt would hide a tracker that never marks the project. The
-        // stubbed prompt stays as a backstop: if it ever fires, it answers.
-        const origPrompt = window.prompt;
-        window.prompt = () => '2';
+        // the first-use dialog would hide a tracker that never marks the
+        // project. Setting it also keeps that dialog from opening at all.
         const tk = await import('/pose/tracker.js');
         tk.setTrackerNumAnimals(2);
         // Start clean, so the dirty flag afterwards is Track All's own doing.
@@ -1070,7 +1065,6 @@ try {
         } catch (e) {
             return { err: String(e && e.stack || e).slice(0, 400) };
         } finally {
-            window.prompt = origPrompt;
             settings.setTrackingThresholds(prevThresholds);
         }
     });

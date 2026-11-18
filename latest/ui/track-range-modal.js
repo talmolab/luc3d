@@ -8,20 +8,31 @@
  * changing node weights / camera views / the 3D correspondence weight in the
  * Tracking Wizard, without paying for a full pass over a long recording.
  *
- * Collects the animal count too. `pose/tracker.js` otherwise asks for it with a
- * native `prompt()`, which would pop up ON TOP of this dialog the first time
- * anyone used it; here a blank field is an explicit "auto-detect" and the
- * prompt never fires.
+ * Collects the animal count too. `pose/tracker.js` otherwise asks for it in its
+ * first-use dialog (`ui/track-setup-modal.js`), which would pop up ON TOP of
+ * this one the first time anyone used it; here a blank field is an explicit
+ * "auto-detect" and that dialog never opens.
+ *
+ * Shows the node weights too, editable (`buildNodeWeightFields`, the same grid
+ * as that dialog): re-running a window under different weights is the commonest
+ * reason to be here, and this way it needs no trip to the Tracking Wizard.
+ * Continue writes them to the Wizard's setting (`updateNodeWeights`) before the
+ * run reads them; Cancel writes nothing. Likewise the image ID-switch check
+ * that runs after the range, with its options (`buildImageCheckFields`,
+ * written through `updateTrackingThresholds`).
  *
  * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
  */
 
-import { state, getActiveSession } from './app-state.js?v=2dc001fe527c';
-import { setStatus } from '../import-export/save-load.js?v=2dc001fe527c';
+import { state, getActiveSession } from './app-state.js?v=a0fe8e5e17b4';
+import { setStatus } from '../import-export/save-load.js?v=a0fe8e5e17b4';
+import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=a0fe8e5e17b4';
+import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=a0fe8e5e17b4';
 import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
-} from '../pose/tracker.js?v=2dc001fe527c';
+} from '../pose/tracker.js?v=a0fe8e5e17b4';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=a0fe8e5e17b4';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a
@@ -69,6 +80,12 @@ export function showTrackRangeModal(opts) {
         setStatus('No session with cameras loaded', 'error');
         return;
     }
+    // Placeholder cameras only (no calibration loaded): tracking would refuse
+    // after the dialog (runTrackingPass), so say so before opening it.
+    if (!hasRealCalibration(session)) {
+        setStatus('Tracking needs a calibration — load one with File \u2192 Load Calibration', 'error');
+        return;
+    }
     var bounds = trackableFrameBounds(session);
     if (!bounds) {
         setStatus('No frames to track', 'error');
@@ -79,11 +96,18 @@ export function showTrackRangeModal(opts) {
     var defStart = cur;
     var defEnd = Math.min(bounds.max, cur + DEFAULT_RANGE_LENGTH - 1);
     var animals = getTrackerNumAnimals();
+    var nodeNames = (session.skeleton && Array.isArray(session.skeleton.nodes)) ? session.skeleton.nodes : [];
+    var weights = buildNodeWeightFields(nodeNames.map(function (n) {
+        return { name: n, weight: getNodeWeight(n) };
+    }));
+    var imageCheck = buildImageCheckFields(getTrackingThresholdDefs().filter(function (d) {
+        return IMAGE_CHECK_IDS.indexOf(d.id) >= 0;
+    }), 'tracking the range');
 
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
     var modal = document.createElement('div');
-    modal.className = 'multi-frame-modal';
+    modal.className = 'multi-frame-modal track-range-modal';
     modal.innerHTML =
         '<h3>Track Frame Range</h3>' +
         '<p>Assign identities across a contiguous span of frames. Tracking ' +
@@ -129,6 +153,13 @@ export function showTrackRangeModal(opts) {
         '<button id="trackRangeCancel">Cancel</button>' +
         '<button class="primary" id="trackRangeContinue">Continue</button>' +
         '</div>';
+    // The weights go under the fields, above the summary and error lines.
+    if (weights.element) {
+        modal.insertBefore(weights.element, modal.querySelector('#trackRangeSummary'));
+    }
+    if (imageCheck.element) {
+        modal.insertBefore(imageCheck.element, modal.querySelector('#trackRangeSummary'));
+    }
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
@@ -166,7 +197,11 @@ export function showTrackRangeModal(opts) {
             n = parseInt(raw, 10);
             if (!isFinite(n) || n < 1) return { error: 'Animals must be 1 or more, or blank for auto-detect.' };
         }
-        return { start: s, end: e, animals: n, error: null };
+        var w = weights.read();
+        if (w.error) return { error: w.error };
+        var t = imageCheck.read();
+        if (t.error) return { error: t.error };
+        return { start: s, end: e, animals: n, nodeWeights: w.nodeWeights, thresholds: t.thresholds, error: null };
     }
 
     function plural(n, word) {
@@ -191,6 +226,8 @@ export function showTrackRangeModal(opts) {
         var f = readForm();
         errorEl.textContent = f.error || '';
         continueBtn.disabled = !!f.error;
+        weights.refresh();
+        imageCheck.refresh();
         summaryEl.textContent = f.error
             ? ''
             : plural(f.end - f.start + 1, 'frame') + ' · ' +
@@ -238,6 +275,8 @@ export function showTrackRangeModal(opts) {
         // either way — otherwise clearing the field would silently keep the
         // previously-set count.
         setTrackerNumAnimals(f.animals);
+        updateNodeWeights(f.nodeWeights);
+        updateTrackingThresholds(f.thresholds);
         close();
         // trackFrameRange owns the loading overlay and reports its own outcome
         // through setStatus, exactly as the Track All button does.
@@ -258,6 +297,11 @@ export function showTrackRangeModal(opts) {
     document.addEventListener('keydown', onKey);
 
     animalsInput.addEventListener('input', refresh);
+    if (weights.element) weights.element.addEventListener('input', refresh);
+    if (imageCheck.element) {
+        imageCheck.element.addEventListener('input', refresh);
+        imageCheck.element.addEventListener('change', refresh);   // the switches
+    }
     [startInput, endInput].forEach(function (el) {
         el.addEventListener('input', syncSlidersFromInputs);
     });

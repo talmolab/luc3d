@@ -25,19 +25,16 @@
  *
  * Run: node tests/e2e/image-check-offline.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8276);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 // A stand-in for transformers.js whose model download goes to huggingface.co (blocked)
 const STUB_RUNTIME = `export const env = {}; export class Tensor {} export const stub = 'runtime-stub';
@@ -48,7 +45,7 @@ export const AutoModel = { from_pretrained: async (id) => {
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const context = await browser.newContext({ viewport: { width: 1400, height: 860 } });
     // 'open' until the app has booted; then 'blocked' (nothing off localhost) or 'weights' (stub runtime, no weights)
     let mode = 'open';
@@ -67,7 +64,7 @@ try {
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         // A tracked session (two identities with 3D) and one camera "with video": what runImage needs to start

@@ -28,20 +28,24 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=2dc001fe527c';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=2dc001fe527c';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=2dc001fe527c';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=2dc001fe527c';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=2dc001fe527c';
-import { getTrackingThreshold } from './settings.js?v=2dc001fe527c';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=2dc001fe527c';
+import { noteProgress } from './progress-delta.js?v=a0fe8e5e17b4';
+import { state, getActiveSession } from './app-state.js?v=a0fe8e5e17b4';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=a0fe8e5e17b4';
+import { showPanelTab } from './panel-rail.js?v=a0fe8e5e17b4';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=a0fe8e5e17b4';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=a0fe8e5e17b4';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=a0fe8e5e17b4';
+import { getTrackingThreshold } from './settings.js?v=a0fe8e5e17b4';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=a0fe8e5e17b4';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=a0fe8e5e17b4';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=2dc001fe527c';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=2dc001fe527c';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=2dc001fe527c';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=a0fe8e5e17b4';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=a0fe8e5e17b4';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=a0fe8e5e17b4';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=a0fe8e5e17b4';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=2dc001fe527c';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=a0fe8e5e17b4';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -117,6 +121,23 @@ var _openSummary = null;
 
 /** Register what the tab's "Show Track All summary" button runs (called once from ui/track-summary-modal.js). */
 export function setTrackSummaryOpener(fn) { _openSummary = fn; }
+
+// True only while the Track All summary's check button clicks its menu item (`clickCheckFromSummary`):
+// `runIdSwitchChecks` reads and clears it before its first await, so only the check that click starts sees it.
+var _backToSummary = false;
+
+/**
+ * Click a check's menu item (`menuId`) for the Track All summary's "Check by …" buttons. The check runs
+ * exactly as it does from the menu, but ends by reopening the summary with its result — and the next step
+ * that follows from it — instead of opening the ID Switches tab; the box's "Review switches" goes there
+ * when something was flagged.
+ */
+export function clickCheckFromSummary(menuId) {
+    var item = typeof document !== 'undefined' && document.getElementById(menuId);
+    if (!item) return;
+    _backToSummary = true;
+    try { item.click(); } finally { _backToSummary = false; }
+}
 
 /**
  * Above "Possible ID switches": a button that reopens the session's Track All summary
@@ -230,6 +251,7 @@ function openProgressDialog(title) {
             if (frac != null) {
                 var pct = Math.round(100 * Math.min(1, Math.max(0, frac))) + '%';
                 fill.style.width = head.style.left = pct;
+                noteProgress(fill, parseFloat(pct) / 100);
                 pctEl.textContent = pct;
             }
         },
@@ -259,8 +281,9 @@ function openProgressDialog(title) {
             if (ctl.signal.aborted) return;
             cropEl.hidden = !tensor;
             if (!tensor) return;
-            var ctx = cropCanvas.getContext('2d');
-            cropPixels = cropPixels || ctx.createImageData(INPUT, INPUT);
+            var ctx = cropCanvas.getContext('2d'), side = Math.round(Math.sqrt(tensor.length / 3));   // the model's input side
+            if (cropCanvas.width !== side) { cropCanvas.width = cropCanvas.height = side; cropPixels = null; }
+            cropPixels = cropPixels || ctx.createImageData(side, side);
             inputTensorToPixels(tensor, cropPixels.data);
             ctx.putImageData(cropPixels, 0, 0);
             if (skeleton && skeleton.points) drawCropSkeleton(ctx, skeleton.points, skeleton.edges || [], skeleton.color);
@@ -277,13 +300,19 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
-    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
-    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    // The overlay's plain form (spinner + message), not a counter: the check (~0.5 s on an 8-camera,
+    // 108,000-frame project) has no progress worth counting — the counter used to print "0/1 frames (0%)",
+    // frozen until the overlay closed.
     showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, { fps: rate.fps });
+        // Sampling the session runs here (it reads the InstanceGroups), in slices of ~25 ms with the
+        // page painting between them (`pauseSampling`); the scoring goes to a worker
+        // (pose/size-check-pool.js). Without one it scores here, and `onProgress` lets the page paint
+        // between the two halves.
+        var paint = function () { return yieldToPaint(); };
+        return await checkSizeSwitches(session, { fps: rate.fps, scoreGrid: scoreSizeGridOffThread,
+            pauseSampling: paint, onProgress: paint });
     } finally { hideLoading(); }
 }
 
@@ -291,12 +320,22 @@ async function runImage(session, rate, inject) {
     inject = inject || {};
     var views = (state.views || []).filter(function (v) { return v && v.decoder; });
     if (!views.length && !inject.createEmbedder) return { ok: false, reason: 'needs the session\'s videos to be loaded' };
+    // The session's image model (Session.imageModel; null = the built-in one): a package must be loaded on
+    // this page, or reloadable from its URL. Its own threshold replaces the Wizard's, which is calibrated
+    // for the built-in model.
+    var pkg = null;
+    try { pkg = await resolveSessionImageModel(session); }
+    catch (e) { return { ok: false, reason: (e && e.message) || String(e) }; }
+    setActiveImageModel(pkg);
+    var threshold = pkg ? pkg.threshold : getTrackingThreshold('imageChangeThreshold');
     // No GPU is not a reason to skip: the embedder then runs on the CPU, slowly, and the dialog says so
-    var prog = openProgressDialog('Checking ID switches (images)');
+    var prog = openProgressDialog(pkg ? 'Checking ID switches (images, ' + pkg.name + ')' : 'Checking ID switches (images)');
     var t0 = 0, ticker = null, cropTicker = null, embedder = null;
     try {
-        embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
+        embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); }, imageModel: pkg,
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
+            maxGpuPct: getTrackingThreshold('imageCheckGpuTimePct'),
+            maxCpuPct: getTrackingThreshold('imageCheckCpuTimePct'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
         // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs
@@ -336,9 +375,12 @@ async function runImage(session, rate, inject) {
         var res = await checkImageSwitches(session, {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
-            threshold: getTrackingThreshold('imageChangeThreshold'),
+            backgroundHz: getTrackingThreshold('imageCheckBackgroundHz'),
+            threshold: threshold,
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
+            croppable: embedder.croppable,
+            keyframes: embedder.keyframes,
             inFlight: embedder.inFlight || 2,
             releaseFrames: embedder.releaseFrames,
             signal: prog.signal,
@@ -358,6 +400,8 @@ async function runImage(session, rate, inject) {
             },
         });
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
+        // which model made these results (named in "About these flags", saved with them)
+        if (res) res.imageModel = pkg ? { key: pkg.key, name: pkg.name, threshold: threshold } : null;
         if (res && embedder.stats) {
             res.timing = embedder.stats();                 // where the time went, on THIS machine
             console.log('[ID switches, images] ' + formatEmbedTiming(res.timing), res.timing);
@@ -384,7 +428,9 @@ async function runImage(session, rate, inject) {
 /**
  * Run the selected checks, mark the results on the seekbar and report them.
  *
- * From the menu (`auto` false) the ID Switches tab always opens. After Track All
+ * From the menu (`auto` false) the ID Switches tab always opens — unless the
+ * Track All summary started the check (`clickCheckFromSummary`): then the summary
+ * reopens with the result instead. After Track All
  * or Track Frame Range (`auto: true`, pose/tracker.js) the results are appended
  * to the pass's own status line (`statusPrefix`), the tab opens only when a
  * possible switch was found, and a check that cannot run is reported as skipped —
@@ -398,6 +444,8 @@ async function runImage(session, rate, inject) {
  */
 export async function runIdSwitchChecks(opts) {
     opts = opts || {};
+    var backToSummary = !opts.auto && _backToSummary;   // started by the Track All summary (clickCheckFromSummary)
+    _backToSummary = false;
     var auto = !!opts.auto, cues = ['size', 'image'].filter(function (c) { return opts[c]; });
     if (!cues.length) return null;
     var deps = { navigateToFrame: opts.navigateToFrame || null };
@@ -406,6 +454,7 @@ export async function runIdSwitchChecks(opts) {
     if (!hasTrackedIdentities(session)) {
         if (auto) setStatus((opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + head(cues[0]) + ': skipped — no tracked 3D skeletons', 'success');
         else setStatus('Check ID Switches needs tracked identities with 3D — run Track All first', 'warning');
+        if (backToSummary && _openSummary) _openSummary(session);
         return null;
     }
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
@@ -450,7 +499,10 @@ export async function runIdSwitchChecks(opts) {
     var anyFound = ran.some(function (c) { return countOnsets(results[c]) > 0; });
     setStatus((auto && opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + parts.join('; ') +
         (anyFound ? ' — listed in the ID Switches tab' : ''), level);
-    if ((!auto && ran.length) || anyFound) openIdSwitchPanel();
+    // Started from the Track All summary: back to it, with this outcome — a cancel or a skip included — in
+    // its row. Without one to reopen (the box is not kept for this session), as from the menu.
+    var reopened = backToSummary && _openSummary ? _openSummary(session, results) : null;
+    if (!reopened && ((!auto && ran.length) || anyFound)) openIdSwitchPanel();
     return results;
 }
 
@@ -486,12 +538,10 @@ function syncMarkers(session) {
     setSeekbarSwitchMarkers(all, state.totalFrames);
 }
 
-/** Show the right panel (if hidden) on the ID Switches tab. */
+/** Open + expand the ID Switches section, showing the right panel if hidden. */
 export function openIdSwitchPanel() {
-    var wrap = document.getElementById('infoPanelWrapper');
-    if (wrap && wrap.classList.contains('collapsed')) { var t = document.getElementById('infoPanelToggleBtn'); if (t) t.click(); }
-    var tab = document.querySelector('.panel-tab[data-tab="tabIdSwitches"]');
-    if (tab) tab.click();
+    // Never a rail click: clicking the already-expanded panel would FOLD it.
+    showPanelTab('tabIdSwitches');
 }
 
 /** Forget a session's results (a new tracking pass relabels everything) and clear its markers. */
@@ -514,7 +564,8 @@ function aboutHtml(st, ran) {
         '<p class="id-switch-rate">Analysed ' + r0.sampleHz.toFixed(1) + ' samples/s (every ' +
         (r0.step === 1 ? 'frame' : ordinal(r0.step) + ' frame') + ' at ' + r0.fps.toFixed(2).replace(/\.?0+$/, '') + ' fps' +
         (im && im.ok ? '; images at ' + im.imageHz.toFixed(1) + '/s, ' + im.crops.toLocaleString() + ' crops from ' + im.cameras.length + ' views' +
-            (im.model && im.model.note ? ' (' + escapeHtml(im.model.note) + ')' : '') : '') +
+            (im.model && im.model.note ? ' (' + escapeHtml(im.model.note) + ')' : '') +
+            (im.imageModel ? '; image model <b>' + escapeHtml(im.imageModel.name) + '</b>, flag threshold ' + escapeHtml(String(im.imageModel.threshold).replace('-', '−')) : '') : '') +
         (r0.fpsFromVideo ? ', measured from the video)'
             : ') — <b>no video is loaded, so this frame rate was not measured</b>. If the recording ran at a ' +
               'different rate, set it in the fps box and run the check again: its time windows are set in seconds.') + '</p>' +
@@ -768,8 +819,10 @@ export function refreshIdSwitchPanel(session) {
         host.innerHTML = trackSummaryHtml(session) + '<div class="info-section"><h3>Possible ID switches</h3><p class="table-empty id-switch-empty">' +
             (hasTrackedIdentities(session) ? 'No ID-switch check has run on this session yet.' : 'Run Track All first: the checks need tracked identities with 3D.') +
             '</p><div class="id-switch-run"><button class="panel-btn" data-run="menuCheckSizeSwitches">Check by body size</button>' +
-            '<button class="panel-btn" data-run="menuCheckImageSwitches">Check by images…</button></div></div>';
+            '<button class="panel-btn" data-run="menuCheckImageSwitches">Check by images…</button></div>' +
+            imageModelLineHtml(session) + '</div>';
         setIdSwitchHighlight(null);
+        wireImageModelLine(host, session, function () { refreshIdSwitchPanel(session); });
         host.querySelectorAll('[data-run]').forEach(function (b) {
             b.addEventListener('click', function () { var m = document.getElementById(b.dataset.run); if (m) m.click(); });
         });
@@ -788,6 +841,7 @@ export function refreshIdSwitchPanel(session) {
                 (n ? '<b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') : 'nothing flagged') + '</div>';
         }).join('') +
         '<details class="id-switch-about"><summary>About these flags</summary>' + aboutHtml(st, ran) + '</details>' +
+        imageModelLineHtml(session) +
         '</div>' +
         '<div class="id-switch-toolbar">' +
         '<span class="id-switch-done"><b>' + done + '</b> of ' + primary.length + ' reviewed</span>' +
@@ -801,6 +855,7 @@ export function refreshIdSwitchPanel(session) {
             : '<p class="table-empty">No encounter scored below the threshold.</p>') + '</div>';
     _progStale = true;                               // the list was rebuilt: re-find the selected row's bar
     wireTrackSummary(host, session);
+    wireImageModelLine(host, session, function () { refreshIdSwitchPanel(session); });
     highlightRow(rows.filter(function (f) { return rowKey(f) === st.current; })[0] || null);
     var nav = st.navigate || _navigate;
     // A row lands ID_SWITCH_LEAD_IN_SECONDS before the animals come close (data-go), so pressing play

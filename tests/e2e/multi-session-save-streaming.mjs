@@ -26,23 +26,21 @@
  * every session's cameras/calibration/tracking/3D land back on the CORRECT
  * session, uncontaminated by the other.
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8093);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 try {
-  const browser = await chromium.launch({ args: ['--enable-precise-memory-info'] });
+  const browser = await launchBrowser({ args: ['--enable-precise-memory-info'] });
   const page = await browser.newPage();
   page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
   await page.goto(`http://localhost:${PORT}/index.html`);
-  await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+  await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
   const r = await page.evaluate(async () => {
     const pd = await import('/pose/pose-data.js');

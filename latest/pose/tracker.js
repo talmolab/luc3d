@@ -16,26 +16,37 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=2dc001fe527c';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=2dc001fe527c';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=2dc001fe527c';
+} from './triangulation.js?v=a0fe8e5e17b4';
+import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=a0fe8e5e17b4';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=a0fe8e5e17b4';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=2dc001fe527c';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=2dc001fe527c';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=2dc001fe527c';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=2dc001fe527c';
-import { startTrackerWorker } from './tracker-pool.js?v=2dc001fe527c';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=2dc001fe527c';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=2dc001fe527c';
-import { updateInfoPanel } from '../ui/info-panel.js?v=2dc001fe527c';
-import { setColorByIdentity } from '../ui/color-by.js?v=2dc001fe527c';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=2dc001fe527c';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=2dc001fe527c';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=2dc001fe527c';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=2dc001fe527c';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=2dc001fe527c';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=2dc001fe527c';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=a0fe8e5e17b4';
+import {
+    getNodeWeightArray, getNodeWeight, updateNodeWeights,
+    getTrackingThresholds, getTrackingThreshold, isCameraTracked,
+    getTrackingThresholdDefs, updateTrackingThresholds,
+} from '../ui/settings.js?v=a0fe8e5e17b4';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=a0fe8e5e17b4';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=a0fe8e5e17b4';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=a0fe8e5e17b4';
+import { startTrackerWorker } from './tracker-pool.js?v=a0fe8e5e17b4';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=a0fe8e5e17b4';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=a0fe8e5e17b4';
+import { hasRealCalibration } from './placeholder-cameras.js?v=a0fe8e5e17b4';
+import { drawAllOverlays, holdOverlayDraws, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=a0fe8e5e17b4';
+import { updateInfoPanel } from '../ui/info-panel.js?v=a0fe8e5e17b4';
+import { setColorByIdentity } from '../ui/color-by.js?v=a0fe8e5e17b4';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=a0fe8e5e17b4';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=a0fe8e5e17b4';
+import { summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks } from '../ui/track-summary.js?v=a0fe8e5e17b4';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=a0fe8e5e17b4';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=a0fe8e5e17b4';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=a0fe8e5e17b4';
+import { noteTrackRun } from './run-state.js?v=a0fe8e5e17b4';
+import { resolveTailMarks, createTailBandCue, TAIL_BAND_READ } from './tail-mark.js?v=a0fe8e5e17b4';
+import { resolveIdentityCues } from './identity-cues.js?v=a0fe8e5e17b4';
+import { createTailMarkReader } from '../ui/tail-mark-reader.js?v=a0fe8e5e17b4';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -202,19 +213,19 @@ function crossViewScore(instA, camA, instB, camB) {
 // unless the Tracking Wizard / bench sets them.
 //   filterMinVisibleNodes — geometry gate, needs no per-detection score (sleap-3d Stage-1 = 8)
 //   filterMinInstanceScore — confidence gate, only applies when inst.score is available (sleap-3d = 0.85)
-function passesDetectionFilter(inst, minVis, minScore) {
-    if (minVis > 0 && inst.countPoints() < minVis) return false;
-    if (minScore > 0 && inst.score != null && inst.score < minScore) return false;
-    return true;
-}
+//   filterMinMeanNodeScore — sleap-nn's mean node score (missing node = 0), only for predictions with node scores
+// `passesDetectionFilter` lives in pose/detection-filter-stats.js, which the
+// Tracking Wizard's readout also counts with, so the two cannot disagree.
 
-function collectInstances(frameGroup, cameras) {
+function collectInstances(frameGroup, cameras, session) {
     var camInstances = {};
     var camMap = {};
     var activeCams = [];
 
     var minVis = thr('filterMinVisibleNodes');
     var minScore = thr('filterMinInstanceScore');
+    var minNode = thr('filterMinMeanNodeScore');
+    var fi = frameGroup.frameIdx;
 
     for (var ci = 0; ci < cameras.length; ci++) {
         var cam = cameras[ci];
@@ -222,11 +233,11 @@ function collectInstances(frameGroup, cameras) {
         var all = [];
         var linked = frameGroup.getInstances(cam.name);
         if (linked) for (var i = 0; i < linked.length; i++) {
-            if (passesDetectionFilter(linked[i], minVis, minScore)) all.push(linked[i]);
+            if (passesDetectionFilter(linked[i], minVis, minScore, minNode, session, cam.name, fi)) all.push(linked[i]);
         }
         var unlinked = frameGroup.getUnlinkedInstances(cam.name);
         if (unlinked) for (var j = 0; j < unlinked.length; j++) {
-            if (passesDetectionFilter(unlinked[j].instance, minVis, minScore)) all.push(unlinked[j].instance);
+            if (passesDetectionFilter(unlinked[j].instance, minVis, minScore, minNode, session, cam.name, fi)) all.push(unlinked[j].instance);
         }
         if (all.length > 0) {
             camInstances[cam.name] = all;
@@ -272,7 +283,7 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
 
     clearFrameCache();
 
-    var collected = collectInstances(frameGroup, cameras);
+    var collected = collectInstances(frameGroup, cameras, session);
     var camInstances = collected.camInstances;
     var camMap = collected.camMap;
     var activeCams = collected.activeCams;
@@ -797,17 +808,21 @@ function sessionNumAnimals(session) {
     return (session && typeof session.numAnimals === 'number') ? session.numAnimals : null;
 }
 // A blank answer (auto-detect) is an answer too, so it must not bring the
-// prompt back on every run — the toolbar's Animals field shows "auto" and is
-// where it gets changed afterwards.
+// first-use dialog back on every run — the toolbar's Animals field shows
+// "auto" and is where it gets changed afterwards.
 function numAnimalsAnswered(session) {
     return !!session && session.numAnimals != null;
 }
-// The last count given in ANY session this page has seen. Pre-fills the prompt
+// The last count given in ANY session this page has seen. Pre-fills the dialog
 // for a session nobody has answered yet, which in a multi-session project of
 // the same animals makes each one a single Enter.
 var _lastNumAnimals = null;
-// Told when the count changes, so the toolbar field follows the prompt and the
-// Track Frame Range dialog. A listener that throws must not stop the others.
+// Same for the tail-mark choice: the sessions of one study usually share it.
+var _lastTailMarkedIdentity = null;
+var _tailMarkListeners = [];
+// Told when the count changes, so the toolbar field follows the first-use
+// dialog and the Track Frame Range dialog. A listener that throws must not
+// stop the others.
 var _numAnimalsListeners = [];
 
 // Auto-detect cap: the largest instance count seen in any (camera, frame)
@@ -851,29 +866,153 @@ function computeMaxInstancesPerView(session) {
     return max;
 }
 
-function promptNumAnimals(session) {
-    var input = prompt('Number of animals (leave empty for auto-detect):',
-        sessionNumAnimals(session) || _lastNumAnimals || '');
-    if (input === null) return false;  // cancelled
-    input = input.trim();
-    if (input === '') {
-        setTrackerNumAnimals(null);
-    } else {
-        var n = parseInt(input);
-        if (isNaN(n) || n < 1) {
-            setStatus('Invalid number', 'error');
-            return false;
-        }
-        setTrackerNumAnimals(n);
+// The first-use question (ui/track-setup-modal.js): the animal count, with the
+// node weights laid out under it for review. Resolves false on Cancel, and
+// then nothing is written. On Continue both are written before the run reads
+// them (`createTrackerRun` snapshots the weights). `updateNodeWeights` keeps
+// the stored overrides of nodes not shown — another skeleton's.
+// `withImageCheck` (Track All) also offers the image ID-switch check that runs
+// after the pass, with its options — the Tracking Wizard's own settings, read
+// when the pass ends, so an answer here applies to this run.
+async function askTrackSetup(session, title, withImageCheck) {
+    var answerTailMarks = withImageCheck;   // the whole-recording run: Track All's copy
+    var names = (session.skeleton && Array.isArray(session.skeleton.nodes)) ? session.skeleton.nodes : [];
+    var answer = await showTrackSetupModal({
+        title: title,
+        animals: sessionNumAnimals(session) || _lastNumAnimals,
+        nodes: names.map(function (n) { return { name: n, weight: getNodeWeight(n) }; }),
+        imageCheck: withImageCheck
+            ? getTrackingThresholdDefs().filter(function (d) { return IMAGE_CHECK_IDS.indexOf(d.id) >= 0; })
+            : null,
+        tailMarks: answerTailMarks ? { value: session.tailMarkedIdentity || _lastTailMarkedIdentity,
+            bands: session.identityMarks && session.identityMarks.tailBands } : null,
+    });
+    if (!answer) return false;  // cancelled
+    updateNodeWeights(answer.nodeWeights);
+    if (answer.thresholds) updateTrackingThresholds(answer.thresholds);
+    setTrackerNumAnimals(answer.animals);
+    if (answerTailMarks) {
+        if (answer.identityMarks) setIdentityMarks(answer.identityMarks);
+        else { setIdentityMarks(null); setTailMarkedIdentity(answer.tailMarkedIdentity); }
     }
     return true;
+}
+
+/**
+ * Which identity Track All gives the tail marks in the active session ("id_0"),
+ * or null when the tail-mark pass is off (pose/tail-mark.js). Project state, saved
+ * in the `.slp` like the animal count, because it describes these animals.
+ * @returns {?string}
+ */
+export function getTailMarkedIdentity() {
+    var session = getActiveSession();
+    return (session && session.tailMarkedIdentity) || null;
+}
+
+/**
+ * Set it. A change marks the project dirty and notifies the listeners. A no-op
+ * with no session: there is nothing to save it with.
+ * @param {?string} name
+ */
+export function setTailMarkedIdentity(name) {
+    var session = getActiveSession();
+    if (!session) return;
+    var next = name || null;
+    _lastTailMarkedIdentity = next;
+    if ((session.tailMarkedIdentity || null) === next && !(next && session.identityMarks)) return;
+    session.tailMarkedIdentity = next;
+    if (next) session.identityMarks = null;   // one or the other
+    markDirty();
+    for (var i = 0; i < _tailMarkListeners.length; i++) {
+        try { _tailMarkListeners[i](next); } catch (e) { /* ignore */ }
+    }
+}
+
+/** @param {(name: ?string) => void} fn  called whenever the choice changes (either kind) */
+export function onTailMarkedIdentityChange(fn) {
+    if (typeof fn === 'function') _tailMarkListeners.push(fn);
+}
+
+/**
+ * What each identity of the active session should show, per identity cue
+ * (`{tailBands: {id_0: 0, ...}}`), or null. Project state, like the tail-mark choice.
+ * @returns {?Object}
+ */
+export function getIdentityMarks() {
+    var session = getActiveSession();
+    return (session && session.identityMarks) || null;
+}
+
+/**
+ * Set it (null clears it). Setting it clears the two-animal tail-mark choice: one
+ * session uses one or the other. Marks the project dirty and notifies the listeners.
+ * @param {?Object} marks
+ */
+export function setIdentityMarks(marks) {
+    var session = getActiveSession();
+    if (!session) return;
+    var next = marks && Object.keys(marks).length ? marks : null;
+    if (JSON.stringify(session.identityMarks || null) === JSON.stringify(next) && !(next && session.tailMarkedIdentity)) return;
+    session.identityMarks = next;
+    if (next) session.tailMarkedIdentity = null;
+    markDirty();
+    for (var i = 0; i < _tailMarkListeners.length; i++) {
+        try { _tailMarkListeners[i](session.tailMarkedIdentity || null); } catch (e) { /* ignore */ }
+    }
+}
+
+// Read each animal's tail in every camera and swap labels so the chosen identity has
+// the marks throughout. Never fails the tracking pass: the labels then stay as tracked.
+async function runTailMarkPass(session) {
+    var t0 = performance.now();
+    var fps = state.fps > 0 ? state.fps : session.fps;
+    var res;
+    try {
+        // counting bands needs a sharper read than telling marked from plain
+        var reader = createTailMarkReader(session, fps, session.identityMarks
+            ? Object.assign({}, TAIL_BAND_READ, globalThis.__lucidTailBandRead || {}) : undefined);
+        if (reader.failed) res = { ok: false, reason: reader.failed };
+        else {
+            showLoadingProgress('Reading tail marks', 0, 1, { title: 'Track All' });
+            await yieldToPaint();
+            var pacer = createProgressPacer();
+            var onProgress = async function (done, total) {
+                if (!pacer.due()) return;
+                showLoadingProgress('Reading tail marks', done, total, { title: 'Track All' });
+                await pacer.yield();
+            };
+            if (session.identityMarks) {
+                // Any number of animals, each with its own marks (pose/identity-cues.js).
+                var expected = {};
+                Object.keys(session.identityMarks).forEach(function (cueId) {
+                    var m = session.identityMarks[cueId];
+                    Object.keys(m).forEach(function (name) { (expected[name] = expected[name] || {})[cueId] = m[name]; });
+                });
+                res = await resolveIdentityCues(session, {
+                    fps: fps, expected: expected, onProgress: onProgress,
+                    cues: session.identityMarks.tailBands ? [{ cue: createTailBandCue(), reader: reader }] : [],
+                });
+            } else {
+                res = await resolveTailMarks(session, {
+                    markedName: session.tailMarkedIdentity, fps: fps, reader: reader, onProgress: onProgress,
+                });
+            }
+        }
+    } catch (e) {
+        console.error('[TrackAll] tail marks failed:', e);
+        res = { ok: false, reason: 'failed — ' + e.message };
+    } finally { hideLoading(); }
+    res.elapsedMs = performance.now() - t0;
+    session._tailMarkResult = res;   // in memory only: for the study harness (tests/e2e/_real-tail-marks.mjs)
+    console.log('[TrackAll] tail marks:', res.ok ? res.swapped + ' stretches swapped, ' + res.samples + ' samples' : res.reason);
+    return res;
 }
 
 /**
  * The ACTIVE session's animal count, or null for "auto-detect from the resident
  * sample" (also what a never-answered session reads as). Read by the toolbar's
  * Animals field and the Track Frame Range modal, which show the current value
- * and set it inline — the modal so a native `prompt()` never stacks on top of it.
+ * and set it inline — the modal so the first-use dialog never stacks on top of it.
  * @returns {number|null}
  */
 export function getTrackerNumAnimals() { return sessionNumAnimals(getActiveSession()); }
@@ -881,7 +1020,7 @@ export function getTrackerNumAnimals() { return sessionNumAnimals(getActiveSessi
 /**
  * Set the active session's animal count, used as `maxTargets` by every tracking
  * entry point. Counts as the user's answer, so Track Frame / Track All stop
- * prompting — including for null, which is an explicit auto-detect. It is
+ * asking — including for null, which is an explicit auto-detect. It is
  * project state (saved in the `.slp`), so a change marks the project dirty.
  * A no-op with no session: there is nothing to save it with.
  * @param {number|null} n  A positive integer, or null/NaN for auto-detect.
@@ -927,15 +1066,19 @@ function crossViewHyperparams() {
         stale: thr('stale'),
         // Match gate (pose/cross-view-tracker.js, 2026-10-03).
         matchGate: thr('matchGate'),
+        // Misplaced-node robustness (pose/cross-view-tracker.js, 2026-10-20), off by default.
+        maxPenalty: thr('maxPenalty'),
+        matchReproj: thr('matchReproj'),
     };
 }
 
 // Build Map(camName -> Detection[]) for one frame from linked + unlinked
 // instances (honoring the detection filter). Each Detection records whether it
 // came from the unlinked pool so commit can promote it into a group.
-function buildTrackerDetections(frameGroup, cameras, frameIdx) {
+function buildTrackerDetections(frameGroup, cameras, frameIdx, session) {
     var minVis = thr('filterMinVisibleNodes');
     var minScore = thr('filterMinInstanceScore');
+    var minNode = thr('filterMinMeanNodeScore');
     var detsByCam = new Map();
     for (var ci = 0; ci < cameras.length; ci++) {
         var cam = cameras[ci];
@@ -943,14 +1086,14 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx) {
         var slot = 0;
         var linked = frameGroup.getInstances(cam.name);
         if (linked) for (var i = 0; i < linked.length; i++) {
-            if (!passesDetectionFilter(linked[i], minVis, minScore)) continue;
+            if (!passesDetectionFilter(linked[i], minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
             var dl = new Detection(linked[i], cam, frameIdx, slot++);
             dl.unlinkedId = null;
             dets.push(dl);
         }
         var unlinked = frameGroup.getUnlinkedInstances(cam.name);
         if (unlinked) for (var j = 0; j < unlinked.length; j++) {
-            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore)) continue;
+            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
             var du = new Detection(unlinked[j].instance, cam, frameIdx, slot++);
             du.unlinkedId = unlinked[j].id;
             dets.push(du);
@@ -961,8 +1104,10 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx) {
 }
 
 // Persist a tracked frame: for each live target with a cross-view bundle THIS
-// frame, create an InstanceGroup, map the target's stable trackId to a session
-// Identity, write the per-frame identity entries, and promote unlinked members.
+// frame, create an InstanceGroup of those members — with 3D solved from them
+// alone, not from the stale views the target also holds (`membersPoints3d`) —
+// map the target's stable trackId to a session Identity, write the per-frame
+// identity entries, and promote unlinked members.
 //
 // Raw-trackIdx collision guard (2D-viewer color bug, most visible on the
 // first frame or two of a video): `session.setFrameIdentity` keys
@@ -1020,10 +1165,17 @@ export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity, iden
         }
 
         var group = new InstanceGroup(nextGroupId(), identityId);
+        // The 3D of THESE members only. `target.points3d` also fuses any stale
+        // view the target still holds for association (a camera that missed it
+        // this frame), which is not a member — see `membersPoints3d`.
+        // `triangulationMethod` is deliberately left unset: this is the
+        // tracker's normalized-coordinate DLT, not the app's pixel-space 'dlt',
+        // and tagging it 'dlt' would let Triangulate All ▸ DLT ADOPT it
+        // (`adoptPrior3d`) instead of re-solving.
         // A COPY in the slab pool (pose-data.js `pooledPoints3d`): one
         // ArrayBuffer per group was 539,545 of them for a full Track All, and it
         // also stops the group sharing the tracker target's live array.
-        group.points3d = pooledPoints3d(target.points3d);
+        group.points3d = pooledPoints3d(membersPoints3d(target, frameIdx));
         for (var m = 0; m < members.length; m++) {
             var camName = members[m].camName;
             var det = members[m].det;
@@ -1085,21 +1237,22 @@ function createTrackerRun(session, cameras, maxTargets, identityPool) {
 // order exactly, minus the Detection — per camera (run order), each passing
 // detection's flat 2D (the pool copies it on submit; `Detection` reads nothing
 // else of its Instance), and, kept here, what commit needs back for each slot.
-function buildTrackerInputs(frameGroup, cameras, frameIdx) {
+function buildTrackerInputs(frameGroup, cameras, frameIdx, session) {
     var minVis = thr('filterMinVisibleNodes');
     var minScore = thr('filterMinInstanceScore');
+    var minNode = thr('filterMinMeanNodeScore');
     var xys = new Array(cameras.length), metas = new Array(cameras.length);
     for (var ci = 0; ci < cameras.length; ci++) {
         var cam = cameras[ci], xy = [], meta = [];
         var linked = frameGroup.getInstances(cam.name);
         if (linked) for (var i = 0; i < linked.length; i++) {
-            if (!passesDetectionFilter(linked[i], minVis, minScore)) continue;
+            if (!passesDetectionFilter(linked[i], minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
             xy.push(linked[i]._xy);
             meta.push({ frameIdx: frameIdx, instance: linked[i], unlinkedId: null });
         }
         var unlinked = frameGroup.getUnlinkedInstances(cam.name);
         if (unlinked) for (var j = 0; j < unlinked.length; j++) {
-            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore)) continue;
+            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore, minNode, session, cam.name, frameIdx)) continue;
             xy.push(unlinked[j].instance._xy);
             meta.push({ frameIdx: frameIdx, instance: unlinked[j].instance, unlinkedId: unlinked[j].id });
         }
@@ -1127,7 +1280,7 @@ async function attachTrackerWorker(session, run) {
 function submitTrackerFrame(session, run, fi) {
     var fg = session.getFrameGroup(fi);
     if (!fg) return undefined;
-    var inp = buildTrackerInputs(fg, run.cameras, fi);
+    var inp = buildTrackerInputs(fg, run.cameras, fi, session);
     run.pending.set(fi, inp.metas);
     run.pool.submit(fi, inp.xys);
     return run.pool.saturated() ? idleWhile(run.pool.throttle()) : undefined;
@@ -1136,7 +1289,9 @@ function submitTrackerFrame(session, run, fi) {
 // Commit one frame the worker tracked: `targets` as tracker-worker.js returns
 // them, rebuilt into the shape commitTrackedFrame reads off a CrossViewTracker
 // (targets in order; each one's this-frame members in its detsByCam order), so
-// the commit itself is the inline one, unchanged.
+// the commit itself is the inline one, unchanged. The shim holds no stale view,
+// so its `points3d` must already be the members' — the worker sends
+// `membersPoints3d`, not the target's own 3D.
 function commitWorkerFrame(session, run, fi, targets) {
     var metas = run.pending.get(fi);
     run.pending.delete(fi);
@@ -1165,7 +1320,7 @@ function trackRunResult(session, run) {
 function stepTrackerFrame(session, run, fi) {
     var fg = session.getFrameGroup(fi);
     if (!fg) return;
-    var detsByCam = buildTrackerDetections(fg, run.cameras, fi);
+    var detsByCam = buildTrackerDetections(fg, run.cameras, fi, session);
     run.trk.trackFrame(detsByCam, run.cameras);
     commitTrackedFrame(session, run.trk, fi, run.trackToIdentity, run.identityPool);
 }
@@ -1270,10 +1425,18 @@ async function sweepTrackAllFrames(session, run, onProgress, opts) {
     return trackRunResult(session, run);
 }
 
-export function trackCurrentFrame() {
+export async function trackCurrentFrame() {
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
+        return;
+    }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
         return;
     }
     var fg = session.getFrameGroup(state.currentFrame);
@@ -1282,9 +1445,9 @@ export function trackCurrentFrame() {
         return;
     }
 
-    // Prompt for number of animals on first use
+    // Ask for the number of animals (and show the node weights) on first use
     if (!numAnimalsAnswered(session)) {
-        if (!promptNumAnimals(session)) return;
+        if (!(await askTrackSetup(session, 'Track Frame'))) return;
     }
 
     var effectiveNumAnimals = sessionNumAnimals(session) || computeMaxInstancesPerView(session);
@@ -1308,6 +1471,7 @@ export function trackCurrentFrame() {
         // frame's prior tracker groups so repeated runs don't stack.
         session.instanceGroups.set(state.currentFrame, []);
         var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals);
+        noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         // Show what tracking produced: the predictions only (User, Reproj, Errors off).
         var predOnly = lr.numTargets > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);
@@ -1454,6 +1618,14 @@ async function runTrackingPass(range) {
         setStatus('Need at least 2 cameras', 'warning');
         return bail;
     }
+    // Cross-view tracking needs a real calibration, as Triangulate does.
+    // Placeholder cameras (a folder loaded with no calibration.toml,
+    // `pose/placeholder-cameras.js`) all sit at the world origin, so tracking
+    // on them would build groups from 3D with no baseline.
+    if (!hasRealCalibration(session)) {
+        showCalibrationRequiredPopup();
+        return bail;
+    }
 
     // Honor per-view tracking inclusion from the Tracking Wizard: excluded views
     // are dropped from the association math entirely (still visible in the GUI).
@@ -1488,15 +1660,16 @@ async function runTrackingPass(range) {
         return bail;
     }
 
-    // Prompt for number of animals. Track Frame Range collects it in its own
-    // modal (blank there is an explicit "auto-detect"), so it never stacks a
-    // native prompt() on top of the dialog the user just filled in.
+    // Ask for the number of animals, with the node weights for review. Track
+    // Frame Range collects the count in its own modal (blank there is an
+    // explicit "auto-detect"), so it never stacks this dialog on top of the one
+    // the user just filled in.
     if (!isRange && !numAnimalsAnswered(session)) {
-        if (!promptNumAnimals(session)) return bail;
+        if (!(await askTrackSetup(session, human, true))) return bail;
     }
 
     // How long tracking took, for the summary box: from here (after the animal-count
-    // prompt, so the user's typing is not counted) to the end of the identity pass.
+    // dialog, so the user's typing is not counted) to the end of the identity pass.
     var trackStart = performance.now();
 
     // A non-windowed lazy session materializes every frame first, so the run
@@ -1618,39 +1791,50 @@ async function runTrackingPass(range) {
             : await trackFrameListProgress(session, run, frameIndices, onProgress);
         closeTrackerWorker(run);
         var trackMs = performance.now() - trackStart;
+        noteTrackRun(session);   // Track turns blue (ui/run-buttons.js)
         hideLoading();
+        // Track All only: a range is a targeted re-run, whose labels stay what the range's tracker gave.
+        var tailMarks = !isRange && (session.tailMarkedIdentity || session.identityMarks) ? await runTailMarkPass(session) : null;
         // The run's product is identities, so show them (#242): switch Color
         // from Tracks to ID. Only when it assigned any — otherwise there is
-        // nothing new to look at. Recolors 2D + 3D through ui-wiring's handler;
-        // the overlay redraw below is then a cheap repeat.
-        var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
-        // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
-        var predOnly = lres.numIdentities > 0 && showPredictedOnly();
-        // ...and, after Track All, node trails at ¼ s if they are off: each
-        // animal's recent path is where an identity switch shows. A length the
-        // user already picked is left alone, and so is a range (a targeted
-        // re-run, inspected on the timeline). Through ui-wiring's handler, so
-        // the Trails menus and button follow.
-        var trailsOn = !isRange && lres.numIdentities > 0 && !(state.trailSeconds > 0) &&
-            setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
+        // nothing new to look at. Recolors 3D, the timeline and the
+        // Visibility swatches through ui-wiring's handler; the 2D redraw is
+        // the one below.
+        // The three switches' own redraws are held: the one below draws
+        // their combined result (`holdOverlayDraws`, ui/rendering.js).
+        var switchedToIds = false, predOnly = false, trailsOn = false;
+        holdOverlayDraws(function () {
+            switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
+            // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
+            predOnly = lres.numIdentities > 0 && showPredictedOnly();
+            // ...and, after Track All, node trails at ¼ s if they are off: each
+            // animal's recent path is where an identity switch shows. A length the
+            // user already picked is left alone, and so is a range (a targeted
+            // re-run, inspected on the timeline). Through ui-wiring's handler, so
+            // the Trails menus and button follow.
+            trailsOn = !isRange && lres.numIdentities > 0 && !(state.trailSeconds > 0) &&
+                setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
+        });
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         // Track All closes the Timeline and the 3D viewer if they are open, handing
         // the space back to the views where the new IDs are shown. There is no 3D
         // pose to look at yet: tracking assigns IDs, and Triangulate All comes next.
         // A range does not: it is a targeted re-run whose result the user is usually
-        // inspecting on the timeline.
+        // inspecting on the timeline. Closed FIRST, so the timeline's rebuild below waits
+        // for it to be reopened (Timeline.refreshTracks) instead of building hidden rows.
         if (!isRange) {
             collapseTimeline();
             collapseViewport3D(viewport3d);
         }
+        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         console.timeEnd('[' + label + '] total');
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount.toLocaleString('en-US') + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by Identity' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') +
+            (tailMarks ? ', ' + describeTailMarks(tailMarks) : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body
@@ -1679,6 +1863,7 @@ async function runTrackingPass(range) {
                     // The recording's rate, as the ID-switch checks read it (measured
                     // from the video when one is loaded), for the real-time multiplier.
                     fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                    tailMarks: tailMarks ? describeTailMarks(tailMarks) : null,
                 };
                 var summaryChecks = {
                     size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),

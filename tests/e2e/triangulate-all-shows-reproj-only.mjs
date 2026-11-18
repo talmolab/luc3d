@@ -7,9 +7,9 @@
  * on the shared BA rig fixture (`fixtures/ba-rig-fixture.js`, identities set):
  *   A. the Triangulate All button (Settings default DLT; identities exist, so
  *      it runs `groupByIdentityAndTriangulateAll`);
- *   B. Triangulate All ▸ Ref on a LAZY session — `triangulateAllFrames`' windowed
+ *   B. Triangulate ▸ Method Ref, then the button, on a LAZY session — `triangulateAllFrames`' windowed
  *      sweep, the path a reopened large project takes;
- *   C. Triangulate All ▸ Ref on an eager session — `triangulateAllFrames`'
+ *   C. the same on an eager session — `triangulateAllFrames`'
  *      in-memory path;
  *   D. Edit ▸ Group by Track & Triangulate All, through its dialog.
  * Each starts from all four boxes ticked and must end Reproj-only, with the
@@ -19,31 +19,31 @@
  *      and does not add the note.
  *   G. a selected user instance is deselected when its type is hidden — the
  *      boxes fire their normal change handler, not a silent `.checked` write.
+ *   H. the boxes' change handlers do not each redraw every view (each redraw
+ *      forced a layout of the page): their three redraws are held
+ *      (`overlayDrawHold`), and the run's own redraw paints the result.
  *
  * Run: node tests/e2e/triangulate-all-shows-reproj-only.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8266);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Install a fresh fixture session (lazy or eager) as the active session.
     const useSession = (name, eager) => page.evaluate(async ({ name, eager }) => {
@@ -85,12 +85,26 @@ try {
     const succeeded = (msg) => /^(Triangulated|Grouped) /.test(msg);
 
     const routes = [
-        { key: 'A', label: 'Triangulate All button (group by identity)', eager: true,
+        { key: 'A', label: 'Triangulate button (all frames, group by identity)', eager: true,
           trigger: () => document.getElementById('tbTriangulateAll').click() },
-        { key: 'B', label: 'Triangulate All ▸ Ref, lazy session (windowed sweep)', eager: false,
-          trigger: () => document.querySelector('#triangulateAllDropdown .tri-dropdown-item[data-method="ba"]').click() },
-        { key: 'C', label: 'Triangulate All ▸ Ref, eager session (in-memory)', eager: true,
-          trigger: () => document.querySelector('#triangulateAllDropdown .tri-dropdown-item[data-method="ba"]').click() },
+        { key: 'B', label: 'Triangulate (Method: Ref), lazy session (windowed sweep)', eager: false,
+          trigger: () => {
+              // Ref through the menu's Method radio, then the button; DLT is put
+              // back at once (the run already has its method).
+              const pick = (m) => document.querySelector('#triangulateDropdown input[name="tbTriMethod"][value="' + m + '"]').click();
+              pick('ba');
+              document.getElementById('tbTriangulateAll').click();
+              pick('dlt');
+          } },
+        { key: 'C', label: 'Triangulate (Method: Ref), eager session (in-memory)', eager: true,
+          trigger: () => {
+              // Ref through the menu's Method radio, then the button; DLT is put
+              // back at once (the run already has its method).
+              const pick = (m) => document.querySelector('#triangulateDropdown input[name="tbTriMethod"][value="' + m + '"]').click();
+              pick('ba');
+              document.getElementById('tbTriangulateAll').click();
+              pick('dlt');
+          } },
         { key: 'D', label: 'Edit ▸ Group by Track & Triangulate All', eager: true,
           trigger: async () => {
               document.getElementById('menuGroupByTrack').click();
@@ -151,6 +165,23 @@ try {
     await runAndWait(() => document.getElementById('tbTriangulateAll').click());
     const stillSelected = await page.evaluate(async () => !!(await import('/ui/app-state.js')).interactionManager.selectedInstanceGroup);
     check(!stillSelected, 'G. hiding Predicted cleared the selection, as a click on the box would');
+
+    // ---- H. one redraw, not one per box -------------------------------------------------
+    await useSession('reprojOnly_H', true);
+    await setBoxes([true, true, true, true]);
+    const heldBefore = await page.evaluate(async () => (await import('/ui/rendering.js')).overlayDrawHold.held);
+    await runAndWait(() => document.getElementById('tbTriangulateAll').click());
+    const hold = await page.evaluate(async () => (await import('/ui/rendering.js')).overlayDrawHold);
+    check(hold.held - heldBefore === 3, `H. the three boxes' redraws were held (${hold.held - heldBefore})`);
+    check(hold.depth === 0, 'H. and the hold is released');
+    // A redraw outside the hold draws again (the hold does not stick).
+    const drew = await page.evaluate(async () => {
+        const R = await import('/ui/rendering.js');
+        const before = R.overlayDrawHold.held;
+        R.drawAllOverlays(window.__lucid.state.currentFrame);
+        return R.overlayDrawHold.held === before;
+    });
+    check(drew, 'H. a later redraw is not held');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

@@ -7,7 +7,10 @@
  * overlay shows the CPU alone — no GPU line, no GPU series. The project is the
  * shared BA rig fixture's 8 valid frames repeated (fixtures/ba-rig-fixture.js;
  * its own `frames` option drifts the animals out of the cameras' valid range),
- * big enough that a Refined run lasts a few seconds. Asserted:
+ * big enough that a Refined run lasts a few seconds. The windowed run is the
+ * longer one (WINDOWED_FRAMES): it keeps only the 3D (`summaryOnly`, #351), and
+ * at 60,000 frames it could finish inside the 1.5 s the test waits before
+ * reading the line, leaving it empty. Asserted:
  *  1. Windowed (lazy) project, worker pool: a "CPU: N cores · load X%" line with
  *     the CPU legend key appears under the detail line, its graph to the right,
  *     with a CPU series and no GPU series, labelled axes (0/50/100%, "60 s ago" …
@@ -26,28 +29,26 @@
  *
  * Run: node tests/e2e/triangulate-all-cpu-load.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8284);
+const server = await startServer(repoRoot);
+const PORT = server.port;
+const WINDOWED_FRAMES = 200000;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         const AS = await import('/ui/app-state.js');
@@ -116,7 +117,7 @@ try {
     check(plain, 'an operation that reports no CPU time (Track All\'s progress) shows no CPU line');
 
     // ---- 1. windowed project on the worker pool
-    await page.evaluate(() => window.__start(60000, false));
+    await page.evaluate((n) => window.__start(n, false), WINDOWED_FRAMES);
     await waitLoad();
     await page.waitForTimeout(1500);
     const r1 = await readRow();
@@ -157,7 +158,8 @@ try {
         return { hidden: document.getElementById('loadingHardware').classList.contains('hidden') && document.getElementById('loadingOverlay').classList.contains('hidden'),
                  cleared: text === '' && document.getElementById('loadingCpu').textContent === '', status: document.getElementById('statusText').textContent };
     });
-    check(/^Triangulated 60,000 frames via Refined \(120,000 groups/.test(after.status), `the run completes ("${after.status}")`);
+    check(new RegExp(`^Triangulated ${WINDOWED_FRAMES.toLocaleString('en-US')} frames via Refined \\(${(2 * WINDOWED_FRAMES).toLocaleString('en-US')} groups`).test(after.status),
+          `the run completes ("${after.status}")`);
     check(after.hidden && after.cleared, 'the CPU line hides with the overlay, cleared, and stays so (its timer stopped)');
 
     // ---- 3. the in-memory project's path

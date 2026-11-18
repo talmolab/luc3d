@@ -25823,6 +25823,47 @@ m\0\0n\0\0o\0A\x9C\xB4\vp\0A\xAC\xB4\v\xAF\xDF\0\0 \0A\xC0\xB4\v&\0\0\
         }
       }
     } };
+/* LUCID local patch (cold-read) BEGIN: byte-identical in hdf5_util.js and h5wasm.iife.js (tests/test-workerfs-cold-read.mjs) */
+// WORKERFS reads a File one slice at a time (FileReaderSync). A File in a
+// cloud-synced folder that is still downloading (Google Drive for desktop on
+// macOS, measured 2026-10-19) can hand back a slice with a run of ZEROS in the
+// middle and every other byte right. Nothing fails, so HDF5 takes the zeros as
+// data: a cold parse of an .slp carried runs of (0, 0) keypoints that a warm
+// parse of the same file did not, and Track All's identities then differed. So
+// any part of a read that came back all zero (per 4 KiB block, clipped to the
+// read) is read again at once, together with the block on each side of it: a
+// run of zeros does not have to end on a block boundary, and on the 167 MB .slp
+// files measured, every byte left wrong was in the partly-zero block right
+// after the all-zero run. Re-read bytes only ever replace zeros, so bytes that
+// really are zero, and bytes that were right, stay as they are.
+function lucidColdReadGuard(W, contents, buffer, offset, position, n, depth) {
+  var BLOCK = 4096, end = position + n, runStart = -1;
+  for (var b = position - position % BLOCK; b < end; b += BLOCK) {
+    var lo = b > position ? b : position, hi = b + BLOCK < end ? b + BLOCK : end, zero = true;
+    for (var q = offset + lo - position, qe = offset + hi - position; q < qe; q++) {
+      if (buffer[q] !== 0) { zero = false; break; }
+    }
+    if (zero && runStart < 0) runStart = lo;
+    if (runStart < 0 || (zero && hi < end)) continue;
+    var runEnd = zero ? hi : lo;
+    var from = runStart - BLOCK > position ? runStart - BLOCK : position, to = runEnd + BLOCK < end ? runEnd + BLOCK : end;
+    var again = new Uint8Array(W.reader.readAsArrayBuffer(contents.slice(from, to)));
+    var stats = W.lucidColdRead || (W.lucidColdRead = { rereads: 0, recovered: 0 });
+    stats.rereads++;
+    var fixed = 0;
+    for (var k = 0, at = offset + from - position; k < again.length; k++, at++) {
+      if (buffer[at] === 0 && again[k] !== 0) { buffer[at] = again[k]; fixed++; }
+    }
+    if (fixed) {
+      stats.recovered++;
+      console.warn("[h5wasm WORKERFS] bytes " + from + "-" + to + " first read as zeros were read again (file still downloading?)");
+      // The re-read can carry a hole of its own.
+      if (depth < 2) lucidColdReadGuard(W, contents, buffer, offset + from - position, from, to - from, depth + 1);
+    }
+    runStart = -1;
+  }
+}
+/* LUCID local patch (cold-read) END */
     var WORKERFS = { DIR_MODE: 16895, FILE_MODE: 33279, reader: null, mount(mount) {
       assert(ENVIRONMENT_IS_WORKER);
       WORKERFS.reader ??= new FileReaderSync();
@@ -25904,6 +25945,7 @@ m\0\0n\0\0o\0A\x9C\xB4\vp\0A\xAC\xB4\v\xAF\xDF\0\0 \0A\xC0\xB4\v&\0\0\
       var chunk = stream.node.contents.slice(position, position + length);
       var ab = WORKERFS.reader.readAsArrayBuffer(chunk);
       buffer.set(new Uint8Array(ab), offset);
+      lucidColdReadGuard(WORKERFS, stream.node.contents, buffer, offset, position, chunk.size, 0); // LUCID local patch (cold-read)
       return chunk.size;
     }, write(stream, buffer, offset, length, position) {
       throw new FS2.ErrnoError(29);

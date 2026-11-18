@@ -4,10 +4,13 @@
  *
  * What this test asserts (three independent QoL invariants):
  *
- *  1. Parallel execution. With staggered switchSource resolution times
- *     (decoder 0 = 50 ms, decoder 1 = 10 ms), the total awaited duration of
- *     switchSession() is closer to max(50, 10) = 50 ms than to the sum 60 ms.
- *     A sequential implementation would take ~60 ms; Promise.all takes ~50 ms.
+ *  1. Parallel execution, proven by ORDER, not by wall-clock time. Each stub
+ *     decoder logs a 'start' event when switchSource is called and a
+ *     'resolve' event when its promise settles (decoder 0 after 50 ms,
+ *     decoder 1 after 10 ms). Decoder 1's switchSource must START before
+ *     decoder 0's RESOLVES; a sequential implementation (await each in turn)
+ *     cannot do that. (An earlier version timed the call against a 60 ms
+ *     sequential floor with a 5 ms margin and flaked on loaded CI runners.)
  *  2. Slot stability. After the parallel switch, state.decoderPool[0] is the
  *     decoder originally at index 0, even though decoder 1 finishes first.
  *     I.e., out-of-order resolution must not reorder the pool.
@@ -86,18 +89,21 @@
         };
     }
 
-    // Build a stub decoder whose switchSource resolves after `delayMs` and
-    // records the resolution timestamp. We expose `id` so the slot-stability
-    // assertion can confirm decoderPool[i] is still the pre-existing decoder.
+    // Build a stub decoder whose switchSource logs a 'start' event when it is
+    // called and a 'resolve' event (with timestamp) when it resolves after
+    // `delayMs`. The log's ORDER is what proves parallelism. We expose `id`
+    // so the slot-stability assertion can confirm decoderPool[i] is still the
+    // pre-existing decoder.
     function makeStubDecoder(id, delayMs, log) {
         return {
             id: id,
             videoTrack: { video: { width: 640, height: 480 } },
             samples: new Array(100),
             switchSource: function (file) {
+                log.push({ type: 'start', id: id, t: Date.now() });
                 return new Promise(function (resolve) {
                     setTimeout(function () {
-                        log.push({ type: 'switchSource', id: id, t: Date.now() });
+                        log.push({ type: 'resolve', id: id, t: Date.now() });
                         resolve();
                     }, delayMs);
                 });
@@ -149,7 +155,8 @@
     describe('switchSession: parallel decoders + slot stability + early timeline.setData', function () {
         it('runs decoder switchSource calls in parallel; preserves slot order; calls timeline.setData early; resets currentFrame to 0', async function () {
             // Stagger times: decoder 0 takes 50 ms, decoder 1 takes 10 ms.
-            // Sequential -> ~60 ms; Promise.all -> ~max(50, 10) = ~50 ms.
+            // Parallel: d0 start, d1 start, d1 resolve, d0 resolve.
+            // Sequential: d0 start, d0 resolve, d1 start, d1 resolve.
             var DELAY_0 = 50;
             var DELAY_1 = 10;
 
@@ -240,32 +247,46 @@
             await switchSession(1);
             var elapsed = Date.now() - t0;
 
-            // 1. Parallel execution: closer to max(50, 10) = 50 than to sum 60.
-            // We need elapsed < 60 ms (with fudge for setup overhead). The
-            // strict inequality threshold below allows DELAY_0 + 30 ms slack.
-            // A sequential impl. would take >= 60 ms.
-            var SEQUENTIAL_FLOOR = DELAY_0 + DELAY_1; // 60 ms
-            var PARALLEL_CEIL = DELAY_0 + 30;         // 80 ms (50 + 30 ms fudge)
+            function logIndex(type, id) {
+                for (var k = 0; k < log.length; k++) {
+                    if (log[k].type === type && log[k].id === id) return k;
+                }
+                return -1;
+            }
+            var d0Start = logIndex('start', 'd0');
+            var d1Start = logIndex('start', 'd1');
+            var d0Resolve = logIndex('resolve', 'd0');
+            var d1Resolve = logIndex('resolve', 'd1');
+            var order = log.map(function (e) { return e.id + ':' + e.type; }).join(', ');
             assertTrue(
-                elapsed < SEQUENTIAL_FLOOR + 5,
-                'switchSession should run decoder switchSource calls in parallel ' +
-                '(elapsed ' + elapsed + ' ms; sequential floor ' + SEQUENTIAL_FLOOR +
-                ' ms; expected close to ' + DELAY_0 + ' ms = max-of-staggers)'
+                d0Start >= 0 && d1Start >= 0 && d0Resolve >= 0 && d1Resolve >= 0,
+                'both decoders should have been switched and resolved (log: ' + order + ')'
             );
+
+            // 1. Parallel execution: decoder 1's switchSource started before
+            // decoder 0's resolved. A sequential implementation awaits d0
+            // first, so d1 could only start after d0 resolved.
             assertTrue(
-                elapsed <= PARALLEL_CEIL,
-                'switchSession parallel elapsed too high: ' + elapsed + ' ms > ' +
-                PARALLEL_CEIL + ' ms'
+                d1Start < d0Resolve,
+                'switchSession should run decoder switchSource calls in parallel: ' +
+                'd1 must start before d0 resolves (log: ' + order + ')'
+            );
+
+            // Hang guard only (not a parallelism check): the stubs take 50 ms.
+            assertTrue(
+                elapsed < 500,
+                'switchSession took ' + elapsed + ' ms with 50 ms stub decoders'
             );
 
             // Confirm decoder 1 actually resolved before decoder 0 (i.e. our
             // staggering took effect; otherwise the slot-stability test below
             // wouldn't be exercising the out-of-order path).
-            var d0Entry = log.filter(function (e) { return e.id === 'd0'; })[0];
-            var d1Entry = log.filter(function (e) { return e.id === 'd1'; })[0];
+            var d0Entry = log[d0Resolve];
+            var d1Entry = log[d1Resolve];
             assertTrue(
-                d1Entry.t < d0Entry.t,
-                'Stagger setup: decoder d1 (10 ms) should resolve before d0 (50 ms)'
+                d1Resolve < d0Resolve,
+                'Stagger setup: decoder d1 (10 ms) should resolve before d0 (50 ms) ' +
+                '(log: ' + order + ')'
             );
 
             // 2. Slot stability: decoderPool[0] must still be d0 (not d1).

@@ -30,34 +30,32 @@
  *
  * Run: node tests/e2e/node-trails-toolbar.mjs     (SHOT_DIR=… to save a screenshot)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser, waitForAnimations } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8297);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const SHOT_DIR = process.env.SHOT_DIR || '';
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1700, height: 900 }, deviceScaleFactor: 2 });
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Opening fades in over 0.12s; closing waits out the menu's 0.35s hover
-    // grace period first (styles.css `.tri-dropdown-menu`).
-    const settleOpen = () => page.waitForTimeout(250);
-    const settleClose = () => page.waitForTimeout(700);
+    // grace period first (styles.css `.tri-dropdown-menu`): both are CSS
+    // transitions, so wait for them to end, not for a fixed time.
+    const settleOpen = () => waitForAnimations(page);
+    const settleClose = () => waitForAnimations(page);
     const menuOpen = () => page.evaluate(() =>
         getComputedStyle(document.getElementById('trailsMenu')).visibility === 'visible');
     const awayFromMenu = () => page.mouse.move(400, 500);

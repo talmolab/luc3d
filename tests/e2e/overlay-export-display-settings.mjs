@@ -24,29 +24,26 @@
  * `brightness(2)` saturates it to white. The white quadrant makes rotation
  * detectable by asking where the bright corner ended up.
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8141);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e)));
     page.on('console', m => { if (m.type() === 'error') errs.push('console.error: ' + m.text().slice(0, 200)); });
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // ---- session: 4 cameras, one per setting under test ---------------------
     await page.evaluate(async () => {
@@ -338,11 +335,15 @@ try {
     });
     // Wait for the downloads to SETTLE rather than for a guessed count: this
     // session is calibrated, so there is a 3D tile too, and hard-coding "4" quietly
-    // truncated the wait and lost whichever file arrived last.
-    let seen = -1;
-    for (let i = 0; i < 90 && seen !== downloads.length; i++) {
-        seen = downloads.length;
+    // truncated the wait and lost whichever file arrived last. Settled means at
+    // least one file and then no new one for two checks: "no change" alone also
+    // held at 0 -> 0, so on a slower machine (CI) the wait ended before the
+    // first tile had finished encoding.
+    let seen = -1, steady = 0;
+    for (let i = 0; i < 120 && steady < 2; i++) {
         await page.waitForTimeout(700);
+        steady = downloads.length > 0 && downloads.length === seen ? steady + 1 : 0;
+        seen = downloads.length;
     }
     const names = downloads.map(d => d.suggestedFilename());
     check(downloads.length >= 4, `individual mode produced a file per tile (got ${downloads.length}: ${names.join(', ')})`);

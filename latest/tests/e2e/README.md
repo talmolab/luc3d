@@ -24,14 +24,90 @@ npx playwright install-deps chromium   # or apt-get install the libnss3/libnspr4
 
 ## Run
 
-From the **repo root**, start the static server, then run a test:
+Each file serves the app itself, so there is nothing to start first:
 
 ```bash
-python3 -m http.server 8080            # terminal 1 (repo root)
-node tests/e2e/session-video-scoping.mjs   # terminal 2
+node tests/run-e2e-tests.mjs                # every file, several at a time
+node tests/run-e2e-tests.mjs plane save-    # files whose name contains a filter
+node tests/run-e2e-tests.mjs --failed       # what failed last time in this checkout
+node tests/e2e/session-video-scoping.mjs    # one file on its own
 ```
 
-Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
+Exit code `0` = pass. The runner (`tests/run-e2e-tests.mjs`, `--help` for its
+options):
+
+- runs files several at a time (half the cores the current load leaves idle,
+  1 to 8; `-j N` to choose), slowest first, from the last runs' times;
+- stops a file after `--timeout` seconds (default 600) with the browser and any
+  server it started;
+- runs every failure again ALONE: one that then passes is reported as "passed
+  alone" (load or timing) and does not fail the run;
+- reports a file that prints a line starting with `SKIP` as skipped, not passed;
+- runs the files in `known-failures.json` (red on main for a stated reason)
+  without failing the run, and says when one passes again;
+- keeps each file's output in a log folder named at the start and the end.
+
+`HEADED=1` runs one file at a time (a visible window: see `scripts/browser-lock.mjs`).
+
+Environment switches (any file, through `lib/harness.mjs`):
+
+- `LUC3D_E2E_CHANNEL=chrome` runs Google Chrome instead of Playwright's
+  Chromium (CI does).
+- `LUC3D_E2E_TRACE=1` logs each page's console errors, uncaught errors,
+  crashes, navigations, failed requests and downloads to stderr. The runner
+  sets it when it reruns a failure alone.
+- `LUC3D_E2E_ANIM_RATE=0.25` plays every page's CSS transitions and
+  animations at a quarter speed. A check that reads a size or an opacity a
+  fixed time after starting a transition (passes alone, fails on a loaded
+  machine) then fails every time. Wait for the transition instead: e.g.
+  `page.waitForFunction(() => !document.getAnimations().some(a => a instanceof
+  CSSTransition))`.
+
+## CI
+
+`.github/workflows/tests.yml` runs on every pull request and every push to
+`main`: the Node and browser unit suites in one job, and these files in four
+shards (`node tests/run-e2e-tests.mjs --shard I/4 -j 2`) in Google Chrome, with
+ffmpeg and the offline packages installed. Each shard's summary is on the run's
+page, each failure is an annotation on its file, and a failed shard's logs
+(with the traced rerun) are a run artifact for a week.
+
+The shards are split by `timings.json` (committed), so every machine computes
+the same split. After adding a slow file, refresh it:
+`node tests/run-e2e-tests.mjs --write-timings`. A stale entry only costs
+balance, never coverage.
+
+## Writing a test
+
+Serve the app and open the browser through `lib/harness.mjs`:
+
+```js
+import { startServer, launchBrowser } from './lib/harness.mjs';
+
+const server = await startServer(repoRoot);   // a free port, ready when this resolves
+const PORT = server.port;                      // or server.url
+const browser = await launchBrowser();         // chromium.launch(), plus the CDN cache
+// ... page.goto(`http://localhost:${PORT}/index.html`) ...
+// finally: await browser.close(); server.close();
+```
+
+- **`startServer(root)`** serves `root` from the test's own process and answers
+  like `python3 -m http.server` (same types and headers, no Range support;
+  `tests/test-e2e-harness.mjs` compares the two). Never spawn a Python server
+  or pick a fixed port: a port another session's server already held made a
+  test run against that worktree's code. `PORT=` still picks the port, and
+  fails loudly when it is taken. `{ cors: true }` makes a second, cross-origin
+  server (as `image-model-package.mjs` does for a model package).
+- **`launchBrowser(options)`** keeps jsdelivr and Hugging Face downloads in a
+  disk cache shared by every worktree (`LUC3D_E2E_CACHE`, default
+  `<tmp>/luc3d-e2e-cache`; `LUC3D_E2E_CDN_CACHE=0` turns it off). A versioned
+  URL is reused as is; the model's `resolve/main/…` files are reused only while
+  their ETag is unchanged. A test's own `route()` still runs first, so tests
+  that cut the network (`image-check-offline.mjs`) still do.
+- A test that cannot run here (no Brave, no network) prints a line starting
+  with `SKIP` and exits 0.
+- `offline-server.mjs` is the one file that still starts a Python server:
+  `server.py --offline` is what it tests.
 
 ## Tests
 
@@ -95,22 +171,22 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   with no error; the sink throws instead, and this test proves it. Every
   assertion was validated against the pre-patch writer first, so it pins
   equivalence rather than merely current behavior.
-- **`panel-tabs-scroller.mjs`** — the info panel's tab bar is ONE horizontal
-  scroller holding every tab, not a short bar plus a **"More ▾"** dropdown. The
-  dropdown demoted whichever tabs did not fit; at the default 300px width that
-  was five of the seven, so the panel's own name for what the user was looking
-  at was usually behind a control they had to open first, and which tabs were
-  behind it moved as the panel was resized. Asserts all seven tabs are in the
-  bar in markup order with no "More" control anywhere, that the bar really does
-  overflow at the default width (the precondition, so the rest cannot silently
-  stop testing a scroller), that a trackpad's VERTICAL two-finger swipe scrolls
-  it sideways (the gesture a 31px strip gets, and nothing else was using it),
-  that click-and-drag scrolls it **without** also switching tabs while a 2px
-  click still does — the whole risk in making a row of buttons draggable — that
-  a tab selected from code is scrolled into view, and that the edge fades track
-  which side has tabs behind it and both vanish once the panel is wide enough.
-  Confirmed to fail on the pre-change build (11 red, then the Cameras tab is
-  `display: none` and has no box to click, which is the bug itself).
+- **`panel-rail.mjs`** — the info panel's panels are an accordion stack of
+  collapsible sections driven by an icon rail on the window's right edge
+  (`ui/panel-rail.js`, sleap-app's sidebar in its multi-panel mode); it
+  replaced the horizontal tab bar. Asserts one Lucide icon per panel in the old
+  tab order (sleap-app's glyphs where the panels match; ArrowLeftRight for ID
+  Switches), each named, and one section per pane with a fold chevron and ✕;
+  that hover widens the rail to show names without reflow and that the label
+  strip never covers the panel's controls; sleap-app's accordion rules (a rail
+  click opens + expands and folds the others, the expanded one folds, header
+  chevrons fold only their own section, ✕ closes, closing the last hides the
+  info panel and showing it reopens Instances); that the info panel is the one
+  scroller with sticky section headers; that `I`, the Panel button, View ▸
+  Toggle Info Panel and the rail's top button hide/show it keeping the stack;
+  Tab/Enter on icons and headers; that `openIdSwitchPanel` opens + expands
+  without hiding or folding; that Define Planes hides the stack and locks the
+  icons; and that open/folded sections survive a reload.
 - **`videos-panel-buttons.mjs`** — the Videos tab's two buttons (luc3d #216).
   Clicks **Load Videos** on a FRESH page with no session loaded (the bug: both
   handlers were assigned inside `updateInfoPanel`, which returns early when
@@ -128,6 +204,20 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   onto the next camera along; removing the solo'd view itself (c) closed the
   only pane and left the dock empty. Every behavioural assertion was confirmed
   to fail on the pre-fix build.
+- **`fragmented-mp4-load.mjs`** — a FRAGMENTED MP4 (campy's default output)
+  loads whole. `_initMp4box` stopped at mp4box's `onReady`, which fires on the
+  empty moov, so only the first chunk's fragments were counted (a 1,200-frame
+  60 fps rig video: 420 frames at 21 fps in HTML5 mode; 1,200 frames but
+  `state.fps` 30 with mediabunny). Loads
+  `tests/fixtures/fragmented-60/fragmented-60.mp4` (1,200 barcode frames at
+  60 fps, campy's muxer flags) with small read sizes, in HTML5 and mediabunny
+  modes, and asserts the frame count, the fps, `updateTotalFrames`' fps, that
+  mdat payloads were skipped while mp4box held no earlier chunk, frames past
+  the first chunk by barcode, that a copy cut off mid-fragment counts only the
+  frames whose bytes are in the file (1,165, as ffprobe decodes), and that a
+  regular MP4 does no fragment scan. `RIG_VIDEO=<path>` (HEVC: with
+  `CHANNEL=chrome`) also loads a real recording. Fails 8 checks on the pre-fix
+  build.
 - **`info-panel-many-tracks.mjs`** — the Instances panel must not cost
   O(rows x tracks) per update. Its Track `<select>`s are rebuilt on every
   `updateFrameInfo` (~10 Hz in playback), and each used to hold an `<option>`

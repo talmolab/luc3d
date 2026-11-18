@@ -2,7 +2,7 @@
  * id-switch-image-check.mjs — the image ID-switch check's UI in the real app
  * (ui/id-switch-modal.js `runIdSwitchChecks({image: true})`).
  *
- * The real path needs the videos, WebGPU and a 44 MB model, so the embedder and
+ * The real path needs the videos, WebGPU and a 43 MB model, so the embedder and
  * the WebGPU probe are INJECTED (`opts.inject`, documented as test-only): a
  * synthetic embedder returns a fixed random "appearance" vector per animal plus
  * noise, from 4 cameras. The scoring underneath is the real pose/id-switch-check.js.
@@ -28,28 +28,25 @@
  *
  * Run: node tests/e2e/id-switch-image-check.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8275);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     await page.evaluate(async () => {
         // Tracked fixture: 3 animals, 24 scheduled encounters, labels of one pair swapped after #16.
@@ -155,7 +152,7 @@ try {
             }
             return out;
         });
-        check(off.every(d => d < 1), `the skeleton's keypoints land on the crop's pixels, at any rotation (off by ${off.map(d => d.toFixed(2)).join(', ')} px of 224)`);
+        check(off.every(d => d < 1), `the skeleton's keypoints land on the crop's pixels, at any rotation (off by ${off.map(d => d.toFixed(2)).join(', ')} px of the model input)`);
     }
     {   // an embedder without sampleCrops (as injected here): no empty square
         await page.evaluate(async () => { await window.__buildSwap([1, 1, 1]); const M = await import('/ui/id-switch-modal.js');

@@ -26,29 +26,26 @@
  *
  * Run: node tests/e2e/triangulate-button-focus.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8263);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 try {
-    const browser = await chromium.launch();
+    const browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     page.on('console', m => { if (m.type() === 'error') errs.push('console.error: ' + m.text().slice(0, 300)); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // A project with frames but no decoder — enough for the transport to
     // observe play/pause, without shipping an .mp4 fixture. Deliberately with
@@ -129,9 +126,15 @@ try {
     });
 
     // ---- 1 & 2. The reported bug, once per button --------------------------
+    // #tbTriangulateAll is the Triangulate button; #tbTriangulate is its menu's
+    // "This frame" item, reached by hovering the button like a user does.
+    const clickTri = async (id) => {
+        if (id === 'tbTriangulate') await page.hover('#tbTriangulateAll');
+        await page.click('#' + id);
+    };
     for (const id of ['tbTriangulate', 'tbTriangulateAll']) {
         await reset();
-        await page.click('#' + id);
+        await clickTri(id);
         let s = await snap();
         check(s.activeId !== id,
             `clicking #${id} does not leave it holding focus (activeElement=${s.activeId})`);
@@ -142,7 +145,7 @@ try {
             `Space after clicking #${id} reaches the transport (isPlaying=${s.playing})`);
 
         await reset();
-        await page.click('#' + id);
+        await clickTri(id);
         await page.keyboard.press('ArrowRight');
         s = await snap();
         check(s.frame === 1,
@@ -175,8 +178,11 @@ try {
     // Tab rather than .focus(): only a real keyboard focus sets :focus-visible,
     // which is what the blur rule keys on.
     await reset();
-    await page.evaluate(() => { document.getElementById('tbEditGroup').focus(); });
-    for (let i = 0; i < 6; i++) {
+    // Track is the toolbar control before Triangulate. Focus on it opens its
+    // menu (:focus-within), so Tab walks Track's items first, then reaches the
+    // Triangulate button, which opens its menu the same way, then This frame.
+    await page.evaluate(() => { document.getElementById('tbTrackAll').focus(); });
+    for (let i = 0; i < 12; i++) {
         await page.keyboard.press('Tab');
         const id = await page.evaluate(() => document.activeElement.id);
         if (id === 'tbTriangulate') break;

@@ -24,6 +24,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,10 +61,11 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => log(`  [${el()}] [pageerror] ` + String(e).slice(0, 300)));
     page.on('crash', () => { log(`  [${el()}] *** RENDERER CRASHED ***`); fails++; });
-    // Track All asks for the animal count via window.prompt(); Playwright
-    // auto-DISMISSES dialogs, which makes promptNumAnimals() return false and
-    // trackAll() bail in 2 ms. Answer it. 3 matches the real run's identity count.
+    // Track All asks for the animal count in its first-use dialog
+    // (ui/track-setup-modal.js); unanswered, trackAll() waits on it forever.
+    // Answer it. 3 matches the real run's identity count.
     page.on('dialog', async d => { await d.accept(process.env.NANIMALS || '3'); });
+    await answerTrackSetup(page, process.env.NANIMALS || '3');
     page.on('console', m => {
         const t = m.text();
         if (/phase:|\[slp-streaming-write\]|\[save-slp\]|MEM:|FETCH|\[session-folder\]/.test(t)) log(`  [${el()}] ${t.slice(0, 220)}`);
@@ -80,7 +82,7 @@ try {
     });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
     log(`[${el()}] app booted`);
 
     // ---------------- helpers injected into the page ----------------
@@ -265,7 +267,7 @@ try {
         page2.on('crash', () => { log(`  [${el()}] *** p2 RENDERER CRASHED ***`); fails++; });
         page2.on('console', m => { const t = m.text(); if (/MEM:|phase:/.test(t)) log(`  [${el()}] ${t.slice(0, 220)}`); });
         await page2.goto(`http://localhost:${PORT}/index.html`);
-        await page2.waitForFunction(() => window.__lucid && window.SleapIO, { timeout: 30000 });
+        await page2.waitForFunction(() => window.__lucid && window.SleapIO, null, { timeout: 30000 });
         // Auto-dismiss the missing-files popup and the "attach videos" modal
         // that handleLoadProjectSlpLazy awaits near its end.
         await page2.evaluate(() => {

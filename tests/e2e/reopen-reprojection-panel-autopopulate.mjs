@@ -5,7 +5,7 @@
  * "Load Project" path for a merged multi-camera .slp) never revealed
  * #reprojErrorSection, which defaults to `style="display:none"` in
  * index.html. Every OTHER code path that populates 3D/reprojection data
- * (Triangulate All, slp-import.js, save-load.js, identity-assignment.js, …)
+ * (Triangulate All, slp-import.js, save-load.js, …)
  * calls setReprojErrorVisible(true), but the lazy-reopen path did not — so
  * after reopening a project that already has real 3D + reprojections (e.g.
  * saved right after Track All + Triangulate All), the Instance panel's
@@ -31,17 +31,17 @@
  * before that await, so this fires the call and polls the DOM instead of
  * blocking on the whole promise chain.
  *
- * Run: node reopen-reprojection-panel-autopopulate.mjs   (spawns its own http.server)
+ * Run: node reopen-reprojection-panel-autopopulate.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8098);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const SERVED_FIXTURE_NAME = `_reopen-reproj-autopopulate-${process.pid}.slp`;
 const SERVED_FIXTURE_PATH = path.join(repoRoot, SERVED_FIXTURE_NAME);
 
@@ -50,12 +50,9 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 
 try { fs.unlinkSync(SERVED_FIXTURE_PATH); } catch (e) { /* ignore */ }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
 
     // ---- Page 1: build + Track/Triangulate + save (real streaming path) ----
     const context1 = await browser.newContext();
@@ -72,7 +69,7 @@ try {
     });
 
     await page1.goto(`http://localhost:${PORT}/index.html`);
-    await page1.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page1.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
     const buildResult = await page1.evaluate(async () => {
         const pd = await import('/pose/pose-data.js');
@@ -158,7 +155,7 @@ try {
     page2.on('dialog', async d => { await d.accept(''); });
 
     await page2.goto(`http://localhost:${PORT}/index.html`);
-    await page2.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page2.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     const sectionDisplay = () => page2.evaluate(() => {
         const el = document.getElementById('reprojErrorSection');

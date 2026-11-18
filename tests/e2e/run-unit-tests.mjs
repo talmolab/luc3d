@@ -1,12 +1,10 @@
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8099);
 // HEADED=1 runs the suite in a real, GPU-backed browser window.
 //
 // This is NOT cosmetic. Headless Chromium rasterizes canvas in software and
@@ -24,14 +22,14 @@ const HEADED = process.env.HEADED === '1';
 // shape. Worth a second HEADED pass before a release.
 const DPR = Number(process.env.DPR || 1);
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 800));
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 // a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
 const releaseBrowserLock = HEADED ? await acquireBrowserLock({ label: 'run-unit-tests HEADED' }) : async () => {};
 let exitCode = 1;
 try {
-  const browser = await chromium.launch({ headless: !HEADED });
+  const browser = await launchBrowser({ headless: !HEADED });
   const page = await browser.newPage({ deviceScaleFactor: DPR });
   let summary = null;
   const fails = [];
@@ -45,7 +43,7 @@ try {
   await page.waitForFunction(() => {
     const el = document.querySelector('.test-summary');
     return el && /\d+\s*\/\s*\d+/.test(el.textContent);
-  }, { timeout: 60000 });
+  }, null, { timeout: 60000 });
   await page.waitForTimeout(300);
   console.log((HEADED ? '[headed] ' : '[headless] ') + `[dpr${DPR}] ` + (summary || '(no summary console line)'));
   if (fails.length) { console.log('\nFailures:'); fails.forEach(f => console.log(f)); }

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/luc3d-wordmark.png" alt="LUC3D" width="320">
+</p>
+
 # luc3d (Label Unification and Correspondence in 3D Annotation GUI)
 Label Unification and Correspondence in 3D Annotation GUI in Web Browser
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
@@ -65,6 +69,9 @@ Contains most recent pushes to `main` branch
 ```
 https://luc3d.sleap.ai/dev/
 ```
+
+The menu bar says which one you are on, right of **Settings**: the release
+(e.g. `v1.0.5`) on the live site and `/latest/`, `dev · <commit>` on `/dev/`.
 
 
 ## Requirements

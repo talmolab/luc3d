@@ -333,6 +333,106 @@
             assertDeepEqual(inst.getPoint(1), [50, 60]);
         });
 
+        // `{ hidden: true }` is what the skeleton editor passes. An empty slot
+        // draws no marker, and a node with no marker can never be clicked — so
+        // without this the node the user just added would be permanently
+        // unreachable on every instance that already existed. Same remedy
+        // `InteractionManager` already applies to a null template slot.
+        it('propagateNodeAdded({hidden:true}) places the new node and switches it off', function () {
+            const inst = session.addNewInstance(0, 'cam1', session.skeleton, 0);
+            inst.setPoint(0, 100, 100);
+            inst.setPoint(1, 100, 140);
+            inst.setPoint(2, 100, 180);     // centroid (100, 140)
+            session.skeleton.addNode('ear');
+            session.propagateNodeAdded({ hidden: true });
+
+            assertEqual(inst.numNodes, 4);
+            assertTrue(inst.hasPoint(3), 'the new node HAS a position, so it draws a marker');
+            assertTrue(inst.nulledNodes instanceof Set && inst.nulledNodes.has(3),
+                'and it is switched off, so it draws grey and feeds no triangulation');
+            const p = inst.getPoint(3);
+            const d = Math.hypot(p[0] - 100, p[1] - 140);
+            assertTrue(Math.abs(d - 20) < 1.5,
+                'placed one fan-out radius from the centroid of the placed points (got ' + d + ')');
+            // The nodes that were already there must not move.
+            assertDeepEqual(inst.getPoint(0), [100, 100]);
+            assertDeepEqual(inst.getPoint(2), [100, 180]);
+        });
+
+        it('a PREDICTED instance gets an empty slot, never an invented point', function () {
+            // Predicted points are model output. Fabricating one would make a
+            // prediction say something the model never did; the convert-to-user
+            // path fills it at the moment it becomes editable instead.
+            const fg = new FrameGroup(0);
+            session.addFrameGroup(fg);
+            const pred = new Instance([[1, 2], [3, 4], [5, 6]], 0, 'predicted', 0.9);
+            fg.addInstance('cam1', pred);
+            session.skeleton.addNode('ear');
+            session.propagateNodeAdded({ hidden: true });
+            assertEqual(pred.numNodes, 4);
+            assertFalse(pred.hasPoint(3), 'the slot is empty');
+            assertTrue(!pred.nulledNodes || !pred.nulledNodes.has(3), 'and nothing was switched off');
+        });
+
+        it('propagateNodeAdded without options still leaves an empty slot', function () {
+            // The raw data-model behaviour, for callers that only want the
+            // arrays re-shaped. The placement is an EDITOR decision.
+            const inst = session.addNewInstance(0, 'cam1', session.skeleton, 0);
+            inst.setPoint(0, 10, 10);
+            session.skeleton.addNode('ear');
+            session.propagateNodeAdded();
+            assertEqual(inst.numNodes, 4);
+            assertNull(inst.getPoint(3));
+        });
+
+        it('a node edit keeps group 3D node-aligned and drops stale reprojections', function () {
+            // `points3d` is a flat Float64Array(3N) on the SAME node index space
+            // as the 2D, so it has to move with it. Removing a node used to
+            // discard the WHOLE array — every triangulated keypoint in the
+            // project lost because one node was deleted.
+            const fg = new FrameGroup(0);
+            session.addFrameGroup(fg);
+            const inst = new Instance([[1, 2], [3, 4], [5, 6]], 0, 'user', 1);
+            fg.addInstance('cam1', inst);
+            const group = new InstanceGroup(1, -1);
+            group.addInstance('cam1', inst);
+            group.points3d = new Float64Array([1, 1, 1, 2, 2, 2, 3, 3, 3]);
+            group.addReprojectedInstance('cam1', new Instance([[0, 0], [0, 0], [0, 0]], 0, 'reprojected', 1));
+            group.reprojections = { cam1: [[0, 0], [0, 0], [0, 0]] };
+            session.instanceGroups.set(0, [group]);
+
+            session.skeleton.addNode('ear');
+            session.propagateNodeAdded({ hidden: true });
+            assertEqual(group.points3d.length, 12, 'the 3D grew by one keypoint');
+            assertTrue(Number.isNaN(group.points3d[9]), 'the new keypoint reads as absent');
+            assertDeepEqual(Array.from(group.points3d.slice(0, 9)), [1, 1, 1, 2, 2, 2, 3, 3, 3],
+                'and every solved keypoint keeps its value');
+            assertEqual(group.reprojectedInstances.size, 0, 'stale reprojected instances dropped');
+            assertNull(group.reprojections, 'stale raw reprojections dropped');
+            assertTrue(group.dirty, 'the group is marked for re-triangulation');
+
+            session.skeleton.removeNode(1);
+            session.propagateNodeRemoved(1);
+            assertEqual(group.points3d.length, 9, 'and removing one splices it back out');
+            assertDeepEqual(Array.from(group.points3d.slice(0, 6)), [1, 1, 1, 3, 3, 3],
+                'keeping the keypoints either side exactly');
+        });
+
+        it('removing a node re-seats nulledNodes above it', function () {
+            // `nulledNodes` holds node INDICES. Leave it alone through a splice
+            // and a switched-off node silently becomes its neighbour — the same
+            // class of bug as addressing plane nodes by position.
+            const fg = new FrameGroup(0);
+            session.addFrameGroup(fg);
+            const inst = new Instance([[1, 1], [2, 2], [3, 3]], 0, 'user', 1);
+            inst.nulledNodes = new Set([1, 2]);
+            fg.addInstance('cam1', inst);
+            session.skeleton.removeNode(1);
+            session.propagateNodeRemoved(1);
+            assertEqual(inst.nulledNodes.size, 1, 'the removed node leaves the set');
+            assertTrue(inst.nulledNodes.has(1), 'and node 2 shifted down to 1 with its points');
+        });
+
         it('createGroupFromUnlinked creates a group', function () {
             const fg = new FrameGroup(0);
             session.addFrameGroup(fg);

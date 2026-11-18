@@ -16,26 +16,23 @@
  * Float64Array or an assignment to the read-only `observedPoints` getter shows
  * up as a TypeError here even when no assertion covers that exact line.
  *
- * Run: node ui-smoke-representation-change.mjs   (spawns its own http.server)
+ * Run: node ui-smoke-representation-change.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8099);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage();
 
     const runtimeErrors = [];
@@ -51,7 +48,7 @@ try {
     page.on('dialog', async d => { await d.accept(''); });
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
 
     // ---------------------------------------------------------------
     // Build a real 3-camera project and run the real triangulation path
@@ -388,9 +385,10 @@ try {
     console.log('\n-- info panel tabs --');
     for (const tab of TABS) {
         const r = await page.evaluate((t) => {
-            const el = document.querySelector(`[data-tab="${t}"]`);
+            const el = document.querySelector(`.panel-rail-btn[data-tab="${t}"]`);
             if (!el) return { missing: true };
-            el.click();
+            // A rail click on the panel already showing HIDES it; only switch.
+            if (el.getAttribute('aria-pressed') !== 'true') el.click();
             const pane = document.getElementById(t);
             return {
                 missing: false,

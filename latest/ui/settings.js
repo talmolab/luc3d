@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=2dc001fe527c';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=a0fe8e5e17b4';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -121,10 +121,14 @@ function loadSettings() {
                 nodeWeights: (parsed.nodeWeights && typeof parsed.nodeWeights === 'object') ? parsed.nodeWeights : {},
                 cameraWeights: (parsed.cameraWeights && typeof parsed.cameraWeights === 'object') ? parsed.cameraWeights : {},
                 trackingThresholds: (parsed.trackingThresholds && typeof parsed.trackingThresholds === 'object') ? parsed.trackingThresholds : {},
+                smoothingParams: (parsed.smoothingParams && typeof parsed.smoothingParams === 'object') ? parsed.smoothingParams : {},
             };
         }
     } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
-    return { triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {}, nodeWeights: {}, cameraWeights: {}, trackingThresholds: {} };
+    return {
+        triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {},
+        nodeWeights: {}, cameraWeights: {}, trackingThresholds: {}, smoothingParams: {},
+    };
 }
 
 function persist() {
@@ -204,6 +208,13 @@ export function setNodeWeights(map) {
     }
     _settings.nodeWeights = next;
     persist();
+}
+
+// Commit SOME nodes' weights (Track All's first-use dialog, Track Frame Range),
+// keeping every other stored override: weights are keyed by node name per
+// browser, so another skeleton's must survive an edit to this one's.
+export function updateNodeWeights(map) {
+    setNodeWeights(Object.assign(getNodeWeights(), map || {}));
 }
 
 // --- Camera tracking inclusion ---------------------------------------------
@@ -322,6 +333,11 @@ const TRACKING_THRESHOLDS = [
         min: 0, max: 1, step: 0.05,
         desc: 'Detection-pool filter: drop instances whose detection score is below this value (only applies when per-instance scores are available). 0 = off; the sleap-3d reference used 0.85.',
     },
+    {
+        id: 'filterMinMeanNodeScore', label: 'Min mean node score (filter)', default: 0,
+        min: 0, max: 1, step: 0.05,
+        desc: 'Detection-pool filter: drop predictions whose mean node score is below this value — the average of the model\'s per-node scores over every node of the skeleton, a missing node counting as 0 (sleap-nn\'s "mean node score"). Applies only to predictions that carry node scores. 0 = off.',
+    },
     // --- CrossViewTracker engine (pose/cross-view-tracker.js) ---
     {
         id: 'corr2dWeight', label: '2D correspondence weight', default: 1,
@@ -359,6 +375,16 @@ const TRACKING_THRESHOLDS = [
         desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03). On: a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. Off (the default): the pre-gate forced assignment — on proofread benchmarks the gate helped SLAP but gave about 6x the ID switches on Mouse-Dyad-10M and 10x on s-DANNCE (#285).',
     },
     {
+        id: 'maxPenalty', label: 'Cap a far node\'s 3D penalty (x 3D weight)', default: 0,
+        min: 0, max: 100, step: 0.5,
+        desc: 'A node\'s 3D matching penalty is never below this many times the 3D correspondence weight, so a node the 2D model put in the wrong place (it triangulates far from the animal, often metres away) counts the same however far off it is, instead of deciding the match alone. 4 = flat beyond 5 x the distance threshold (125 mm at 25). 0 = off (no cap). Opt-in: on 22 proofread SLAP sessions it and the reprojection check below together halved the lasting ID switches, but on the 5-mouse recording they added some (ported from olinesn/campy#85).',
+    },
+    {
+        id: 'matchReproj', label: 'Match against views that agree (px)', default: 0,
+        min: 0, max: 500, step: 1,
+        desc: 'Each animal\'s 3D that the next frame is matched against keeps only the nodes whose views agree within this many pixels: a node over it loses its worst view (down to 2), then is dropped. The 3D written to the groups is unchanged. 20 = the value tried with the cap above. 0 = off. Makes Track All about 60% slower.',
+    },
+    {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'After Track All or Track Frame Range, flag contacts after which each animal\'s body size matches the other\'s before better than its own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
@@ -366,14 +392,14 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~44 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
+        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~43 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
     },
     {
         // A new id, not 'imageCheckThreshold': the score's scale changed (2026-10-09, -4..+4 instead of summed
         // log-probabilities), and an old saved -25 would otherwise be clamped to -4 and flag almost nothing.
-        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -0.8,
+        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -1.2,
         min: -4, max: 0, step: 0.1,
-        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 8 proofread or tail-marked recordings (1 h 45 min), -0.8 caught 10 of 12 real relabels with 2 false marks; -0.5 caught the same with 6; -1.2 caught 8 with none.',
+        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 24 proofread or tail-marked recordings (4 h 30 min), -1.2 caught 22 label changes with no false mark; -1 caught the same 22 with 2; -0.8 with 3. On 193 held-out single-camera recordings, -1.2 caught 31 with none.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
@@ -381,9 +407,32 @@ const TRACKING_THRESHOLDS = [
         desc: 'How many frames per second the image ID-switch check crops and embeds, per animal and camera. Higher catches more but takes proportionally longer (2 = ~10 min for 30 min of 5 animals x 8 cameras, 3 views each, on an M-series Mac).',
     },
     {
+        id: 'imageCheckBackgroundHz', label: 'Image check: crops per second away from contacts', default: 0.1,
+        min: 0, max: 15, step: 0.05,
+        desc: 'The image check embeds every sample its scoring reads — up to 10 s either side of each contact, at the crops-per-second rate — and elsewhere only this many per second, placed where the video is cheapest to decode; it learns what tells the animals apart from both. Lower is faster. On 24 test recordings 0.1 flagged exactly the contacts that embedding everything flags. At or above the crops-per-second rate every sample is embedded (as before).',
+    },
+    {
         id: 'imageCheckMaxViews', label: 'Image check: views per animal', default: 3,
         min: 0, max: 16, step: 1,
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
+    },
+    {
+        // A whole percentage (1-100). New ids, as each time the scale changed (the unreleased
+        // imageCheckMaxGpu/Cpu were 10-100, then imageCheckGpuTime/CpuCores 0.10-1.00), so a value saved on
+        // an earlier scale is never read on this one — a stored 0.5 would otherwise become 1%.
+        // 100 (uncapped) by default: on real data (M5 MacBook Pro, 2026-10-30) the uncapped check, GPU or CPU,
+        // dropped no frame of a 1080p60 YouTube video playing beside it — see MODULES.md ui/image-embedder.js.
+        id: 'imageCheckGpuTimePct', label: 'Image check: GPU time (%)', default: 100,
+        min: 1, max: 100, step: 1,
+        desc: 'The share of time the image check may use the GPU (or WebNN device); the rest is left for other apps.',
+        tip: 'Fraction of GPU time to run image check, idling the remaining time.',
+    },
+    {
+        // a new id again: the unreleased imageCheckCpuCoresPct capped the thread count, not the time
+        id: 'imageCheckCpuTimePct', label: 'Image check: CPU time (%)', default: 100,
+        min: 1, max: 100, step: 1,
+        desc: 'The share of time each of the image check\'s CPU threads may run; the rest is left for other apps.',
+        tip: 'Fraction of CPU time to run image check, idling the remaining time.',
     },
     {
         id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
@@ -392,8 +441,8 @@ const TRACKING_THRESHOLDS = [
     },
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
-        min: 0, max: 500, step: 1,
-        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+        min: 0, max: 640, step: 1,
+        desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Triangulation Wizard draws it.',
     },
 ];
 
@@ -406,12 +455,24 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 // and are intentionally hidden from the UI; they still resolve to their defaults
 // for the benchmark harness.
 const WIZARD_THRESHOLD_IDS = new Set([
-    'filterMinVisibleNodes', 'filterMinInstanceScore',
+    'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
-    'stale', 'matchGate',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'stale', 'matchGate', 'maxPenalty', 'matchReproj',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews',
+    'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
+
+/**
+ * The Tracking Wizard settings shown in its own "ID Switches" section rather than
+ * under Tracking Thresholds, in this order: the two after-tracking checks, then the
+ * image check's options. They configure the checks run AFTER tracking, not the
+ * tracker's matching.
+ */
+export const ID_SWITCH_SETTING_IDS = [
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz',
+    'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
+];
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.
 function clampThreshold(def, v) {
@@ -432,6 +493,7 @@ export function getTrackingThresholdDefs() {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),
             min: t.min, max: t.max, step: t.step, desc: t.desc, kind: t.kind || 'number',
+            tip: t.tip || '',
         };
     });
 }
@@ -453,6 +515,89 @@ export function getTrackingThresholds() {
     return out;
 }
 
+// --- Temporal Smoothing (luc3d #134) ---------------------------------------
+//
+// Hyperparameters for `pose/temporal-smoothing.js`, surfaced in Settings ▸
+// Temporal Smoothing. Deliberately a SEPARATE catalog from TRACKING_THRESHOLDS
+// rather than more entries in it: these are post-triangulation filter
+// parameters, not cross-view tracker knobs, and the Tracking Wizard's
+// "Tracking Thresholds" section renders every threshold the catalog exposes.
+//
+// Note the `smooth*` prefix rather than `filter*`. `filter` is already taken in
+// this file for DETECTION filtering (`filterMinVisibleNodes`,
+// `filterMinInstanceScore`), so a `filter*` smoothing parameter would read as
+// one of those.
+//
+// Both kernels default to 0 = off, matching `reprojErrorThreshold`: shipping
+// this must not change the 3D of any existing project until someone asks for it.
+export const SMOOTHING_PARAMS = [
+    {
+        id: 'smoothMedianWindow', label: 'Median window (frames)', default: 0,
+        min: 0, max: 101, step: 2,
+        desc: 'Stage 1, over time. Replaces each node\'s x, y and z with that node\'s median over this many frames, which removes one-frame spikes without averaging. Coerced to the next odd value so the window stays centered on the frame being written. 0 = off. Note that a median filter erases any feature narrower than about half the window, so keep it short for fast motion.',
+    },
+    {
+        id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0,
+        min: 0, max: 101, step: 2,
+        desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. 3 barely changes anything (each frame keeps about 98% of its own value); 5 is the smallest window that smooths. Coerced to the next odd value. 0 = off.',
+    },
+    {
+        id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5,
+        min: 0, max: 1000, step: 1,
+        desc: 'An absence longer than this splits the trajectory into separate segments, and no window ever spans the break. This is what stops a filter from drawing a straight line through an occlusion or through the frames where the animal left. Shorter absences stay inside a segment as holes, which the filter skips over. Missing points are never filled in either case.',
+    },
+    {
+        id: 'smoothMinSegment', label: 'Minimum segment length (frames)', default: 5,
+        min: 1, max: 1000, step: 1,
+        desc: 'A segment shorter than this is left untouched rather than smoothed from too few samples. The analogue of aniposelib\'s refusal to optimize below 20 finite 3D points.',
+    },
+];
+
+const _smoothById = new Map();
+SMOOTHING_PARAMS.forEach(function (p) { _smoothById.set(p.id, p); });
+
+// Catalog snapshot for the Temporal Smoothing panel, effective values resolved.
+export function getSmoothingParamDefs() {
+    return SMOOTHING_PARAMS.map(function (p) {
+        return {
+            id: p.id, label: p.label, default: p.default,
+            value: getSmoothingParam(p.id),
+            min: p.min, max: p.max, step: p.step, desc: p.desc,
+        };
+    });
+}
+
+// Effective value for one smoothing parameter.
+export function getSmoothingParam(id) {
+    var def = _smoothById.get(id);
+    if (!def) return null;
+    var v = clampThreshold(def, _settings.smoothingParams[id]);
+    return v == null ? def.default : v;
+}
+
+// Effective values as an { id: value } map — the form `smoothSession` reads.
+export function getSmoothingParams() {
+    var out = {};
+    SMOOTHING_PARAMS.forEach(function (p) { out[p.id] = getSmoothingParam(p.id); });
+    return out;
+}
+
+// Commit an { id: value } override map (from the Temporal Smoothing panel's
+// Apply). Clamped to range; entries equal to the default are dropped.
+export function setSmoothingParams(map) {
+    var next = {};
+    if (map && typeof map === 'object') {
+        Object.keys(map).forEach(function (id) {
+            var def = _smoothById.get(id);
+            if (!def) return;
+            var v = clampThreshold(def, map[id]);
+            if (v != null && v !== def.default) next[id] = v;
+        });
+    }
+    _settings.smoothingParams = next;
+    persist();
+}
+
 // Commit an { id: value } override map (from the Tracking Wizard's Apply button).
 // Values are clamped to each threshold's range; entries equal to the default are
 // dropped so the stored set stays minimal.
@@ -468,6 +613,24 @@ export function setTrackingThresholds(map) {
     }
     _settings.trackingThresholds = next;
     persist();
+    for (var i = 0; i < _thresholdListeners.length; i++) {
+        try { _thresholdListeners[i](); } catch (e) { /* ignore */ }
+    }
+}
+
+// Told after every commit of the thresholds, so a control outside Settings can
+// show them (the Triangulate menu's Reprojection error field). A listener that
+// throws must not stop the others.
+var _thresholdListeners = [];
+
+export function onTrackingThresholdsChange(fn) {
+    if (typeof fn === 'function') _thresholdListeners.push(fn);
+}
+
+// Commit SOME thresholds (Track All's first-use dialog: the image check's
+// settings), keeping every other stored override.
+export function updateTrackingThresholds(map) {
+    setTrackingThresholds(Object.assign({}, _settings.trackingThresholds, map || {}));
 }
 
 // --- Keyboard catalog ------------------------------------------------------

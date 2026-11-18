@@ -12,28 +12,25 @@
  *
  * Run: node tests/e2e/settings-wizard-toggles.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8280);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js'); const AS = await import('/ui/app-state.js');
         const K = [[600, 0, 320], [0, 600, 240], [0, 0, 1]];
@@ -72,6 +69,7 @@ try {
     const grey = await page.evaluate((s) => document.querySelector(s).closest('.settings-node-weight-row').classList.contains('settings-view-excluded'), sw('Include view camB in tracking'));
     check(grey, 'switching a camera off greys its row');
     await page.click('.settings-btn-apply');
+    await page.click('.settings-modal-close');
     const applied = await page.evaluate(async () => { const S = await import('/ui/settings.js');
         return { webnn: S.getTrackingThreshold('imageCheckWebNN'), size: S.getTrackingThreshold('autoSwitchCheck'), camB: S.getCameraWeight('camB'), camA: S.getCameraWeight('camA') }; });
     check(applied.webnn === 1 && applied.size === 0 && applied.camB === 0 && applied.camA === 1, `Apply stores the switches as 1 / 0 (${JSON.stringify(applied)})`);

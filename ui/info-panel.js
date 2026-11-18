@@ -1,45 +1,49 @@
 // ui/info-panel.js — info-panel tables (videos, cameras, skeleton, sessions, frame info)
-// Pass 3d-2 extraction. Holds the panel-tab switching, every "populate" call
+// Pass 3d-2 extraction. Holds every "populate" call
 // for the right-hand info panel, the skeleton editor wiring, and the per-frame
 // instance-group / unlinked-instance tables (updateFrameInfo).
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=2dc001fe527c';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=2dc001fe527c';
-import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=2dc001fe527c';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=2dc001fe527c';
-import { isInteractiveClickTarget } from './interaction.js?v=2dc001fe527c';
-import { persistSectionState } from './section-state.js?v=2dc001fe527c';
-import { buildLazySelect } from './lazy-select.js?v=2dc001fe527c';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=2dc001fe527c';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=2dc001fe527c';
+} from '../pose/pose-data.js?v=a0fe8e5e17b4';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=a0fe8e5e17b4';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=a0fe8e5e17b4';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=a0fe8e5e17b4';
+import { isInteractiveClickTarget } from './interaction.js?v=a0fe8e5e17b4';
+import { persistSectionState } from './section-state.js?v=a0fe8e5e17b4';
+import { renderRecordingInfo } from './recording-info.js?v=a0fe8e5e17b4';
+import { buildLazySelect } from './lazy-select.js?v=a0fe8e5e17b4';
+import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=a0fe8e5e17b4';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=a0fe8e5e17b4';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=a0fe8e5e17b4';
+import { createVideoTableCounter } from './video-table-counts.js?v=a0fe8e5e17b4';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=2dc001fe527c';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=2dc001fe527c';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=2dc001fe527c';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=a0fe8e5e17b4';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=a0fe8e5e17b4';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=a0fe8e5e17b4';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=2dc001fe527c';
+} from '../loading/session-loader.js?v=a0fe8e5e17b4';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=2dc001fe527c';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=a0fe8e5e17b4';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=2dc001fe527c';
+} from './identity-assignment.js?v=a0fe8e5e17b4';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=2dc001fe527c';
+} from './sessions-panes.js?v=a0fe8e5e17b4';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -48,7 +52,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=2dc001fe527c';
+} from './timeline-visibility.js?v=a0fe8e5e17b4';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"
@@ -87,170 +91,6 @@ function startInlineNameEntry(selectEl, defaultName, onCommit) {
     input.addEventListener('blur', function () { finish(false); });
     input.addEventListener('click', function (e) { e.stopPropagation(); });
     input.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-}
-
-// ============================================
-// Panel tab switching
-// ============================================
-
-export function setupPanelTabs() {
-    const tabBar = document.querySelector('.panel-tabs');
-    if (!tabBar) return;
-    const tabs = Array.from(tabBar.querySelectorAll('.panel-tab'));
-
-    // --- The bar scrolls sideways; every tab is always IN it -------------
-    // This replaced a "More ▾" dropdown that demoted the tabs which did not
-    // fit. Two tabs visible out of seven meant the panel's own name for the
-    // thing you were looking at was usually behind a control you had to open
-    // first — and WHICH tabs were behind it moved as the panel was resized,
-    // so the bar never looked the same twice. A scroller shows every tab in
-    // one fixed order, and the one you want is a swipe away rather than a
-    // click, a read and a second click.
-
-    // Does the bar overflow, and which way? The fades keyed off these classes
-    // are the ONLY thing saying there is more past an edge: the scrollbar is
-    // suppressed because this strip is ~31px tall and a horizontal bar under
-    // it would sit on top of the active tab's 2px underline.
-    function updateScrollAffordance() {
-        const max = tabBar.scrollWidth - tabBar.clientWidth;
-        // Sub-pixel layout widths leave a fraction of a pixel of "scroll" on
-        // a bar that visibly fits, which would fade an edge for no reason.
-        tabBar.classList.toggle('scroll-left', tabBar.scrollLeft > 1);
-        tabBar.classList.toggle('scroll-right', tabBar.scrollLeft < max - 1);
-    }
-
-    // Bring a tab fully into view, by hand rather than with
-    // `scrollIntoView`: that walks EVERY scrollable ancestor, so revealing a
-    // tab could scroll the app's own layout out from under it. `.panel-tabs`
-    // is `position: relative` in styles.css precisely so that it is each
-    // tab's `offsetParent` and `offsetLeft` is measured in the scroller's
-    // own coordinate space.
-    function scrollTabIntoView(btn) {
-        if (!btn) return;
-        const left = btn.offsetLeft;
-        const right = left + btn.offsetWidth;
-        if (left < tabBar.scrollLeft) tabBar.scrollLeft = left;
-        else if (right > tabBar.scrollLeft + tabBar.clientWidth) {
-            tabBar.scrollLeft = right - tabBar.clientWidth;
-        }
-        updateScrollAffordance();
-    }
-
-    // --- Tab selection -------------------------------------------------
-    function selectTab(tabId) {
-        tabs.forEach(function (t) { t.classList.remove('active'); });
-        document.querySelectorAll('.panel-tab-content').forEach(function (c) {
-            c.classList.remove('active');
-        });
-        const btn = tabs.find(function (t) { return t.getAttribute('data-tab') === tabId; });
-        if (btn) btn.classList.add('active');
-        const target = document.getElementById(tabId);
-        if (target) target.classList.add('active');
-        // A tab selected from code (`openIdSwitchPanel`) is very often one
-        // that is scrolled out of sight, and an active tab nobody can see
-        // reads as no tab being active at all.
-        scrollTabIntoView(btn);
-    }
-
-    tabs.forEach(function (tab) {
-        tab.addEventListener('click', function () {
-            selectTab(tab.getAttribute('data-tab'));
-        });
-    });
-
-    // --- Trackpad ------------------------------------------------------
-    // A trackpad over a 31px strip gives a VERTICAL two-finger swipe, so map
-    // that onto the horizontal axis. It steals nothing: the bar sits outside
-    // `.panel-tab-content`, which is the panel's one vertical scroller, so a
-    // vertical wheel here moved nothing at all before this existed.
-    tabBar.addEventListener('wheel', function (e) {
-        const max = tabBar.scrollWidth - tabBar.clientWidth;
-        if (max <= 0) return;
-        // A sideways swipe is already on the right axis; take whichever one
-        // the gesture is actually on rather than summing the two.
-        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-        if (!delta) return;
-        const before = tabBar.scrollLeft;
-        tabBar.scrollLeft = Math.max(0, Math.min(max, before + delta));
-        updateScrollAffordance();
-        // Swallow the gesture only when it actually moved the bar, so a swipe
-        // that runs past either end is still the page's to handle.
-        if (tabBar.scrollLeft !== before) e.preventDefault();
-    }, { passive: false });
-
-    // --- Click and drag ------------------------------------------------
-    // A few pixels of travel while pressing a tab is a click with a shaky
-    // hand, not a drag. Below this the bar does not move and the tab fires.
-    const DRAG_THRESHOLD_PX = 4;
-    var dragPointerId = null;
-    var dragStartX = 0;
-    var dragStartScroll = 0;
-    var dragging = false;
-    var suppressClick = false;
-
-    tabBar.addEventListener('pointerdown', function (e) {
-        // Touch already gets the browser's own momentum panning out of
-        // `overflow-x: auto`; driving `scrollLeft` on top of it would move
-        // the bar twice per gesture.
-        if (e.pointerType === 'touch' || e.button !== 0) return;
-        // Clear a suppression left behind by a drag that ended without ever
-        // producing a click, so that it cannot eat this press instead.
-        suppressClick = false;
-        dragging = false;
-        dragPointerId = e.pointerId;
-        dragStartX = e.clientX;
-        dragStartScroll = tabBar.scrollLeft;
-    });
-
-    tabBar.addEventListener('pointermove', function (e) {
-        if (dragPointerId === null || e.pointerId !== dragPointerId) return;
-        const dx = e.clientX - dragStartX;
-        if (!dragging && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
-        if (!dragging) {
-            dragging = true;
-            tabBar.classList.add('dragging');
-            // Captured only once the drag is real: capturing on every press
-            // would re-target the plain click that follows one.
-            tabBar.setPointerCapture(dragPointerId);
-        }
-        tabBar.scrollLeft = dragStartScroll - dx;
-        updateScrollAffordance();
-    });
-
-    function endDrag(e) {
-        if (dragPointerId === null || e.pointerId !== dragPointerId) return;
-        if (dragging) {
-            tabBar.releasePointerCapture(dragPointerId);
-            tabBar.classList.remove('dragging');
-            // The pointerup that ends a drag still produces a click on
-            // whatever tab it landed on — dragging the bar across a tab must
-            // not also switch to it.
-            suppressClick = true;
-        }
-        dragging = false;
-        dragPointerId = null;
-    }
-    tabBar.addEventListener('pointerup', endDrag);
-    tabBar.addEventListener('pointercancel', endDrag);
-
-    // Capture phase, so this runs BEFORE the tab's own listener rather than
-    // after it has already switched.
-    tabBar.addEventListener('click', function (e) {
-        if (!suppressClick) return;
-        suppressClick = false;
-        e.stopPropagation();
-        e.preventDefault();
-    }, true);
-
-    // The bar also scrolls without going through any of the above: a
-    // keyboard Tab onto an off-screen button, or a trackpad's own sideways
-    // inertia once `preventDefault` has stopped being called.
-    tabBar.addEventListener('scroll', updateScrollAffordance, { passive: true });
-    // Resizing the panel changes WHETHER it overflows, not just by how much.
-    if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(updateScrollAffordance).observe(tabBar);
-    }
-    updateScrollAffordance();
 }
 
 // ============================================
@@ -313,6 +153,29 @@ function buildVisToggleRow(entry, onChange, opts) {
     return row;
 }
 
+/** What the Visibility tab's Timeline lists were last built from (`populateTimelineVisibility`). */
+var _timelineVisBuilt = { session: undefined, key: null };
+
+/**
+ * Everything a row shows or acts on, for all three lists: name, on/off and
+ * swatch colour. Equal keys (for the same session) build identical rows.
+ * Exported for tests.
+ */
+export function timelineVisibilityKey(camList, trackList, idList) {
+    var parts = [];
+    function add(list) {
+        for (var i = 0; i < list.length; i++) {
+            var e = list[i];
+            parts.push(e.name, e.visible ? '1' : '0', e.color || '');
+        }
+        parts.push('');
+    }
+    add(camList);
+    add(trackList);
+    add(idList);
+    return JSON.stringify(parts);
+}
+
 /**
  * Populate the Visibility-tab Timeline section's three toggle lists:
  *   - Views  (one row per camera)
@@ -333,15 +196,38 @@ export function populateTimelineVisibility(session) {
     var hostIds = document.getElementById('visTimelineIdentities');
     if (!hostCams || !hostTracks || !hostIds) return;
 
+    var camList = session ? getCameraVisibilityList(session) : [];
+    var trackList = session ? getTrackVisibilityList(session) : [];
+    var idList = session ? getIdentityVisibilityList(session) : [];
+    var i;
+    for (i = 0; i < trackList.length; i++) {
+        // `getTrackVisibilityList` returns names in the same order as
+        // `session.tracks`, so the list index is the trackIdx that
+        // `getTrackColor` uses for its palette lookup. Mirrors what the
+        // timeline canvas itself paints next to each track row — the No ID
+        // track's gray, and the palette of the current Tracks / Identity
+        // coloring — and matches the swatch behavior already in place for
+        // identities.
+        trackList[i].color = (session.isNoIdTrack && session.isNoIdTrack(i))
+            ? NULL_ID_COLOR : getTrackColor(i, state.colorByIdentity);
+    }
+
+    // Most calls change nothing (every `updateInfoPanel` makes one): on an
+    // 8-camera project with 863 tracks the rebuild was ~6 ms each, twice at
+    // the end of a Track All. Rows that would come out the same are kept.
+    var key = timelineVisibilityKey(camList, trackList, idList);
+    if (_timelineVisBuilt.session === session && _timelineVisBuilt.key === key &&
+        hostCams.childElementCount === camList.length &&
+        hostTracks.childElementCount === trackList.length &&
+        hostIds.childElementCount === idList.length) return;
+    _timelineVisBuilt.session = session;
+    _timelineVisBuilt.key = key;
+
     hostCams.innerHTML = '';
     hostTracks.innerHTML = '';
     hostIds.innerHTML = '';
 
     if (!session) return;
-
-    var camList = getCameraVisibilityList(session);
-    var trackList = getTrackVisibilityList(session);
-    var idList = getIdentityVisibilityList(session);
 
     function refreshAfterChange() {
         if (timeline && typeof timeline.refreshTracks === 'function') {
@@ -363,7 +249,6 @@ export function populateTimelineVisibility(session) {
         markDirty();
     }
 
-    var i;
     for (i = 0; i < camList.length; i++) {
         hostCams.appendChild(buildVisToggleRow(camList[i], function (name) {
             toggleCameraVisibility(session, name);
@@ -371,15 +256,6 @@ export function populateTimelineVisibility(session) {
         }));
     }
     for (i = 0; i < trackList.length; i++) {
-        // `getTrackVisibilityList` returns names in the same order as
-        // `session.tracks`, so the list index is the trackIdx that
-        // `getTrackColor` uses for its palette lookup. Mirrors what the
-        // timeline canvas itself paints next to each track row — the No ID
-        // track's gray, and the palette of the current Tracks / Identity
-        // coloring — and matches the swatch behavior already in place for
-        // identities.
-        trackList[i].color = (session.isNoIdTrack && session.isNoIdTrack(i))
-            ? NULL_ID_COLOR : getTrackColor(i, state.colorByIdentity);
         hostTracks.appendChild(buildVisToggleRow(trackList[i], function (name) {
             toggleTrackVisibility(session, name);
             refreshAfterChange();
@@ -420,6 +296,15 @@ export function setupVideosTab() {
 
     btnLoad.addEventListener('click', function () { handleLoadVideos(); });
 
+    // The counts skipped while the Videos section was folded or closed are
+    // made when it opens (the rail toggles `.active` on the pane).
+    const pane = document.getElementById('tabVideos');
+    if (pane && typeof MutationObserver !== 'undefined') {
+        new MutationObserver(function () {
+            if (videoCountsStale && isVideosSectionShown()) populateVideosTable();
+        }).observe(pane, { attributes: true, attributeFilter: ['class'] });
+    }
+
     btnRemove.addEventListener('click', function () {
         if (!selectedVideoFile) return;
         var name = selectedVideoFile.assignedCamera || selectedVideoFile.name;
@@ -430,6 +315,27 @@ export function setupVideosTab() {
         // `removeVideoFile` repaints the panel, which clears the selection.
         setStatus('Removed video: ' + name, 'success');
     });
+}
+
+// True while the table's Labeled / Groups / Score cells were left empty
+// because the Videos section was not on screen (`populateVideosTable`).
+let videoCountsStale = false;
+const NO_VIDEO_COUNTS = { labeled: 0, groups: 0, scoreSum: 0, scoreCount: 0 };
+/** Bumped by every rebuild: a count still running for an older table stops. */
+let videoCountJob = 0;
+/** Milliseconds of counting per task (`countVideosInSlices`). */
+const VIDEO_COUNT_SLICE_MS = 12;
+
+/**
+ * Is the Videos section's body on screen: the info panel shown and the pane
+ * expanded in the rail's stack (`.active`, ui/panel-rail.js)? A pane outside
+ * any rail section (no `.panel-section`) counts as shown.
+ */
+function isVideosSectionShown() {
+    if (!isInfoPanelVisible()) return false;
+    const pane = document.getElementById('tabVideos');
+    if (!pane) return true;
+    return !pane.closest('.panel-section') || pane.classList.contains('active');
 }
 
 export function populateVideosTable() {
@@ -464,6 +370,16 @@ export function populateVideosTable() {
     document.getElementById('videosTable').style.display = '';
     empty.style.display = 'none';
 
+    // The per-camera counts read every frame and every group member (~0.5 M
+    // groups on an 8-camera, 108,000-frame project), so they are made only
+    // while the section is on screen; otherwise their cells stay empty and
+    // the section's opening fills them (`setupVideosTab`). One pass for all
+    // the rows, not one per video, run in slices (`countVideosInSlices`).
+    const showCounts = isVideosSectionShown();
+    videoCountsStale = !showCounts;
+    const job = ++videoCountJob;
+    const countCells = [];
+
     videoList.forEach(function (vf, i) {
         const tr = document.createElement('tr');
         tr.addEventListener('click', function () {
@@ -494,42 +410,22 @@ export function populateVideosTable() {
         tdSize.className = 'mono';
         tdSize.textContent = vf.videoWidth + 'x' + vf.videoHeight;
 
-        // Labeled frames count - search using camera name (assignedCamera or name)
-        var camName = vf.assignedCamera || vf.name;
-        let labelCount = 0;
-        let groupCount = 0;
-        let scoreSum = 0;
-        let scoreCount = 0;
-        if (state.session) {
-            for (const [frameIdx, fg] of state.session.frameGroups) {
-                const instances = fg.getInstances(camName);
-                const unlinked = fg.getUnlinkedInstances(camName);
-                if (instances.length > 0 || unlinked.length > 0) labelCount++;
-                for (let j = 0; j < instances.length; j++) {
-                    if (instances[j].score > 0) {
-                        scoreSum += instances[j].score;
-                        scoreCount++;
-                    }
-                }
-            }
-            for (const [frameIdx, groups] of state.session.instanceGroups) {
-                for (const g of groups) {
-                    if (g.getInstance(camName)) groupCount++;
-                }
-            }
-        }
-
+        // Counts by camera name (assignedCamera or name), filled in by
+        // `countVideosInSlices`: '…' while it counts, empty while the section
+        // is not on screen.
+        const pending = showCounts ? '\u2026' : '';
         const tdLabeled = document.createElement('td');
         tdLabeled.className = 'mono';
-        tdLabeled.textContent = labelCount;
+        tdLabeled.textContent = pending;
 
         const tdGroups = document.createElement('td');
         tdGroups.className = 'mono';
-        tdGroups.textContent = groupCount;
+        tdGroups.textContent = pending;
 
         const tdScore = document.createElement('td');
         tdScore.className = 'mono';
-        tdScore.textContent = scoreCount > 0 ? (scoreSum / scoreCount).toFixed(2) : '-';
+        tdScore.textContent = pending;
+        countCells.push({ camName: vf.assignedCamera || vf.name, tdLabeled, tdGroups, tdScore });
 
         tr.appendChild(tdName);
         tr.appendChild(tdPath);
@@ -540,6 +436,31 @@ export function populateVideosTable() {
         tr.appendChild(tdScore);
         tbody.appendChild(tr);
     });
+
+    if (showCounts) countVideosInSlices(job, state.session, countCells);
+}
+
+/**
+ * Count for the Videos table in tasks of `VIDEO_COUNT_SLICE_MS`: the first
+ * slice runs now (a small project is done in it), the rest each in a task of
+ * its own, so a big project's count (~165 ms on the 8-camera, 539,852-group
+ * one) never holds the page in one piece. Stops when a newer rebuild started
+ * (`videoCountJob`) or the session changed; the cells keep '…' until the end.
+ */
+function countVideosInSlices(job, session, cells) {
+    const counter = createVideoTableCounter(session);
+    const slice = function () {
+        if (job !== videoCountJob || state.session !== session) return;
+        if (!counter.step(VIDEO_COUNT_SLICE_MS)) { setTimeout(slice, 0); return; }
+        const counts = counter.result();
+        for (const cell of cells) {
+            const c = counts.get(cell.camName) || NO_VIDEO_COUNTS;
+            cell.tdLabeled.textContent = c.labeled;
+            cell.tdGroups.textContent = c.groups;
+            cell.tdScore.textContent = c.scoreCount > 0 ? (c.scoreSum / c.scoreCount).toFixed(2) : '-';
+        }
+    };
+    slice();
 }
 
 export function showVideoFileDetail(vf) {
@@ -688,6 +609,14 @@ export function populateSkeletonTable() {
     setSectionCount('skeletonNodesCount', sk.nodes.length);
     setSectionCount('skeletonEdgesCount', sk.edges.length);
 
+    // The way back on after "Do not show again" in the edit confirmation. Shown
+    // only while the preference is set — the control that undoes a setting has
+    // to be findable, and the panel the setting governs is where it is looked
+    // for. Driven from here because this is the one refresh point after every
+    // skeleton mutation.
+    const warnNote = document.getElementById('skeletonWarnOffNote');
+    if (warnNote) warnNote.style.display = isSkeletonEditWarningSuppressed() ? '' : 'none';
+
     // Remember this skeleton for the current app session so newly loaded videos
     // inherit it (rememberSkeleton ignores empty skeletons, so viewing a blank
     // session never clobbers a good remembered one). Called here because this is
@@ -712,10 +641,21 @@ export function populateSkeletonTable() {
         nameInput.addEventListener('change', function () {
             const newName = nameInput.value.trim();
             if (!newName) { nameInput.value = sk.nodes[i]; return; }
-            sk.nodes[i] = newName;
-            setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
-            populateSkeletonTable();
-            drawAllOverlays(state.currentFrame);
+            if (newName === sk.nodes[i]) return;
+            // Confirm against what is already annotated. A rename moves no
+            // coordinates, but the node NAME is how every other tool — a
+            // trained model, an analysis script, a SLEAP project — identifies
+            // it, so it is still a skeleton edit and still goes through the
+            // dialog. Cancelling has to put the typed text back, or the field
+            // would keep showing a name the skeleton does not have.
+            confirmSkeletonEdit({ kind: 'rename-node', label: newName }, function (sessions) {
+                sk.nodes[i] = newName;
+                adoptEditedSkeleton(sk, sessions);
+                markDirty();
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
+            nameInput.value = sk.nodes[i];
         });
         tdName.appendChild(nameInput);
 
@@ -726,13 +666,18 @@ export function populateSkeletonTable() {
         delBtn.style.cssText = 'padding:0 5px;font-size:14px;line-height:1;min-width:0;color:var(--error);';
         delBtn.title = 'Remove node';
         delBtn.addEventListener('click', function () {
-            sk.removeNode(i);
-            // One skeleton per project: unify + drop the node's point from every
-            // session's instances.
-            setProjectSkeleton(sk);
-            propagateNodeRemovedAllSessions(i);
-            populateSkeletonTable();
-            drawAllOverlays(state.currentFrame);
+            // The destructive one: this deletes the node's coordinates from
+            // every instance in every session, with no undo.
+            confirmSkeletonEdit({ kind: 'remove-node', label: sk.nodes[i] }, function (sessions) {
+                sk.removeNode(i);
+                // Drop the node's point from every instance of every session on
+                // THIS skeleton — the ones the confirmation counted.
+                adoptEditedSkeleton(sk, sessions);
+                propagateNodeRemovedFromSessions(i, sessions);
+                markDirty();
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
         });
         tdDel.appendChild(delBtn);
 
@@ -759,10 +704,16 @@ export function populateSkeletonTable() {
         delBtn.style.cssText = 'padding:0 5px;font-size:14px;line-height:1;min-width:0;color:var(--error);';
         delBtn.title = 'Remove edge';
         delBtn.addEventListener('click', function () {
-            sk.removeEdge(edgeIdx);
-            setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
-            populateSkeletonTable();
-            drawAllOverlays(state.currentFrame);
+            // An edge moves no coordinates, but it IS part of the skeleton that
+            // gets exported and matched against, so it confirms like the rest.
+            var edgeLabel = sk.nodes[edge[0]] + ' – ' + sk.nodes[edge[1]];
+            confirmSkeletonEdit({ kind: 'remove-edge', label: edgeLabel }, function (sessions) {
+                sk.removeEdge(edgeIdx);
+                adoptEditedSkeleton(sk, sessions);
+                markDirty();
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
         });
         tdDel.appendChild(delBtn);
 
@@ -855,13 +806,81 @@ function showOneSkeletonWarning(onConfirm) {
 
 // After the shared project skeleton gains/loses a node, keep every session's
 // per-session instance point-arrays in sync.
-function propagateNodeAddedAllSessions() {
-    var ss = state.sessions || [];
-    for (var i = 0; i < ss.length; i++) if (ss[i] && ss[i].propagateNodeAdded) ss[i].propagateNodeAdded();
+// `hidden: true` because this is the INTERACTIVE path: the user just added the
+// node and has to be able to reach it. An empty slot draws no marker and so can
+// never be clicked, which would make a node added to an annotated project
+// permanently unplaceable on every instance that already exists. See
+// `Session.propagateNodeAdded`.
+function propagateNodeAddedToSessions(sessions) {
+    var ss = sessions || [];
+    for (var i = 0; i < ss.length; i++) {
+        if (ss[i] && ss[i].propagateNodeAdded) ss[i].propagateNodeAdded({ hidden: true });
+    }
+    dropDerivedTriangulationResults();
 }
-function propagateNodeRemovedAllSessions(nodeIdx) {
-    var ss = state.sessions || [];
+function propagateNodeRemovedFromSessions(nodeIdx, sessions) {
+    var ss = sessions || [];
     for (var i = 0; i < ss.length; i++) if (ss[i] && ss[i].propagateNodeRemoved) ss[i].propagateNodeRemoved(nodeIdx);
+    dropDerivedTriangulationResults();
+}
+
+/**
+ * Point the sessions this edit APPLIES TO at the edited skeleton, and keep it
+ * as the project default for sessions created later.
+ *
+ * Deliberately not `setProjectSkeleton`, which re-points EVERY loaded session.
+ * The confirmation counts only the sessions already on this skeleton and names
+ * the rest separately (`#skeletonEditOtherSkeletons`), so re-pointing one of
+ * those here would discard the skeleton it was loaded with and leave its
+ * instances at a node count the new skeleton does not describe — a dialog
+ * describing one edit while a different one happens. A project really can hold
+ * two shapes: `promptImportSkeletonForAllSessions` lets the user Skip.
+ *
+ * `sessions` comes from `confirmSkeletonEdit`, which takes it BEFORE the
+ * caller mutates the skeleton — the only moment the question is answerable.
+ *
+ * @param {Skeleton} sk
+ * @param {Session[]} sessions
+ */
+function adoptEditedSkeleton(sk, sessions) {
+    rememberSkeleton(sk);
+    var ss = sessions || [];
+    for (var i = 0; i < ss.length; i++) if (ss[i]) ss[i].skeleton = sk;
+}
+
+/**
+ * Drop every frame's `triangulationResults` entry after a skeleton node edit.
+ *
+ * That map is a per-frame SNAPSHOT of the last solve — each group's `points3d`,
+ * `reprojections` and per-node `errors` — and a node edit has just re-shaped
+ * every one of those arrays, so each entry now describes a project at the
+ * previous node count. It is DROPPED rather than re-shaped, exactly as
+ * `ui/origin-rebase.js`'s `finishRebase` drops it after the 3D moves: the draw
+ * path re-derives a frame's entry when it is shown
+ * (`ui/rendering.js`'s `fillLazyReprojections`).
+ *
+ * Without this the stale entry SURVIVES and that fill CONCATENATES the fresh
+ * one onto it, so the frame holds two records of every group — one at the old
+ * node count, one at the new. The symptom is in the info panel's per-instance
+ * node breakdown, which renders one table per entry: on the real
+ * `slap_GT/10072022145420` session, four animals came out as EIGHT tables, each
+ * animal listed twice with the first copy stopping at the old node count.
+ *
+ * Both maps go, because a skeleton is project-wide: `state.triangulationResults`
+ * is the live one and each session keeps its own across pane switches
+ * (`ui/sessions-panes.js`).
+ *
+ * Only the node edits need this. Renaming a node and adding or removing an edge
+ * leave every point array exactly as it was, so nothing in the snapshot goes
+ * stale — a rename only changes the label the panel prints beside the same
+ * column.
+ */
+function dropDerivedTriangulationResults() {
+    if (state.triangulationResults) state.triangulationResults.clear();
+    var ss = state.sessions || [];
+    for (var i = 0; i < ss.length; i++) {
+        if (ss[i] && ss[i].triangulationResults) ss[i].triangulationResults.clear();
+    }
 }
 
 // After a MULTI-SESSION project loads, ask the user to import ONE skeleton file
@@ -928,6 +947,17 @@ export function setupSkeletonEditing() {
     persistSectionState('skeletonNodesSection', SKELETON_SECTIONS_KEY);
     persistSectionState('skeletonEdgesSection', SKELETON_SECTIONS_KEY);
 
+    // Undo "Do not show again". Wired at SETUP, like the Videos tab's two
+    // buttons and for the same reason: a handler assigned inside a per-session
+    // rebuild is missing exactly when there is no session yet.
+    const warnOnBtn = document.getElementById('btnSkeletonWarnOn');
+    if (warnOnBtn) warnOnBtn.addEventListener('click', function () {
+        setSkeletonEditWarningSuppressed(false);
+        const note = document.getElementById('skeletonWarnOffNote');
+        if (note) note.style.display = 'none';
+        setStatus('Skeleton edits will ask for confirmation again', 'success');
+    });
+
     // Add Node button
     document.getElementById('btnAddNode').addEventListener('click', function () {
         ensureSession();
@@ -939,14 +969,20 @@ export function setupSkeletonEditing() {
             setStatus('Node "' + name + '" already exists', 'warning');
             return;
         }
-        state.session.skeleton.addNode(name);
-        // One skeleton per project: unify the reference across all sessions and
-        // extend every session's instance point-arrays for the new node.
-        setProjectSkeleton(state.session.skeleton);
-        propagateNodeAddedAllSessions();
-        input.value = '';
-        populateSkeletonTable();
-        drawAllOverlays(state.currentFrame);
+        confirmSkeletonEdit({ kind: 'add-node', label: name }, function (sessions) {
+            state.session.skeleton.addNode(name);
+            // Extend the instance point-arrays of every session on THIS
+            // skeleton — the ones the confirmation counted. `hidden` places the
+            // node beside the animal and switches it off on hand-labelled
+            // instances, so the node the user just added is reachable instead
+            // of being an invisible empty slot.
+            adoptEditedSkeleton(state.session.skeleton, sessions);
+            propagateNodeAddedToSessions(sessions);
+            markDirty();
+            input.value = '';
+            populateSkeletonTable();
+            drawAllOverlays(state.currentFrame);
+        });
     });
 
     // Allow Enter key in the node name input
@@ -963,13 +999,28 @@ export function setupSkeletonEditing() {
         const src = parseInt(document.getElementById('edgeSrcSelect').value, 10);
         const dst = parseInt(document.getElementById('edgeDstSelect').value, 10);
         if (isNaN(src) || isNaN(dst)) return;
-        if (!state.session.skeleton.addEdge(src, dst)) {
+        var sk = state.session.skeleton;
+        // Validate BEFORE confirming: a duplicate or self-edge is a no-op, and
+        // asking the user to approve something that then does nothing would
+        // make the dialog read as noise.
+        if (src === dst || sk.nodes[src] == null || sk.nodes[dst] == null ||
+            sk.edges.some(function (e) {
+                return (e[0] === src && e[1] === dst) || (e[0] === dst && e[1] === src);
+            })) {
             setStatus('Cannot add edge: duplicate or same node', 'warning');
             return;
         }
-        setProjectSkeleton(state.session.skeleton); // one skeleton per project
-        populateSkeletonTable();
-        drawAllOverlays(state.currentFrame);
+        var edgeLabel = sk.nodes[src] + ' – ' + sk.nodes[dst];
+        confirmSkeletonEdit({ kind: 'add-edge', label: edgeLabel }, function (sessions) {
+            if (!sk.addEdge(src, dst)) {
+                setStatus('Cannot add edge: duplicate or same node', 'warning');
+                return;
+            }
+            adoptEditedSkeleton(sk, sessions);
+            markDirty();
+            populateSkeletonTable();
+            drawAllOverlays(state.currentFrame);
+        });
     });
 
     // Save Skeleton button
@@ -1046,7 +1097,8 @@ export function exportSkeletonJSON(skeleton) {
 
 export function updateInfoPanel() {
     // Collapsed panel: skip the whole rebuild. This is not a cheap refresh —
-    // `populateVideosTable` walks every frame of the session per video row,
+    // `populateVideosTable` walks every frame and group member (while the
+    // Videos section is open),
     // and `updateFrameInfo` below rebuilds the instance/reprojection tables
     // with a fresh <select> per row. All of it is a stateless full rebuild
     // from `state`, so one call from `refreshInfoPanelAfterShow` (ui-wiring)
@@ -1065,6 +1117,7 @@ export function updateInfoPanel() {
         return;
     }
 
+    renderRecordingInfo(state.session);
     if (!state.session) {
         document.getElementById('infoCameras').textContent = '-';
         document.getElementById('infoSkeleton').textContent = '-';

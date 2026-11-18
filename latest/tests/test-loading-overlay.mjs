@@ -14,8 +14,8 @@
  *   - `showLoading` / `hideLoading` hide the bar again;
  *   - the second line estimates the time remaining from the recent rate, says
  *     "Estimating…" until it has data, resets per stage, and clears at 100%;
- *   - `createProgressPacer().due()` is clock-gated, and `yield()` resolves with
- *     no rAF / document (the Node path);
+ *   - `createProgressPacer().due()` is clock-gated, and `yield()` never waits on
+ *     an animation frame unless the page is visible (Node, a hidden tab);
  *   - the sweep reports monotonic positions that end exactly at `total`, in both
  *     branches, even when most frames have no data.
  *
@@ -224,10 +224,35 @@ group('createProgressPacer');
     while (performance.now() - t < 45) { /* spin */ }
     ok(p.due(), 'due once the interval has passed');
     ok(!p.due(), 'due() resets the clock');
-    const y0 = performance.now();
-    await p.yield();
-    ok(performance.now() - y0 < 50, 'yield() resolves promptly without rAF (Node / hidden tab path)');
-    ok(!p.due(), 'the interval restarts after a yield');
+
+    // yield() must not wait for an animation frame unless the page is visible: a
+    // hidden tab suspends rAF, so a yield that asked for one would sit on the
+    // 100 ms fallback timer, which a background tab throttles to >= 1 s. Pinned by
+    // mechanism — a rAF stub that records calls and never fires — not by elapsed
+    // time, which flaked under CPU load. The 5 s limit only turns a hang into a
+    // failure.
+    const settle = (promise) => {
+        let timer;
+        const hang = new Promise((r) => { timer = setTimeout(() => r('timed out'), 5000); });
+        return Promise.race([promise.then(() => 'resolved'), hang]).finally(() => clearTimeout(timer));
+    };
+    const rafCalls = [];
+    globalThis.requestAnimationFrame = (cb) => rafCalls.push(cb);
+    try {
+        eq(await settle(p.yield()), 'resolved', 'yield() resolves with no visibilityState (the Node path)');
+        ok(!p.due(), 'the interval restarts after a yield');
+        document.visibilityState = 'hidden';
+        eq(await settle(p.yield()), 'resolved', 'yield() resolves in a hidden tab, whose rAF never fires');
+        eq(rafCalls.length, 0, 'neither path asked for an animation frame');
+        // Control: a visible page DOES ask for one (so the 0 above is not
+        // vacuous), and resolves on the fallback timer when it never comes.
+        document.visibilityState = 'visible';
+        eq(await settle(p.yield()), 'resolved', 'a visible page resolves on the fallback timer when rAF never fires');
+        eq(rafCalls.length, 1, 'a visible page asks for an animation frame (control)');
+    } finally {
+        delete globalThis.requestAnimationFrame;
+        delete document.visibilityState;
+    }
 }
 
 // ---------------------------------------------------------------------------

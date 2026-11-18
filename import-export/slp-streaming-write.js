@@ -53,10 +53,12 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=2dc001fe527c';
-import { points3dNodeCount } from '../pose/pose-data.js?v=2dc001fe527c';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=2dc001fe527c';
-import { writePlaneMetadata } from './plane-metadata.js?v=2dc001fe527c';
+import { _buildSioPoints } from './file-io.js?v=a0fe8e5e17b4';
+import { points3dNodeCount } from '../pose/pose-data.js?v=a0fe8e5e17b4';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=a0fe8e5e17b4';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=a0fe8e5e17b4';
+import { writePlaneMetadata } from './plane-metadata.js?v=a0fe8e5e17b4';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=a0fe8e5e17b4';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -192,12 +194,19 @@ export function createProjectWriterContext() {
  * clear `frameGroups`/`instanceGroups` immediately after this returns; only
  * the small returned result needs to survive until pass 2.
  *
+ * `onProgress` (optional) is the Save progress card's hook — see
+ * `buildSessionSlpBytesStreaming`. Called as `onProgress('refs', done, total)`
+ * over the session's grouped frames, at the loop's existing yield points; a
+ * promise it returns is awaited.
+ *
  * @returns {{ sioSession: Object, overlayLfs: Array, cam: Array<{name:string, videoIndex:number, trackBase:number}> }}
  */
-export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
+export async function buildSessionRefGraph(session, views, videoFiles, ctx, onProgress) {
     var SIO = window.SleapIO;
     var loader = session.lazyLoader;
     if (!loader) throw new Error('buildSessionRefGraph requires a lazy session with a lazyLoader');
+    // Paint the step before the synchronous pruning / overlay / row-map work below.
+    if (onProgress) await onProgress('refs', 0, session.instanceGroups.size);
     // Reopened single-file project (`SioLazyLoader.openProjectSlp`): every camera
     // shares ONE `_lazyDataStore`, so its tracks + frames must be added/appended
     // exactly ONCE (not once per camera) or the re-save duplicates them.
@@ -390,11 +399,13 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     sioSession.metadata.lucid = {
         sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
-        frameIdentityMap: session.frameIdentityMap ? session.exportFrameIdentityEntries() : [],
+        frameIdentityMap: [],   // filled by writeFrameIdentityMetadata below
         identities: sessIdentitiesJson,
         skeleton: { name: session.skeleton.name || 'skeleton', nodes: session.skeleton.nodes, edges: session.skeleton.edges },
         tracks: session.tracks,
     };
+    // `frameIdentityMap`, minus what the instance groups already imply.
+    writeFrameIdentityMetadata(sioSession.metadata.lucid, session);
     // Session-scoped Visibility-panel state — each key omitted when it is at its
     // default, so untouched projects serialize byte-identically. Must stay in
     // lockstep with the eager writer in `file-io.js` (both call the one helper).
@@ -402,6 +413,8 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     // Define Planes state — the streaming mirror of the eager writer in
     // `file-io.js` (both call the one helper, so they cannot drift).
     writePlaneMetadata(sioSession.metadata.lucid, session);
+    // Temporal Smoothing's last run, only while something is smoothed.
+    writeSmoothingMetadata(sioSession.metadata.lucid, session);
     for (var av = 0; av < sioCameras.length; av++) sioSession.addVideo(ctx.allVideos[sessionVideoIndices[av]], sioCameras[av]);
 
     var camByName = new Map();
@@ -434,9 +447,12 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     function buildOverlayInstance(inst, trackBase, camName, frameIdx) {
         var isPredicted = inst.type !== 'user';
         var perPointScore = isPredicted ? (inst.score != null ? inst.score : 1.0) : undefined;
-        var pts = _buildSioPoints(inst, numNodes, perPointScore, null, function (k) {
-            return session.predictedNodeScore(camName, frameIdx, inst, k);
-        });
+        // The store row is resolved once per instance, not per node (same
+        // answers as `predictedNodeScore`).
+        var nodeScore = typeof session.predictedNodeScorer === 'function'
+            ? session.predictedNodeScorer(camName, frameIdx, inst)
+            : function (k) { return session.predictedNodeScore(camName, frameIdx, inst, k); };
+        var pts = _buildSioPoints(inst, numNodes, perPointScore, null, nodeScore);
         var track = null;
         if (inst.trackIdx != null && inst.trackIdx >= 0) {
             var combinedIdx = trackBase + inst.trackIdx;
@@ -583,6 +599,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     var groupedFrameIdxs = Array.from(session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
     for (var gf = 0; gf < groupedFrameIdxs.length; gf++) {
         if (gf % 2000 === 0) {
+            if (onProgress) await onProgress('refs', gf, groupedFrameIdxs.length);
             await yieldToBrowser();
         }
         var frameIdx = groupedFrameIdxs[gf];
@@ -627,6 +644,10 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
             // accepts boxed rows, so don't reject them here.
             if (group.points3d && group.points3d.length > 0) {
                 instance3d = new SIO.Instance3D({ points: group.points3d, skeleton: skeleton });
+                // Temporal Smoothing's source (smoothing-metadata.js): the vendored
+                // writer stores it row-parallel to `points_3d`.
+                var unsmoothed = smoothingSourceFor(group);
+                if (unsmoothed) instance3d.lucidUnsmoothed = unsmoothed;
             }
             var identity = undefined;
             if (group.identityId != null && group.identityId >= 0) identity = lucidIdToSioId.get(group.identityId);
@@ -656,6 +677,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
         }));
     }
 
+    if (onProgress) await onProgress('refs', groupedFrameIdxs.length, groupedFrameIdxs.length);
     console.log('[slp-streaming-write] session', session.name || '(unnamed)', '- ref resolution:',
         _refStats.total, 'refs,', _refStats.tagged, 'via _rawInstIndex,', _refStats.fallback,
         'via trackIdx fallback (', _refStats.ambiguous, 'of those genuinely ambiguous — >1 raw instance, no track match; would have silently defaulted to instIndex=0 before this fix)');
@@ -752,11 +774,21 @@ function _remapSharedStoreVideos(store, headerByNative) {
  * (`refGraphResult.cam[i].videoIndex`/`.trackBase`). Requires
  * `session.lazyLoader` to be (re)opened — Track All/Triangulate All are NOT
  * needed here; `appendStore` reads straight from the columnar store.
+ *
+ * `onProgress` (optional; the Save progress card's hook, see
+ * `buildSessionSlpBytesStreaming`) is called as
+ * `onProgress('frames', doneRows, totalRows, 'camera frames')` over the store
+ * frame rows (one per camera per frame) being
+ * appended, after each of the writer's windows, and awaited — through the
+ * vendored writer's `appendStoreAsync` (LUCID local patch, save progress),
+ * which writes exactly what `appendStore` does. Without it the append runs
+ * without a break, as before. Async either way: callers must `await` it.
  */
-export function streamSessionIntoWriter(writer, session, refGraphResult) {
+export async function streamSessionIntoWriter(writer, session, refGraphResult, onProgress) {
     var loader = session.lazyLoader;
     if (!loader) throw new Error('streamSessionIntoWriter requires session.lazyLoader to be (re)opened');
     if (refGraphResult.overlayLfs.length > 0) writer.appendFrames(refGraphResult.overlayLfs);
+    var appends = [];   // [store, appendStore opts], in write order
     if (loader._sharedStore) {
         // Reopened single-file project: ONE store holds every camera's frames
         // with their NATIVE video ids. Append it ONCE — appending per camera
@@ -785,28 +817,72 @@ export function streamSessionIntoWriter(writer, session, refGraphResult) {
                         Array.from(headerByNative.entries()).map(function (e) { return e[0] + '->' + e[1]; }).join(', '));
                     appendTarget = _remapSharedStoreVideos(sStore, headerByNative);
                 }
-                writer.appendStore(appendTarget, { videoIndexOffset: 0, trackOffset: anyCam.trackBase });
+                appends.push([appendTarget, { videoIndexOffset: 0, trackOffset: anyCam.trackBase }]);
             }
         }
+    } else {
+        for (var i = 0; i < refGraphResult.cam.length; i++) {
+            var camInfo = refGraphResult.cam[i];
+            var labels = loader.labelsByCam.get(camInfo.name);
+            var store = labels && labels._lazyDataStore;
+            if (!store) continue;
+            appends.push([store, { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase }]);
+        }
+    }
+    if (!onProgress || typeof writer.appendStoreAsync !== 'function') {
+        for (var a = 0; a < appends.length; a++) writer.appendStore(appends[a][0], appends[a][1]);
         return;
     }
-    for (var i = 0; i < refGraphResult.cam.length; i++) {
-        var camInfo = refGraphResult.cam[i];
-        var labels = loader.labelsByCam.get(camInfo.name);
-        var store = labels && labels._lazyDataStore;
-        if (!store) continue;
-        writer.appendStore(store, { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase });
+    var rowsOf = function (st) { var fd = st.framesData || {}; return (fd.frame_id || fd.video || []).length; };
+    var total = 0;
+    for (var t = 0; t < appends.length; t++) total += rowsOf(appends[t][0]);
+    var before = 0;
+    await onProgress('frames', 0, total, 'camera frames');
+    for (var b = 0; b < appends.length; b++) {
+        await writer.appendStoreAsync(appends[b][0], appends[b][1], function (done) {
+            return onProgress('frames', before + done, total, 'camera frames');
+        });
+        before += rowsOf(appends[b][0]);
     }
 }
 
-/** Finalize the writer (bytes in memory, or streamed to `opts.sink`). */
+/**
+ * Finalize the writer (bytes in memory, or streamed to `opts.sink`). A sink
+ * with `setTotalBytes(n)` is told the finished file's size before its first
+ * write (File ▸ Save's disk bar): the vendored `writeToSink` finalizes the
+ * in-memory file and only then streams it, so its size is known by then.
+ */
 export async function finalizeProjectWriter(writer, opts) {
     opts = opts || {};
     if (opts.sink) {
-        await writer.writeToSink(opts.sink, { chunkBytes: opts.chunkBytes });
+        await writer.writeToSink(sinkReportingTotal(writer, opts.sink), { chunkBytes: opts.chunkBytes });
         return null;
     }
     return writer.close();
+}
+
+/**
+ * `sink`, unchanged, unless it has `setTotalBytes`: then a wrapper that calls
+ * it once, at the first write, with the size of the writer's finished
+ * in-memory file (h5wasm MEMFS `stat`). A failed stat reports nothing (the
+ * sink then counts bytes without a total).
+ */
+function sinkReportingTotal(writer, sink) {
+    if (typeof sink.setTotalBytes !== 'function') return sink;
+    var told = false;
+    var out = {
+        write: function (chunk) {
+            if (!told) {
+                told = true;
+                var size = NaN;
+                try { size = Number(writer.module.FS.stat(writer.memPath).size); } catch (e) { /* no total */ }
+                if (size > 0) sink.setTotalBytes(size);
+            }
+            return sink.write(chunk);
+        },
+    };
+    if (sink.close) out.close = function () { return sink.close(); };
+    return out;
 }
 
 /**
@@ -817,9 +893,20 @@ export async function finalizeProjectWriter(writer, opts) {
  * @param {Object} session       LUCID Session (must have `.lazyLoader`).
  * @param {Array}  views         state.views (for video dimensions).
  * @param {Array}  videoFiles    state.videoFiles (for filenames).
- * @param {Object} [opts]        { sink, chunkBytes } — if `sink` is given, streams
- *                               the output via `writeToSink` and resolves to null;
- *                               otherwise resolves to the Uint8Array.
+ * @param {Object} [opts]        { sink, chunkBytes, onProgress } — if `sink` is
+ *                               given, streams the output via `writeToSink` and
+ *                               resolves to null; otherwise resolves to the
+ *                               Uint8Array.
+ *
+ * `opts.onProgress(stage, done, total)` drives the Save progress card
+ * (`import-export/save-load.js`), in order: `'refs'` (counted, over grouped
+ * frames — `buildSessionRefGraph`), `'header'` (the 3D groups and points,
+ * `/session_data`), `'frames'` (the 2D poses, counted over store frame rows —
+ * `streamSessionIntoWriter`) and `'finish'` (closing the file). `'header'` and
+ * `'finish'` run inside the vendored writer without a break, so they are
+ * reported once, uncounted (`done`/`total` undefined), as they start. The
+ * hook's returned promise is awaited, which is what lets the card paint each
+ * step BEFORE the main thread is held.
  * @returns {Promise<Uint8Array|null>}
  */
 export async function buildSessionSlpBytesStreaming(session, views, videoFiles, opts) {
@@ -836,14 +923,17 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         _tPhase = now;
     };
 
+    var onProgress = (opts && opts.onProgress) || null;
     var ctx = createProjectWriterContext();
-    var refGraph = await buildSessionRefGraph(session, views, videoFiles, ctx);
+    var refGraph = await buildSessionRefGraph(session, views, videoFiles, ctx, onProgress);
     _lap('1/4 buildSessionRefGraph');
+    if (onProgress) await onProgress('header');
     var writer = await openProjectWriter(ctx, [refGraph.sioSession], (opts || {}).provenance);
     _lap('2/4 openProjectWriter (writes /session_data + sessions_json)');
     try {
-        streamSessionIntoWriter(writer, session, refGraph);
+        await streamSessionIntoWriter(writer, session, refGraph, onProgress);
         _lap('3/4 streamSessionIntoWriter (2D frames)');
+        if (onProgress) await onProgress('finish');
         var out = await finalizeProjectWriter(writer, opts);
         _lap('4/4 finalizeProjectWriter (flush to disk)');
         return out;

@@ -3,17 +3,18 @@
  * and the animal count it edits being saved with the project.
  *
  * The animal count every tracking run uses was asked for once, in a native
- * `prompt()` on the first Track Frame / Track All, and then shown nowhere: a
+ * `prompt()` on the first Track Frame / Track All (now the first-use dialog,
+ * ui/track-setup-modal.js, which also shows the node weights), and then shown nowhere: a
  * user who forgot what they typed had no way to find out short of re-typing it
  * into the Track Frame Range dialog. The field shows it and edits it, and the
  * count now lives on the SESSION (`Session.numAnimals`), saved in the `.slp`.
  *
  * Asserted, through the real app:
- *  1. It sits FIRST in the Track group, left of Track Frame on the same row —
- *     after Track All it read as "Track All Animals" — and starts blank, with
- *     an "auto" placeholder.
- *  2. The first-use prompt still fires once, and its answer appears in the
- *     field. A second run does not prompt.
+ *  1. It sits in the Track menu (hover "Track"), below the run items (This
+ *     frame / All frames / Frame range…), and starts blank, with an "auto"
+ *     placeholder.
+ *  2. The first-use dialog still opens once, and its answer appears in the
+ *     field. A second run does not ask.
  *  3. Typing a count and pressing Enter sets it, hands focus back (so the
  *     shortcuts work again), marks the project unsaved (it is project state
  *     now), and is what Track All uses — read off the summary box's "for N
@@ -23,62 +24,72 @@
  *  5. Esc throws away what was typed, and changes nothing.
  *  6. App shortcuts do not fire while typing in it — `p`, which is first
  *     shown to toggle Predictions from outside the field.
- *  7. Blank is auto-detect, and it is an ANSWER: the prompt does not come back
+ *  7. Blank is auto-detect, and it is an ANSWER: the dialog does not come back
  *     on the next run. Before this a blank answer re-prompted on every run.
- *     Checked on a fresh page, through the prompt itself.
+ *     Checked on a fresh page, through the dialog itself.
  *  8. The Track Frame Range dialog opens with the field's count and writes its
  *     own back into the field.
  *  9. The count is PER SESSION and the field follows the active one: a second
- *     session starts unanswered (blank, and Track Frame prompts — pre-filled
+ *     session starts unanswered (blank, and Track Frame asks — pre-filled
  *     with the last count given, so the same animals are one Enter), and
  *     switching back shows the first session's count again.
  * 10. Saved with the project: a count typed into the field survives a real
  *     save, a fresh page and a reopen through File > Load Project...
  *     (`handleLoadProject`). The reopened project is NOT dirty, shows the count
- *     in the field, and Track All runs with it without a prompt.
+ *     in the field, and Track All runs with it without asking.
  *
  * The 1440px fit is asserted by toolbar-3d-toggle-button.mjs §7. The format
  * itself (both writers, "auto", nothing written for a never-asked session) is
  * pinned by visibility-settings-roundtrip.mjs §7–9.
  *
- * Negative controls, run once: with the prompt gated on the count being null
+ * Negative controls, run once: with the dialog gated on the count being null
  * again (the old rule) §7 and §8 fail; without the `badInput` guard the stray
  * "e" is read as auto-detect and §4 and §5 fail; with `numAnimals` dropped
- * from the metadata writer §10 fails (the reopened session prompts).
+ * from the metadata writer §10 fails (the reopened session asks).
  *
- * Run: node tests/e2e/toolbar-animal-count.mjs   (spawns its own http.server)
+ * Run: node tests/e2e/toolbar-animal-count.mjs   (serves the app itself)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8343);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 const NF = 30;
 
 // A fresh app with a trackable two-animal session installed (the
-// track-marks-dirty.mjs fixture). Every native dialog is answered from
-// `answers` in order and recorded with its pre-filled value, so a prompt that
-// should not fire is caught.
+// track-marks-dirty.mjs fixture). Every first-use dialog (the animal count +
+// node weights) is answered from `answers` in order — Cancel once they run out
+// — and recorded with its text and pre-filled count, so one that should not
+// open is caught (`shown`). No native dialog should open at all any more.
 async function openApp(browser, answers, opts) {
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
-    const dialogs = [];
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('dialog', async d => {
-        dialogs.push({ message: d.message(), def: d.defaultValue() });
-        if (d.type() === 'prompt' && answers.length) await d.accept(answers.shift());
-        else await d.dismiss();
+        console.log('  [unexpected native dialog]', d.message()); fails++;
+        await d.dismiss();
     });
+    await page.addInitScript((answers) => {
+        window.__setupDialogs = [];
+        new MutationObserver(() => {
+            const modal = document.querySelector('.track-setup-modal');
+            if (!modal || modal.dataset.seen) return;
+            modal.dataset.seen = '1';
+            const input = modal.querySelector('#trackSetupAnimals');
+            window.__setupDialogs.push({ message: modal.textContent, def: input.value });
+            if (!answers.length) { modal.querySelector('#trackSetupCancel').click(); return; }
+            input.value = answers.shift();
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            modal.querySelector('#trackSetupContinue').click();
+        }).observe(document, { childList: true, subtree: true });
+    }, answers);
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
     await page.evaluate(async ({ NF, install }) => {
         const { Skeleton, Camera, Instance, FrameGroup, Session } = await import('/pose/pose-data.js');
         const AS = await import('/ui/app-state.js');
@@ -120,8 +131,11 @@ async function openApp(browser, answers, opts) {
         };
         if (install) window.__activate([window.__mkSession('AnimalCount')], 0);
     }, { NF, install: !(opts && opts.empty) });
-    return { page, dialogs };
+    return { page };
 }
+
+// Every first-use dialog this app's page has opened so far.
+const shown = (app) => app.page.evaluate(() => window.__setupDialogs.slice());
 
 const read = (page) => page.evaluate(async () => {
     const tracker = await import('/pose/tracker.js');
@@ -141,7 +155,7 @@ const clean = (page) => page.evaluate(async () => (await import('/import-export/
 
 // Replace the field's contents the way a user would, then press `key`.
 async function typeInto(page, text, key) {
-    await page.click('#tbNumAnimals');
+    await page.hover('#tbTrackAll'); await page.click('#tbNumAnimals');   // in the Track menu
     await page.keyboard.press('ControlOrMeta+a');
     await page.keyboard.press('Backspace');
     if (text) await page.keyboard.type(text);
@@ -162,41 +176,45 @@ async function trackAllAnimalsRow(page) {
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
 
     // ------------------------------------------------------------ 1. placement
     const A = await openApp(browser, ['4']);
     const page = A.page;
+    const hiddenBefore = !(await page.locator('#tbNumAnimals').isVisible());
+    await page.hover('#tbTrackAll');
+    await page.waitForTimeout(200);
+    const shownOnHover = await page.locator('#tbNumAnimals').isVisible();
     const geo = await page.evaluate(() => {
         const f = document.getElementById('tbNumAnimals');
         const label = f.closest('label');
-        const tf = document.getElementById('tbTrackFrame');
-        const fr = f.getBoundingClientRect(), lr = label.getBoundingClientRect(), tr = tf.getBoundingClientRect();
+        const menu = document.querySelector('#trackDropdown .tri-dropdown-menu');
+        const range = document.getElementById('tbTrackFrameRange');
         return {
-            sameGroup: label.closest('.toolbar-group') === tf.closest('.toolbar-group'),
-            firstInGroup: label.closest('.toolbar-group').firstElementChild === label,
-            leftOfTrackFrame: lr.right <= tr.left,
-            sameRow: Math.abs((fr.top + fr.bottom) / 2 - (tr.top + tr.bottom) / 2) < 2,
+            inTrackMenu: !!menu && menu.contains(label),
+            belowRunItems: range.getBoundingClientRect().bottom <= label.getBoundingClientRect().top,
             labelText: label.textContent.trim(),
             placeholder: f.placeholder,
             value: f.value,
         };
     });
     console.log('1. placement');
-    check(geo.sameGroup && geo.firstInGroup, 'the field is first in the Track group');
-    check(geo.leftOfTrackFrame && geo.sameRow, 'it sits left of Track Frame, on the same row');
+    check(hiddenBefore && shownOnHover, 'the field is tucked in the Track menu and shows on hover');
+    check(geo.inTrackMenu && geo.belowRunItems, 'below This frame / All frames / Frame range…');
     check(geo.labelText === 'Animals', `labelled "${geo.labelText}"`);
     check(geo.value === '' && geo.placeholder === 'auto', `starts blank with an "auto" placeholder (value "${geo.value}")`);
 
-    // ------------------------------------------------- 2. the prompt fills it
-    console.log('2. the first-use prompt');
-    await page.click('#tbTrackFrame');
+    // ------------------------------------------------- 2. the dialog fills it
+    console.log('2. the first-use dialog');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
     let r = await read(page);
-    check(A.dialogs.length === 1 && /Number of animals/.test(A.dialogs[0].message),
-        `Track Frame prompts once on first use (${A.dialogs.length} dialog(s))`);
-    check(r.count === 4 && r.value === '4', `the prompt's answer shows in the field ("${r.value}")`);
-    await page.click('#tbTrackFrame');
-    check(A.dialogs.length === 1, `a second Track Frame does not prompt (${A.dialogs.length} dialog(s))`);
+    let dl = await shown(A);
+    check(dl.length === 1 && /Number of animals/.test(dl[0].message),
+        `Track Frame asks once on first use (${dl.length} dialog(s))`);
+    check(r.count === 4 && r.value === '4', `the dialog's answer shows in the field ("${r.value}")`);
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
+    dl = await shown(A);
+    check(dl.length === 1, `a second Track Frame does not ask (${dl.length} dialog(s))`);
 
     // ------------------------------------------ 3. typing a count, Track All
     console.log('3. typing a count');
@@ -210,7 +228,7 @@ try {
     // if the typed count reached the run.
     const animalsRow = await trackAllAnimalsRow(page);
     check(/^for 3 animals/.test(animalsRow), `Track All runs with the typed count ("${animalsRow}")`);
-    check(A.dialogs.length === 1, 'Track All does not prompt either');
+    check((await shown(A)).length === 1, 'Track All does not ask either');
 
     // ----------------------------------------------------- 4. bad entries
     console.log('4. bad entries revert');
@@ -241,7 +259,7 @@ try {
     await page.keyboard.press('p');
     check((await pred()) !== predBefore, '"p" outside the field toggles Predictions');
     await page.keyboard.press('p');
-    await page.click('#tbNumAnimals');
+    await page.hover('#tbTrackAll'); await page.click('#tbNumAnimals');   // in the Track menu
     await page.keyboard.press('p');
     check((await pred()) === predBefore, '"p" typed in the field does not toggle Predictions');
     await page.keyboard.press('Escape');
@@ -252,16 +270,17 @@ try {
     r = await read(page);
     check(r.count === null && r.value === '' && r.stored === 'auto',
         `clearing the field sets auto-detect (stored ${JSON.stringify(r.stored)})`);
-    await page.click('#tbTrackFrame');
-    check(A.dialogs.length === 1, 'a cleared field does not bring the prompt back');
+    await page.hover('#tbTrackAll'); await page.click('#tbTrackFrame');   // This frame, in the Track menu
+    check((await shown(A)).length === 1, 'a cleared field does not bring the dialog back');
     await A.page.close();
 
-    // A blank ANSWER to the prompt counts as an answer too.
+    // A blank ANSWER in the dialog counts as an answer too.
     const B = await openApp(browser, ['', '2']);
-    await B.page.click('#tbTrackFrame');
-    await B.page.click('#tbTrackFrame');
+    await B.page.hover('#tbTrackAll'); await B.page.click('#tbTrackFrame');   // This frame, in the Track menu
+    await B.page.hover('#tbTrackAll'); await B.page.click('#tbTrackFrame');   // This frame, in the Track menu
     r = await read(B.page);
-    check(B.dialogs.length === 1, `a blank answer to the prompt is not asked again (${B.dialogs.length} dialog(s))`);
+    dl = await shown(B);
+    check(dl.length === 1, `a blank answer in the dialog is not asked again (${dl.length} dialog(s))`);
     check(r.count === null && r.value === '', 'and the field shows auto-detect');
 
     // --------------------------------------- 8. Track Frame Range dialog
@@ -278,7 +297,7 @@ try {
         .catch(() => {});
     r = await read(B.page);
     check(r.count === 6 && r.value === '6', `its count is written back into the field ("${r.value}")`);
-    check(B.dialogs.length === 1, 'and no prompt stacks on top of it');
+    check((await shown(B)).length === 1, 'and the first-use dialog does not stack on top of it');
 
     // ------------------------------------------- 9. one count per session
     console.log('9. per session');
@@ -289,10 +308,11 @@ try {
     });
     r = await read(B.page);
     check(r.value === '' && r.stored === null, `a second session starts unanswered, and the field shows it (value "${r.value}")`);
-    await B.page.click('#tbTrackFrame');
-    check(B.dialogs.length === 2, `so Track Frame prompts for it (${B.dialogs.length} dialog(s))`);
-    check(B.dialogs.length === 2 && B.dialogs[1].def === '6',
-        `pre-filled with the last count given ("${B.dialogs[1] && B.dialogs[1].def}")`);
+    await B.page.hover('#tbTrackAll'); await B.page.click('#tbTrackFrame');   // This frame, in the Track menu
+    dl = await shown(B);
+    check(dl.length === 2, `so Track Frame asks for it (${dl.length} dialog(s))`);
+    check(dl.length === 2 && dl[1].def === '6',
+        `pre-filled with the last count given ("${dl[1] && dl[1].def}")`);
     r = await read(B.page);
     check(r.stored === 2 && r.value === '2', `the answer is the second session's (stored ${r.stored})`);
     await B.page.evaluate(() => window.__activate(window.__two, 0));
@@ -344,7 +364,8 @@ try {
     check(r.value === '5', `and the field shows it ("${r.value}")`);
     check(!r.dirty, 'reopening does not mark the project unsaved');
     const reopenedRow = await trackAllAnimalsRow(D.page);
-    check(D.dialogs.length === 0, `Track All does not prompt (${D.dialogs.length} dialog(s))`);
+    dl = await shown(D);
+    check(dl.length === 0, `Track All does not ask (${dl.length} dialog(s))`);
     check(/^for 5 animals/.test(reopenedRow), `and runs with the saved count ("${reopenedRow}")`);
     await D.page.close();
 } finally {

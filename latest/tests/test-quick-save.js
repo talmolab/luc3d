@@ -54,7 +54,9 @@
             markDirty();
             markDirty();
             assertTrue(state.isDirty, 'isDirty should still be true');
-            assertEqual(document.title, '\u2022 Lucid');
+            // One dot however often: "\u2022 LUC3D", or "\u2022 <project> - LUC3D" when an
+            // earlier test opened a project (ui/page-title.js).
+            assertTrue(/^\u2022 (?:.+ - )?LUC3D$/.test(document.title), 'one dot, then the title: ' + document.title);
         });
 
         it('dirty indicator dot visibility toggles', function () {

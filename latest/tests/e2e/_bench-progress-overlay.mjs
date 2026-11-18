@@ -47,6 +47,7 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { answerTrackSetup } from './fixtures/track-setup.js';
 import fs from 'node:fs';
 import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
@@ -92,6 +93,7 @@ try {
     const page = await context.newPage();
     page.on('pageerror', e => log('  [pageerror] ' + String(e).slice(0, 300)));
     page.on('dialog', d => d.accept(process.env.NANIMALS || '3'));
+    await answerTrackSetup(page, process.env.NANIMALS || '3');   // Track All's first-use dialog (animal count)
     // CONSOLE=<regex>: echo matching console lines, timestamped from the start.
     if (process.env.CONSOLE) {
         const re = new RegExp(process.env.CONSOLE);
@@ -100,7 +102,7 @@ try {
     }
 
     await page.goto(`http://localhost:${PORT}/index.html`);
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 30000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     // TRI_WORKERS=N: Triangulate All worker-pool size (0 = solve inline).
     if (process.env.TRI_WORKERS != null) {
         await page.evaluate((n) => { window.LUCID_TRIANGULATION_WORKERS = n; }, Number(process.env.TRI_WORKERS));

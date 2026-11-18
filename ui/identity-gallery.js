@@ -11,17 +11,21 @@
 // camera to cut each sample from, the crop square, its 2D at a frame (hydrating a
 // lazy project's members for the read), and the projected path. The
 // drawing half decodes one frame per sample (`view.decoder.getFrame`) AFTER the
-// box is on screen, row by row, so the summary never waits on video, and stops
+// box is on screen, one queue per camera with the cameras side by side, so the
+// summary never waits on video, and stops
 // when the box closes. Resting the pointer on a sample shows it enlarged beside
 // the tile: the crop is copied at up to the enlarged size when it is drawn (a
 // decoder's frame may be closed by the next decode), so the preview is a sharper
-// image, not the 88 px tile scaled up.
+// image, not the 88 px tile scaled up. A map enlarges the same way — its path
+// redrawn at the larger size over a larger copy of the frame — with the point
+// under the pointer marked and its time in the caption.
 //
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=2dc001fe527c';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=2dc001fe527c';
+import { state } from './app-state.js?v=a0fe8e5e17b4';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=a0fe8e5e17b4';
+import { keyframeIndices } from './image-embedder.js?v=a0fe8e5e17b4';
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;
@@ -29,8 +33,10 @@ export const GALLERY_SAMPLES = 5;
 export const GALLERY_MAX_ROWS = 12;
 /** A sample image's side and a map's height, in CSS pixels. */
 export const GALLERY_TILE = 88;
-/** A sample's side when enlarged on hover, in CSS pixels. */
+/** A sample's side when enlarged on hover, in CSS pixels — and a map's height. */
 export const GALLERY_ZOOM = 320;
+/** An enlarged map's widest, in CSS pixels (a wider view is shown less tall). */
+export const MAP_ZOOM_MAX_WIDTH = 640;
 /** Points drawn per path, at most (thinned evenly in time). */
 export const MAP_MAX_POINTS = 2400;
 
@@ -43,7 +49,13 @@ export const MAP_MAX_POINTS = 2400;
  * `[x, y, z]` rows — or null when it has none.
  */
 export function groupCentroid(p3) {
-    if (!p3 || !p3.length) return null;
+    var out = [0, 0, 0];
+    return groupCentroidInto(p3, out) ? out : null;
+}
+
+/** `groupCentroid` into a caller's `out` (no allocation); false when the group has no 3D point. */
+function groupCentroidInto(p3, out) {
+    if (!p3 || !p3.length) return false;
     var sx = 0, sy = 0, sz = 0, n = 0, i, x, y, z;
     if (typeof p3[0] === 'number') {
         for (i = 0; i + 2 < p3.length; i += 3) {
@@ -56,7 +68,9 @@ export function groupCentroid(p3) {
             if (r && isFinite(r[0]) && isFinite(r[1]) && isFinite(r[2])) { sx += r[0]; sy += r[1]; sz += r[2]; n++; }
         }
     }
-    return n ? [sx / n, sy / n, sz / n] : null;
+    if (!n) return false;
+    out[0] = sx / n; out[1] = sy / n; out[2] = sz / n;
+    return true;
 }
 
 /**
@@ -69,26 +83,35 @@ export function groupCentroid(p3) {
 export function identityTracks(session) {
     var acc = new Map();
     if (!session || !session.instanceGroups) return new Map();
+    // Runs once per Track All summary over every group (~540,000 on an 8-camera,
+    // 108,000-frame project), so a frame allocates nothing: a frame holds a few
+    // groups, so an identity's second group is found by scanning them, and the
+    // centroid goes into `c`. Each identity is pushed in the order of its group
+    // among the frame's groups, as the Map of first appearances gave.
+    var c = [0, 0, 0];
     session.instanceGroups.forEach(function (groups, frame) {
-        var seen = new Map(), dup = new Set();
-        (groups || []).forEach(function (g) {
-            if (!g || g.identityId == null || g.identityId < 0) return;
-            if (seen.has(g.identityId)) dup.add(g.identityId); else seen.set(g.identityId, g);
-        });
-        seen.forEach(function (g, id) {
-            if (dup.has(id)) return;
-            var c = groupCentroid(g.points3d);
-            if (!c) return;
+        if (!groups) return;
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (!g || g.identityId == null || g.identityId < 0) continue;
+            var id = g.identityId, twice = false;
+            for (var gj = 0; gj < groups.length && !twice; gj++) {
+                if (gj !== gi && groups[gj] && groups[gj].identityId === id) twice = true;
+            }
+            if (twice) continue;                         // ambiguous frame for this identity
+            if (!groupCentroidInto(g.points3d, c)) continue;
             var a = acc.get(id);
             if (!a) acc.set(id, a = { frames: [], xyz: [] });
             a.frames.push(+frame); a.xyz.push(c[0], c[1], c[2]);
-        });
+        }
     });
     var out = new Map();
     acc.forEach(function (a, id) {
-        var n = a.frames.length, order = new Int32Array(n);
-        for (var i = 0; i < n; i++) order[i] = i;
-        order.sort(function (p, q) { return a.frames[p] - a.frames[q]; });
+        var n = a.frames.length, order = new Int32Array(n), sorted = true;
+        for (var i = 0; i < n; i++) { order[i] = i; if (i && a.frames[i] < a.frames[i - 1]) sorted = false; }
+        // Frames usually arrive in order already: a comparator sort over each
+        // identity's ~100,000 frames was ~30 ms for nothing.
+        if (!sorted) order.sort(function (p, q) { return a.frames[p] - a.frames[q]; });
         var frames = new Int32Array(n), xyz = new Float64Array(3 * n);
         for (var j = 0; j < n; j++) {
             var k = order[j];
@@ -152,12 +175,19 @@ function isolationAt(session, frame, identityId, own) {
  * Only the middle 60% of a slot is searched, so neighbouring samples stay at
  * least 40% of a slot apart even in a cage too crowded for any frame to be
  * isolated. At most `maxCandidates` frames per slot are scored, evenly strided.
+ * With more than `k` tracked frames there are always `k` samples: slots that a
+ * long gap left without one of their own are filled evenly over the tracked frames.
+ *
+ * `opts.keyframes` (the video's keyframe indices, increasing): a slot's
+ * candidates are then only its tracked KEYFRAMES, when it has any — the same
+ * rules among fewer frames. A keyframe decodes as one frame; any other frame
+ * decodes from the keyframe before it (up to 249 frames at a keyframe every 250).
  *
  * @param {Object} session
  * @param {{frames: Int32Array, xyz: Float64Array}} track  from `identityTracks`
  * @param {number} identityId
  * @param {number} [k]  GALLERY_SAMPLES
- * @param {{maxCandidates?: number}} [opts]
+ * @param {{maxCandidates?: number, keyframes?: ArrayLike<number>}} [opts]
  * @returns {number[]} ascending, distinct
  */
 export function pickSampleFrames(session, track, identityId, k, opts) {
@@ -169,6 +199,19 @@ export function pickSampleFrames(session, track, identityId, k, opts) {
     var lo = F[0], hi = F[n - 1], span = hi - lo, out = [];
     // index of the first tracked frame >= f
     var lower = function (f) { var a = 0, b = n; while (a < b) { var m = (a + b) >> 1; if (F[m] < f) a = m + 1; else b = m; } return a; };
+    var KF = opts && opts.keyframes && opts.keyframes.length ? opts.keyframes : null;
+    // the tracked frames in [a0, a1) that are keyframes, as indices into F
+    var trackedKeyframes = function (a0, a1) {
+        var out2 = [];
+        if (!KF || a1 <= a0) return out2;
+        var x = 0, y = KF.length, f0 = F[a0];
+        while (x < y) { var m = (x + y) >> 1; if (KF[m] < f0) x = m + 1; else y = m; }
+        for (; x < KF.length && KF[x] <= F[a1 - 1]; x++) {
+            var at = lower(KF[x]);
+            if (at < a1 && F[at] === KF[x]) out2.push(at);
+        }
+        return out2;
+    };
     for (var s = 0; s < k; s++) {
         var a0 = lower(lo + span * (s + 0.2) / k), a1 = lower(lo + span * (s + 0.8) / k);
         if (s === k - 1 && a1 >= n) a1 = n;
@@ -176,9 +219,13 @@ export function pickSampleFrames(session, track, identityId, k, opts) {
             a0 = Math.min(n - 1, lower(lo + span * (s + 0.5) / k)); a1 = a0 + 1;
         }
         var target = lo + span * (s + 0.5) / k;
-        var step = Math.max(1, Math.floor((a1 - a0) / maxCand));
+        // the candidates: the slot's tracked keyframes when it has any, else its tracked frames
+        var cand = trackedKeyframes(a0, a1);
+        if (!cand.length) { cand = []; for (var c0 = a0; c0 < a1; c0++) cand.push(c0); }
+        var step = Math.max(1, Math.floor(cand.length / maxCand));
         var near = -1, nearDist = Infinity, most = -1, mostIso = -1;
-        for (var i = a0; i < a1; i += step) {
+        for (var ci = 0; ci < cand.length; ci += step) {
+            var i = cand[ci];
             var own = [track.xyz[3 * i], track.xyz[3 * i + 1], track.xyz[3 * i + 2]];
             var iso = isolationAt(session, F[i], identityId, own), dist = Math.abs(F[i] - target);
             var g = identityGroupAt(session, F[i], identityId);
@@ -187,6 +234,13 @@ export function pickSampleFrames(session, track, identityId, k, opts) {
         }
         var pick = near >= 0 ? near : most;
         if (pick >= 0 && out.indexOf(F[pick]) < 0) out.push(F[pick]);
+    }
+    // A gap wider than a slot sends those slots all to the frame after it. Make up
+    // the count evenly over the frames the identity WAS tracked on, so a row keeps
+    // its samples and shows every stretch.
+    for (var t = 0; t < k && out.length < k; t++) {
+        var extra = F[Math.floor((t + 0.5) * n / k)];
+        if (out.indexOf(extra) < 0) out.push(extra);
     }
     return out.sort(function (p, q) { return p - q; });
 }
@@ -393,6 +447,21 @@ function hiDpiCanvas(w, h, className) {
     return c;
 }
 
+/** How long the gallery waits for a video's keyframes before planning without them. */
+export const SAMPLE_KEYFRAMES_WAIT_MS = 1500;
+
+/**
+ * A view's keyframe indices for `pickSampleFrames`, or null: no decoder, an
+ * unreadable index (`keyframeIndices`, read once per video and cached), or not
+ * within SAMPLE_KEYFRAMES_WAIT_MS.
+ */
+function sampleKeyframes(view) {
+    if (!view || !view.decoder) return Promise.resolve(null);
+    var read = Promise.resolve().then(function () { return keyframeIndices(view.decoder); }).catch(function () { return null; });
+    var late = new Promise(function (res) { setTimeout(function () { res(null); }, SAMPLE_KEYFRAMES_WAIT_MS); });
+    return Promise.race([read, late]);
+}
+
 function viewFor(cam) {
     return (state.views || []).filter(function (v) { return v && v.name === cam && v.decoder && typeof v.decoder.getFrame === 'function'; })[0] || null;
 }
@@ -434,12 +503,38 @@ function drawSampleDots(ctx, pts, box, size, color, radius) {
 }
 
 /**
- * The hover preview: one floating element per section, shown beside the tile
- * under the pointer. It lives in the summary's overlay (fixed, full-window), not
- * in the modal, which scrolls and would clip it; closing the box removes it.
+ * One identity's path over a camera's view, drawn `w` x `h` CSS px: the frame
+ * (`bg`, may be null) darkened — the path is the subject — then each joined step
+ * in the time colour of its later point. `path` is `projectTrack`'s, in the
+ * view's `vw` x `vh` pixels; `last` is the recording's last frame.
+ */
+function drawPath(ctx, w, h, bg, path, vw, vh, last, lineWidth) {
+    ctx.fillStyle = '#111'; ctx.fillRect(0, 0, w, h);
+    if (bg) { try { ctx.drawImage(bg, 0, 0, w, h); } catch (e) { /* a closed frame draws nothing */ } }
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'; ctx.fillRect(0, 0, w, h);
+    var sx = w / vw, sy = h / vh;
+    ctx.lineWidth = lineWidth; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (var i = 1; i < path.frames.length; i++) {
+        if (path.breaks[i]) continue;
+        ctx.strokeStyle = timeColor(path.frames[i] / last);
+        ctx.beginPath();
+        ctx.moveTo(path.uv[2 * i - 2] * sx, path.uv[2 * i - 1] * sy);
+        ctx.lineTo(path.uv[2 * i] * sx, path.uv[2 * i + 1] * sy);
+        ctx.stroke();
+    }
+}
+
+/**
+ * The hover preview: one floating element per section, shown beside the tile or
+ * map under the pointer. It lives in the summary's overlay (fixed, full-window),
+ * not in the modal, which scrolls and would clip it; closing the box removes it.
+ *
+ * What it shows is the element's `_zoom`: `{kind, w, h, draw(ctx, w, h), color,
+ * label, frame}` — `draw` paints `w` x `h` CSS pixels. Showing the element it
+ * already shows redraws it in place (a map's marker follows the pointer).
  */
 function makeZoom(section) {
-    var box = null, canvas = null, cap = null, tile = null;
+    var box = null, canvas = null, cap = null, tile = null, cw = 0, ch = 0;
     var hide = function () { tile = null; if (box) box.style.display = 'none'; };
     var show = function (fig) {
         var z = fig._zoom;
@@ -447,7 +542,7 @@ function makeZoom(section) {
         if (!box) {
             box = el('div', 'identity-gallery-zoom');
             box.id = 'identityGalleryZoom';
-            canvas = hiDpiCanvas(GALLERY_ZOOM, GALLERY_ZOOM, 'identity-gallery-zoom-img');
+            canvas = el('canvas', 'identity-gallery-zoom-img');
             cap = el('div', 'identity-gallery-zoom-caption');
             box.appendChild(canvas);
             box.appendChild(cap);
@@ -455,14 +550,22 @@ function makeZoom(section) {
         var host = section.closest('.multi-frame-modal-overlay') || document.body;
         if (box.parentNode !== host) host.appendChild(box);
         tile = fig;
+        var dpr = pixelRatio();
+        if (z.w !== cw || z.h !== ch) {               // a sample is square, a map the view's shape
+            cw = z.w; ch = z.h;
+            canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+            canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+            cap.style.maxWidth = cw + 'px';
+        }
         var ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, GALLERY_ZOOM, GALLERY_ZOOM);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch);
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(z.src, 0, 0, GALLERY_ZOOM, GALLERY_ZOOM);
-        drawSampleDots(ctx, z.pts, z.box, GALLERY_ZOOM, z.color, 3);
+        z.draw(ctx, cw, ch);
         canvas.style.borderColor = z.color || '';
         cap.textContent = z.label;
-        box.setAttribute('data-frame', fig.getAttribute('data-frame') || '');
+        box.setAttribute('data-kind', z.kind);
+        box.setAttribute('data-frame', z.frame != null ? String(z.frame) : '');
         box.style.display = 'block';
         // beside the tile — right if it fits, else left — and inside the window
         var r = fig.getBoundingClientRect(), bw = box.offsetWidth, bh = box.offsetHeight, gap = 10;
@@ -570,25 +673,27 @@ export function renderIdentityGallery(host, session, opts) {
             catch (e) { bg = null; }
         }
         if (token !== mapToken || !alive()) return;
+        var tile = zoom.tile();
+        if (tile && tile.classList.contains('identity-gallery-map-canvas')) zoom.hide();   // that map is being replaced
         var last = Math.max(1, (state.totalFrames || 1) - 1);
+        // The enlarged map: the view's shape, GALLERY_ZOOM tall unless that is wider than MAP_ZOOM_MAX_WIDTH. Its
+        // frame is copied now, at up to that size, since a decoder's frame may be closed by the next decode.
+        var ZH = GALLERY_ZOOM, ZW = Math.round(ZH * vw / vh);
+        if (ZW > MAP_ZOOM_MAX_WIDTH) { ZW = MAP_ZOOM_MAX_WIDTH; ZH = Math.max(1, Math.round(ZW * vh / vw)); }
+        var bgBig = null;
+        if (bg) {
+            var bsz = imageSize(bg), dpr = pixelRatio();
+            bgBig = el('canvas');
+            bgBig.width = Math.max(1, Math.min(bsz[0] || vw, Math.round(ZW * dpr)));
+            bgBig.height = Math.max(1, Math.min(bsz[1] || vh, Math.round(ZH * dpr)));
+            try { bgBig.getContext('2d').drawImage(bg, 0, 0, bgBig.width, bgBig.height); } catch (e) { bgBig = null; }
+        }
         rows.forEach(function (r) {
-            var c = hiDpiCanvas(W, H, 'identity-gallery-map-canvas'), ctx = c.getContext('2d');
-            ctx.fillStyle = '#111'; ctx.fillRect(0, 0, W, H);
-            if (bg) { try { ctx.drawImage(bg, 0, 0, W, H); } catch (e) { /* a closed frame draws nothing */ } }
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'; ctx.fillRect(0, 0, W, H);  // darken: the path is the subject
+            var c = hiDpiCanvas(W, H, 'identity-gallery-map-canvas');
             var path = projectTrack(tracks.get(r.id.id), cam, MAP_MAX_POINTS, Math.round(2 * (state.fps || 30)));
+            drawPath(c.getContext('2d'), W, H, bg, path, vw, vh, last, 1.5);
             var sx = W / vw, sy = H / vh;
-            ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-            for (var i = 1; i < path.frames.length; i++) {
-                if (path.breaks[i]) continue;
-                ctx.strokeStyle = timeColor(path.frames[i] / last);
-                ctx.beginPath();
-                ctx.moveTo(path.uv[2 * i - 2] * sx, path.uv[2 * i - 1] * sy);
-                ctx.lineTo(path.uv[2 * i] * sx, path.uv[2 * i + 1] * sy);
-                ctx.stroke();
-            }
             c.setAttribute('data-points', String(path.frames.length));
-            c.title = r.id.name + ' over the recording, in ' + camName + ' — click the path to go there';
             // hover: the time at the nearest point; click: go there
             var nearest = function (ev) {
                 var rect = c.getBoundingClientRect(), mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
@@ -597,11 +702,35 @@ export function renderIdentityGallery(host, session, opts) {
                     var dx = path.uv[2 * k] * sx - mx, dy = path.uv[2 * k + 1] * sy - my, d = dx * dx + dy * dy;
                     if (d < bd) { bd = d; best = k; }
                 }
-                return best < 0 ? null : { frame: path.frames[best], x: path.uv[2 * best] * sx, y: path.uv[2 * best + 1] * sy };
+                return best < 0 ? null : { k: best, frame: path.frames[best], x: path.uv[2 * best] * sx, y: path.uv[2 * best + 1] * sy };
             };
+            // the enlarged map (makeZoom): the path redrawn at that size — once, on first hover — and a ring
+            // on the point under the pointer, whose time the caption gives
+            var whole = r.id.name + ' over the recording, in ' + camName + ' — click the path to go there';
+            var big = null, mark = null;
+            c._zoom = { kind: 'map', w: ZW, h: ZH, color: r.color, label: whole, frame: null,
+                draw: function (ctx, w, h) {
+                    if (!big) {
+                        big = hiDpiCanvas(w, h);
+                        drawPath(big.getContext('2d'), w, h, bgBig, path, vw, vh, last, 2);
+                    }
+                    ctx.drawImage(big, 0, 0, w, h);
+                    if (!mark) return;
+                    var mx = path.uv[2 * mark.k] * w / vw, my = path.uv[2 * mark.k + 1] * h / vh;
+                    ctx.beginPath(); ctx.arc(mx, my, 7, 0, 2 * Math.PI);
+                    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)'; ctx.stroke();
+                    ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+                } };
             var tip = el('div', 'identity-gallery-map-tip');
+            c.addEventListener('mouseenter', function () { zoom.show(c); });
             c.addEventListener('mousemove', function (ev) {
                 var p = nearest(ev);
+                if ((p && p.k) !== (mark && mark.k)) {      // the marked point changed: redraw the preview
+                    mark = p;
+                    c._zoom.frame = p ? p.frame : null;
+                    c._zoom.label = p ? r.id.name + ' · ' + fmtTime(p.frame) + ' · ' + camName + ' — click to go there' : whole;
+                    zoom.show(c);
+                }
                 if (!p) { tip.style.display = 'none'; c.style.cursor = ''; return; }
                 tip.textContent = fmtTime(p.frame);
                 tip.style.display = 'block';
@@ -609,7 +738,10 @@ export function renderIdentityGallery(host, session, opts) {
                 tip.style.top = Math.max(0, p.y - 20) + 'px';
                 c.style.cursor = 'pointer';
             });
-            c.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+            c.addEventListener('mouseleave', function () {
+                tip.style.display = 'none'; zoom.hide();
+                mark = null; c._zoom.frame = null; c._zoom.label = whole;
+            });
             c.addEventListener('click', function (ev) { var p = nearest(ev); if (p) pickFrame(p.frame); });
             r.map.textContent = '';
             r.map.appendChild(c);
@@ -624,11 +756,12 @@ export function renderIdentityGallery(host, session, opts) {
     }
 
     // ---- sample images -----------------------------------------------------
-    var fillRow = async function (r) {
-        var frames = pickSampleFrames(session, tracks.get(r.id.id), r.id.id, GALLERY_SAMPLES);
-        var used = new Map();
+    // A row's samples are planned at once (frame, camera, crop: no video needed);
+    // each that needs an image becomes a job, fetched by `fetchSamples`.
+    var planRow = function (r, keyframes) {
+        var frames = pickSampleFrames(session, tracks.get(r.id.id), r.id.id, GALLERY_SAMPLES, { keyframes: keyframes });
+        var used = new Map(), jobs = [];
         for (var s = 0; s < r.slots.length; s++) {
-            if (!alive()) return;
             var fig = r.slots[s], frame = frames[s];
             if (frame == null) { fig.className = 'identity-gallery-tile is-empty'; continue; }
             var group = identityGroupAt(session, frame, r.id.id);
@@ -648,56 +781,96 @@ export function renderIdentityGallery(host, session, opts) {
                 fig.querySelector('.identity-gallery-blank').textContent = view ? 'no keypoints' : 'no video';
                 continue;
             }
-            var img = null;
-            try { img = await view.decoder.getFrame(frame); } catch (e) { img = null; }
-            if (!alive()) return;
-            // draw now: a decoder's cached frame may be closed once another is decoded
-            var c = hiDpiCanvas(GALLERY_TILE, GALLERY_TILE, 'identity-gallery-img'), ctx = c.getContext('2d');
-            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, GALLERY_TILE, GALLERY_TILE);
-            var drawn = false;
-            if (img) {
-                try { ctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, GALLERY_TILE, GALLERY_TILE); drawn = true; }
-                catch (e) { drawn = false; }
-            }
-            if (!drawn) {
-                fig.className = 'identity-gallery-tile is-missing';
-                fig.querySelector('.identity-gallery-blank').textContent = 'no frame';
-                continue;
-            }
-            // the crop again at up to the enlarged size, for the hover preview — no
-            // larger than the video's own pixels, which would only be scaled up
-            var bigSide = Math.max(GALLERY_TILE, Math.min(Math.ceil(box.side), Math.round(GALLERY_ZOOM * pixelRatio())));
-            var big = el('canvas');
-            big.width = big.height = bigSide;
-            var bctx = big.getContext('2d');
-            bctx.fillStyle = '#000'; bctx.fillRect(0, 0, bigSide, bigSide);
-            try { bctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, bigSide, bigSide); } catch (e) { big = null; }
-            // this animal's keypoints as small dots in its colour: which one the row means when two share a crop
-            drawSampleDots(ctx, pts, box, GALLERY_TILE, r.color, 1.6);
-            if (big) {
-                fig._zoom = { src: big, pts: pts, box: box, color: r.color,
-                    label: r.id.name + ' · ' + fmtTime(frame) + ' · ' + cam + ' — click to go to this frame' };
-                fig.removeAttribute('title');   // the preview says it; a native tooltip would cover it
-                fig.addEventListener('mouseenter', zoom.show.bind(null, fig));
-                fig.addEventListener('mouseleave', zoom.hide);
-            }
-            var sz = imageSize(img);
-            c.setAttribute('data-source', sz[0] + 'x' + sz[1]);
-            fig.replaceChild(c, fig.querySelector('.identity-gallery-blank'));
-            fig.className = 'identity-gallery-tile';
-            if (r.color) fig.style.borderColor = r.color;
+            jobs.push({ r: r, fig: fig, frame: frame, cam: cam, view: view, box: box, pts: pts });
         }
+        return jobs;
+    };
+
+    // Draw a sample's image into its tile, as soon as it is decoded: a decoder's
+    // cached frame may be closed once another is decoded.
+    var drawSample = function (job, img) {
+        var r = job.r, fig = job.fig, frame = job.frame, cam = job.cam, box = job.box, pts = job.pts;
+        var c = hiDpiCanvas(GALLERY_TILE, GALLERY_TILE, 'identity-gallery-img'), ctx = c.getContext('2d');
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, GALLERY_TILE, GALLERY_TILE);
+        var drawn = false;
+        if (img) {
+            try { ctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, GALLERY_TILE, GALLERY_TILE); drawn = true; }
+            catch (e) { drawn = false; }
+        }
+        if (!drawn) {
+            fig.className = 'identity-gallery-tile is-missing';
+            fig.querySelector('.identity-gallery-blank').textContent = 'no frame';
+            return;
+        }
+        // the crop again at up to the enlarged size, for the hover preview — no
+        // larger than the video's own pixels, which would only be scaled up
+        var bigSide = Math.max(GALLERY_TILE, Math.min(Math.ceil(box.side), Math.round(GALLERY_ZOOM * pixelRatio())));
+        var big = el('canvas');
+        big.width = big.height = bigSide;
+        var bctx = big.getContext('2d');
+        bctx.fillStyle = '#000'; bctx.fillRect(0, 0, bigSide, bigSide);
+        try { bctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, bigSide, bigSide); } catch (e) { big = null; }
+        // this animal's keypoints as small dots in its colour: which one the row means when two share a crop
+        drawSampleDots(ctx, pts, box, GALLERY_TILE, r.color, 1.6);
+        if (big) {
+            fig._zoom = { kind: 'sample', w: GALLERY_ZOOM, h: GALLERY_ZOOM, color: r.color, frame: frame,
+                label: r.id.name + ' · ' + fmtTime(frame) + ' · ' + cam + ' — click to go to this frame',
+                draw: (function (src, pts, box, color) {
+                    return function (ctx, w, h) { ctx.drawImage(src, 0, 0, w, h); drawSampleDots(ctx, pts, box, w, color, 3); };
+                })(big, pts, box, r.color) };
+            fig.removeAttribute('title');   // the preview says it; a native tooltip would cover it
+            fig.addEventListener('mouseenter', zoom.show.bind(null, fig));
+            fig.addEventListener('mouseleave', zoom.hide);
+        }
+        var sz = imageSize(img);
+        c.setAttribute('data-source', sz[0] + 'x' + sz[1]);
+        fig.replaceChild(c, fig.querySelector('.identity-gallery-blank'));
+        fig.className = 'identity-gallery-tile';
+        if (r.color) fig.style.borderColor = r.color;
+    };
+
+    // Every sample's image, one queue per decoder: a decoder is asked for one frame
+    // at a time, in frame order, while the cameras' queues run side by side. Each
+    // fetch is a seek and a decode (~0.1 s on local disk, far more over a network);
+    // one after another, the 25 of five identities took ~2.3 s on an 8-camera
+    // project, now about the busiest camera's share.
+    var fetchSamples = function (jobs) {
+        var byView = new Map();
+        jobs.forEach(function (j) {
+            var q = byView.get(j.view);
+            if (!q) byView.set(j.view, q = []);
+            q.push(j);
+        });
+        return Promise.all(Array.from(byView.values()).map(async function (q) {
+            q.sort(function (a, b) { return a.frame - b.frame; });
+            for (var k = 0; k < q.length; k++) {
+                if (!alive()) return;
+                var img = null;
+                try { img = await q[k].view.decoder.getFrame(q[k].frame); } catch (e) { img = null; }
+                if (!alive()) return;
+                try { drawSample(q[k], img); }
+                catch (e) { console.warn('[identity-gallery] ' + q[k].r.id.name + ':', e); }
+            }
+        }));
     };
 
     var done = (async function () {
         await new Promise(function (res) { setTimeout(res, 0); });   // the box paints first
         if (!alive()) return;
         await drawMaps(mapCam);
+        if (!alive()) return;
+        // The samples land on keyframes where they can (one decoded frame each,
+        // not up to a keyframe gap's worth): the keyframes of one camera, read
+        // once per video from its index — campy's cameras share them, and a camera
+        // that did not would only decode slower, never show the wrong frame.
+        var keyframes = await sampleKeyframes(viewFor(mapCam) || (state.views || []).filter(function (v) { return v && v.decoder; })[0]);
+        if (!alive()) return;
+        var jobs = [];
         for (var i = 0; i < rows.length; i++) {
-            if (!alive()) return;
-            try { await fillRow(rows[i]); }
+            try { jobs = jobs.concat(planRow(rows[i], keyframes)); }
             catch (e) { console.warn('[identity-gallery] ' + rows[i].id.name + ':', e); }
         }
+        await fetchSamples(jobs);
     })();
     return { done: done, element: section };
 }

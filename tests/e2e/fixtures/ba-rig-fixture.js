@@ -42,6 +42,11 @@ export async function buildBaRigFixture(opts) {
     const { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } = pd;
 
     const NF = opts.frames || 8;
+    // The animals drift a little every frame, which over a few hundred frames
+    // would carry them out of every camera's view. `opts.cycle` N repeats the
+    // motion of frames 0..N-1 instead (the noise stays fresh per frame), for a
+    // caller that needs many frames; omitted, the motion never repeats.
+    const CYCLE = opts.cycle || 0;
     const NTRACK = 2, NNODE = 8, NOISE = 2.0;
 
     let _s = (opts.seed || 20260804) >>> 0;
@@ -73,7 +78,8 @@ export async function buildBaRigFixture(opts) {
     for (let f = 0; f < NF; f++) {
         const perTrack = [];
         for (let t = 0; t < NTRACK; t++) {
-            perTrack.push(base[t].map(p => [p[0] + f * 0.15, p[1] + f * 0.1, p[2]]));
+            const fm = CYCLE ? f % CYCLE : f;
+            perTrack.push(base[t].map(p => [p[0] + fm * 0.15, p[1] + fm * 0.1, p[2]]));
         }
         truth.push(perTrack);
     }

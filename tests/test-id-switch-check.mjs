@@ -121,6 +121,49 @@ group('Clean labels — no possible switches flagged');
     ok(res.encounters.every(e => e.score > 0), `every contact scores positive: each animal keeps its size across it (min ${Math.min(...res.encounters.map(e => e.score)).toFixed(2)})`);
 }
 
+group('Size check scored from a copied grid (what the worker gets) = scored in place');
+{
+    const { session } = buildSession([3, 10]);
+    const here = await SC.checkSizeSwitches(session, { fps: 60 });
+    let handed = null;
+    const viaHook = await SC.checkSizeSwitches(session, { fps: 60, scoreGrid: async (grid, o) => {
+        handed = { grid, o };
+        // what postMessage does to the data: a structured clone, then the worker's side
+        const msg = structuredClone(SC.sizeGridMessage(grid)), opts = structuredClone(SC.sizeScoreOptions(o));
+        return SC.scoreSizeGrid(SC.gridFromMessage(msg), opts);
+    } });
+    ok(handed && handed.grid.G && handed.o.fps === 60, 'scoreGrid is handed the sampled grid and the options');
+    ok(here.ok && here.encounters.length > 0 && here.flags.length > 0, `precondition: the check scores contacts and flags the swaps (${here.encounters.length} contacts, ${here.flags.length} flags)`);
+    ok(JSON.stringify(viaHook) === JSON.stringify(here), 'the copied grid gives the same result, value for value');
+    const opts = SC.sizeScoreOptions({ fps: 60, threshold: -1, name: 'x', on: true, none: null, signal: new AbortController().signal, onProgress: () => {}, scoreGrid: () => {} });
+    eq(JSON.stringify(opts), '{"fps":60,"threshold":-1,"name":"x","on":true,"none":null}', 'sizeScoreOptions keeps numbers, strings, booleans and nulls only');
+    const g = SC.gridFromMessage(structuredClone(SC.sizeGridMessage(handed.grid)));
+    ok(g.G === null && [0, 1, 5, 100].every(i => [0, 1, 2].every(k => g.hasCen(i, k) === handed.grid.hasCen(i, k)))
+        && [0.5, 3, 10].every(sec => g.secToSamples(sec) === handed.grid.secToSamples(sec)), 'gridFromMessage rebuilds hasCen and secToSamples as buildGrid has them, and no G');
+}
+
+group('Sampling in slices (buildGridAsync) = sampling at once');
+{
+    const { session } = buildSession([3, 10]);
+    const o = Object.assign({}, SC.SIZE_CHECK_DEFAULTS, { fps: 60 });
+    const whole = SC.buildGrid(session, o, true);
+    let pauses = 0;
+    const sliced = await SC.buildGridAsync(session, o, true, async () => { pauses++; await null; }, 1e-6);   // a pause every 256 samples
+    const same = (a, b) => a.length === b.length && Array.prototype.every.call(a, (v, i) => Object.is(v, b[i]));
+    ok(pauses >= Math.floor((whole.T - 1) / 256), `it paused every 256 samples (${pauses} pauses for ${whole.T} samples)`);
+    ok(same(sliced.X, whole.X) && same(sliced.C, whole.C) && same(sliced.G, whole.G) && same(sliced.frames, whole.frames)
+        && Object.is(sliced.sep, whole.sep) && JSON.stringify(sliced.tl) === JSON.stringify(whole.tl), 'the same grid, value for value');
+    let none = 0;
+    await SC.buildGridAsync(session, o, true, async () => { none++; }, 60000);
+    eq(none, 0, 'no pause when a slice is long enough for all of it');
+    const here = await SC.checkSizeSwitches(session, { fps: 60 });
+    let checkPauses = 0;
+    const slicedCheck = await SC.checkSizeSwitches(session, { fps: 60, pauseSampling: async () => { checkPauses++; }, samplingSliceMs: 1e-6 });
+    ok(checkPauses > 0 && JSON.stringify(slicedCheck) === JSON.stringify(here), `checkSizeSwitches with pauseSampling: the same result (${checkPauses} pauses)`);
+    const fail = await SC.buildGridAsync(session, Object.assign({}, o, { fps: 0 }), true, async () => {});
+    ok(fail.fail && /frame rate/.test(fail.fail), 'a refusal comes back the same way (' + fail.fail + ')');
+}
+
 async function switchCase(SWAP) {
     const { session, events, encounterEnds } = buildSession(SWAP);
     const res = await SC.checkSizeSwitches(session, { fps: 60 });
@@ -502,21 +545,21 @@ group('Image check — which device runs the model, and its load (ui/image-embed
         let bad = 0; for (let i = 0; i < rgba.length; i += 4) if (rgba[i] !== g || rgba[i + 1] !== g || rgba[i + 2] !== g || rgba[i + 3] !== 255) bad++;
         eq(bad, 0, `a uniform crop of ${g} comes back as ${g} on every pixel, opaque`);
     }
-    {   // a left-to-right ramp stays a ramp (the 160 -> 224 resize in between), in range
+    {   // a left-to-right ramp stays a ramp (the CROP -> INPUT resize in between), in range
         const ramp = new Uint8ClampedArray(E.CROP * E.CROP); for (let y = 0; y < E.CROP; y++) for (let x = 0; x < E.CROP; x++) ramp[y * E.CROP + x] = Math.round(255 * x / (E.CROP - 1));
         E.writeInputTensor(ramp, tns, 0); E.inputTensorToPixels(tns, rgba);
         const row = 100 * E.INPUT; let mono = true; for (let x = 1; x < E.INPUT; x++) if (rgba[4 * (row + x)] < rgba[4 * (row + x - 1)]) mono = false;
         ok(mono && rgba[4 * row] <= 1 && rgba[4 * (row + E.INPUT - 1)] >= 254, `a ramp stays a ramp, 0..255 (${rgba[4 * row]}..${rgba[4 * (row + E.INPUT - 1)]})`);
     }
 
-    // the skeleton over the sample crop: keypoints into model-input pixels (cutCrop's transform, then x 224/160)
+    // the skeleton over the sample crop: keypoints into model-input pixels (cutCrop's transform, then x INPUT/CROP)
     {
-        const near = (a, b) => Math.abs(a - b) < 1e-4;
+        const near = (a, b) => Math.abs(a - b) < 1e-4, c = E.INPUT / 2, k = E.INPUT / E.CROP;
         let q = E.cropPointsToInput({ cx: 100, cy: 50, angle: 0, scale: 2, pts: [100, 50, 110, 50, 100, 60, NaN, NaN] });
-        ok(near(q[0], 112) && near(q[1], 112) && near(q[2], 112 + 2 * 1.4 * 10) && near(q[3], 112) && near(q[4], 112) && near(q[5], 140) && isNaN(q[6]) && isNaN(q[7]),
-            `nose right: the body centre is the crop centre, x and y scale by scale x 224/160, missing stays missing (${Array.from(q).map(v => v.toFixed(1))})`);
+        ok(near(q[0], c) && near(q[1], c) && near(q[2], c + 2 * k * 10) && near(q[3], c) && near(q[4], c) && near(q[5], c + 2 * k * 10) && isNaN(q[6]) && isNaN(q[7]),
+            `nose right: the body centre is the crop centre, x and y scale by scale x INPUT/CROP, missing stays missing (${Array.from(q).map(v => v.toFixed(1))})`);
         q = E.cropPointsToInput({ cx: 0, cy: 0, angle: Math.PI / 2, scale: 1, pts: [0, 10, 10, 0] });
-        ok(near(q[0], 126) && near(q[1], 112) && near(q[2], 112) && near(q[3], 98),
+        ok(near(q[0], c + k * 10) && near(q[1], c) && near(q[2], c) && near(q[3], c - k * 10),
             `nose pointing down the image: rotated to point right; the animal's left (+x) ends up above (${Array.from(q).map(v => v.toFixed(1))})`);
         const skn = E.skeletonIndex(NODES), pts2 = NODES.map(n => { const [x, y] = TEMPLATE[n]; return [400 + x, 300 - y]; });
         const g2 = E.cropGeometry({ getPoint: i => i === 4 ? null : pts2[i] }, skn);
@@ -539,6 +582,140 @@ group('Image check — which device runs the model, and its load (ui/image-embed
     ok(d.kind === 'cpu' && d.why === 'WebGPU offers only a software adapter' && d.adapter.name === 'Google swiftshader', 'a software adapter → CPU (it ran the model 10x slower than one CPU worker)');
     d = await withNav({ gpu: { requestAdapter: async () => adapterOf({ vendor: 'apple', architecture: 'metal-3', isFallbackAdapter: false }) } });
     ok(d.kind === 'webgpu' && d.adapter.name === 'Apple metal-3' && !d.why, 'a hardware adapter → WebGPU');
+}
+
+group('Image check — embeds only the samples the scoring reads (planImageSamples), and the scoring reads only those');
+{
+    const { session } = buildSession(16, 60, [1, 1, 1]);
+    const o = Object.assign({}, SC.IMAGE_CHECK_DEFAULTS, { fps: 60, backgroundHz: 0.25 });
+    const grid = SC.buildGrid(session, o, false), K = grid.K, T = grid.T;
+    const every = Math.max(1, Math.round(grid.hz / o.imageHz)), bg = Math.round(grid.hz / every / o.backgroundHz);
+    // fixed per-sample features (no metric): what each animal looks like + noise, two cameras
+    const r = rng(21);
+    const FEAT = new Map();
+    for (let i = 0; i < T; i += every) for (let k = 0; k < K; k++) {
+        if (!grid.hasCen(i, k)) continue;
+        const a = grid.G[i * K + k]._animal;
+        FEAT.set(i * K + k, [0, 1].map(c => { const u = Float64Array.from(PROTO[a].subarray(0, 8), v => v + 1.5 * gauss(r)); let n = 0; u.forEach(x => { n += x * x; }); return { c, u: u.map(x => x / Math.sqrt(n)) }; }));
+    }
+    const newState = () => { const st = { embeddable: new Uint8Array(T), embedded: new Uint8Array(T), got: new Uint8Array(T * K) };
+        for (let i = 0; i < T; i += every) st.embeddable[i] = 1; return st; };
+    // the samples the scoring asks about (and has features for) when only `plan`'s are embedded
+    const readsOutside = (plan, lacks) => {
+        const inPlan = new Set(plan), outside = [];
+        const feat = (i, k) => { if (!FEAT.has(i * K + k) || (lacks && lacks(i, k))) return null; if (!inPlan.has(i)) { outside.push(i); return null; } return FEAT.get(i * K + k); };
+        return { scores: SC.contactChangeScores(grid, feat, o, every), outside };
+    };
+    const full = SC.contactChangeScores(grid, (i, k) => FEAT.get(i * K + k) || null, o, every);
+    const same = (a, b) => a.length === b.length && a.every((e, i) => e.frame === b[i].frame && e.identityA === b[i].identityA && e.score === b[i].score);
+    // `has` answers "does it have features?" (scoreContacts' rowHas): the same scores, and feat()
+    // is then asked only for the features it averages, not for every sample it looks at
+    let featCalls = 0, featCallsHas = 0;
+    const plain = SC.contactChangeScores(grid, (i, k) => { featCalls++; return FEAT.get(i * K + k) || null; }, o, every);
+    const viaHas = SC.contactChangeScores(grid, (i, k) => { featCallsHas++; return FEAT.get(i * K + k) || null; }, o, every, (i, k) => FEAT.has(i * K + k));
+    ok(same(viaHas, plain) && JSON.stringify(viaHas) === JSON.stringify(plain), `contactChangeScores with has(): the same scored contacts (${plain.length})`);
+    ok(featCallsHas > 0 && featCallsHas < featCalls, `…asking feat() for fewer samples (${featCallsHas} instead of ${featCalls})`);
+
+    const st = newState(), plan = SC.planImageSamples(grid, o, every, st);
+    plan.forEach(i => { st.embedded[i] = 1; for (let k = 0; k < K; k++) if (FEAT.has(i * K + k)) st.got[i * K + k] = 1; });
+    const nImage = Math.ceil(T / every);
+    ok(plan.length > 0 && plan.length < nImage, `plans a subset of the image samples (${plan.length} of ${nImage})`);
+    ok(plan.every((i, j) => i % every === 0 && (j === 0 || i > plan[j - 1])), 'planned samples are image samples, increasing');
+    eq(SC.planImageSamples(grid, o, every, st).length, 0, 'every crop came back: nothing left to plan after one round');
+    const reads = SC.contactReads(grid, (i, k) => FEAT.has(i * K + k), o, every);
+    ok(reads.every(i => plan.includes(i)), `every sample the scoring reads is planned (${reads.length} read)`);
+    const readSet = new Set(reads), blocks = new Map();
+    plan.filter(i => !readSet.has(i)).forEach(i => { const b = Math.floor(i / every / bg); blocks.set(b, (blocks.get(b) || 0) + 1); });
+    let blocksWithRest = 0;
+    for (let b = 0; b * bg < nImage; b++) { let rest = false; for (let j = b * bg; j < Math.min(nImage, (b + 1) * bg); j++) if (!readSet.has(j * every)) rest = true; if (rest) blocksWithRest++; }
+    ok(blocks.size === blocksWithRest && [...blocks.values()].every(c => c === 1),
+        `plus the background: one sample in each block of ${bg} image samples that the scoring does not all read (${blocks.size} blocks)`);
+    const planned = readsOutside(plan);
+    eq(planned.outside.length, 0, 'with only the planned samples embedded, the scoring asks for no other');
+    ok(same(planned.scores, full), `…and its scores are bit-identical to scoring every sample (${full.length} contacts)`);
+    // negative control: drop one sample the scoring reads (not a background one) and the check above must fail
+    const drop = reads.find(i => (i / every) % bg !== 0);
+    const missing = readsOutside(plan.filter(i => i !== drop));
+    ok(drop != null && missing.outside.length > 0, `negative control: without sample ${drop} the scoring asks for a sample that was not embedded (${missing.outside.length} asks)`);
+    ok(!same(missing.scores, full), 'negative control: and its scores differ');
+
+    // keyframes every 250 frames (sparser than the background): blocks span a keyframe gap, and each block's
+    // background sample is the one cheapest to decode — just after a keyframe, or inside a gap the windows decode anyway
+    const kf = []; for (let f = 0; f < grid.frames[T - 1] + 250; f += 250) kf.push(f);
+    const stK = Object.assign(newState(), { keyframes: [kf, kf] });
+    const planK = SC.planImageSamples(grid, o, every, stK);
+    // frames a streaming decoder decodes for a plan: per keyframe gap, from the keyframe to the last planned frame in it
+    const decoded = (p) => { const last = new Map(); p.forEach(i => { const f = grid.frames[i]; last.set(Math.floor(f / 250), f % 250 + 1); }); let n = 0; last.forEach(v => { n += v; }); return n; };
+    const bgOnly = (p) => p.filter(i => !readSet.has(i));
+    ok(reads.every(i => planK.includes(i)), 'with keyframes every 250 frames: still every sample the scoring reads');
+    ok(bgOnly(planK).length < bgOnly(plan).length && decoded(planK) < decoded(plan),
+        `…a background sample per keyframe gap, placed where decoding is cheap: ${bgOnly(planK).length} instead of ${bgOnly(plan).length}, decoding ${decoded(planK)} frames instead of ${decoded(plan)}`);
+
+    // crops that fail (an animal with no croppable view) make the scoring read further: rounds until nothing is left
+    const lacks = (i, k) => k === 1 && (i / every) % 3 === 0;
+    const st2 = newState();
+    let rounds = 0, next, all = [];
+    while ((next = SC.planImageSamples(grid, o, every, st2)).length) {
+        rounds++; all = all.concat(next);
+        next.forEach(i => { st2.embedded[i] = 1; for (let k = 0; k < K; k++) if (FEAT.has(i * K + k) && !lacks(i, k)) st2.got[i * K + k] = 1; });
+    }
+    const fullLacking = SC.contactChangeScores(grid, (i, k) => (lacks(i, k) ? null : FEAT.get(i * K + k)) || null, o, every);
+    const r2 = readsOutside(all.sort((a, b) => a - b), lacks);
+    ok(rounds >= 2, `missing crops take another round (${rounds} rounds, ${all.length} samples)`);
+    ok(r2.outside.length === 0 && same(r2.scores, fullLacking), 'after the last round the scoring again reads only embedded samples, with the same scores as embedding all');
+
+    // through checkImageSwitches: the frames asked for, per round, and the old behaviour at backgroundHz >= imageHz
+    const asked = (bgHz, emb) => {
+        const st3 = { rounds: [], grids: [], frames: [] };
+        return SC.checkImageSwitches(session, { fps: 60, backgroundHz: bgHz, getEmbeddings: async (f, it) => { st3.frames.push(f); return emb(f, it); },
+            prepareFrames: async (frames, items, gridFrames) => { st3.rounds.push(frames.slice()); st3.grids.push(gridFrames); } })
+            .then(res => Object.assign(st3, { res }));
+    };
+    const everything = await asked(2, syntheticEmbedder()), some = await asked(0.25, syntheticEmbedder());
+    ok(everything.res.ok && everything.rounds.length === 1 && everything.frames.length === nImage && everything.res.samples.embedded === nImage,
+        `backgroundHz >= imageHz: every image sample, in one round, as before (${everything.frames.length})`);
+    ok(some.res.ok && some.frames.length === plan.length && some.res.samples.embedded === plan.length && some.res.samples.of === nImage,
+        `backgroundHz 0.25: only the planned samples are asked for (${some.frames.length} of ${nImage})`);
+    ok(some.grids.every(g => g.length === nImage && some.rounds.every(fr => fr.every(f => g.includes(f)))), 'prepareFrames gets every image sample\'s frame (gridFrames) beside the round\'s frames');
+    ok(some.res.encounters.length === everything.res.encounters.length && some.res.flags.length === everything.res.flags.length,
+        `same contacts and flags as embedding everything (${some.res.flags.length} flagged)`);
+    // an animal with no croppable view: found by a second round, or planned in one when the provider says so up front
+    const holes = (f, it) => it.group._animal === 1 && (f / every / grid.step) % 17 === 0;
+    // noise drawn per (frame, animal, camera), not in call order: runs asking in different orders get the same vectors
+    const keyed = async (f, items) => items.map(it => ['c0', 'c1'].map((cam, c) => { const r2 = rng(f * 7919 + it.group._animal * 104729 + c);
+        return { camera: cam, vector: Float32Array.from(PROTO[it.group._animal], v => v + 1.2 * gauss(r2)) }; }));
+    const holed = (f, items) => keyed(f, items).then(out => out.map((l, ii) => holes(f, items[ii]) ? [] : l));
+    const twoRounds = await asked(0.25, holed);
+    const st4 = { rounds: 0 };
+    const oneRound = await SC.checkImageSwitches(session, { fps: 60, backgroundHz: 0.25, getEmbeddings: holed,
+        prepareFrames: async () => { st4.rounds++; },
+        croppable: async (frames, items) => frames.map((f, i) => items[i].map(it => !holes(f, it))) });
+    ok(twoRounds.rounds.length >= 2 && st4.rounds === 1, `crops that never come: a second round without croppable (${twoRounds.rounds.length}), one with it (${st4.rounds})`);
+    ok(oneRound.samples.embedded === twoRounds.res.samples.embedded && oneRound.encounters.every((e, i) => e.score === twoRounds.res.encounters[i].score),
+        'either way the same samples are embedded and the scores are identical');
+    const failing = await asked(0.25, async (f, items) => items.map(() => []));
+    ok(!failing.res.ok && failing.rounds.length <= SC.MAX_PLAN_ROUNDS && failing.frames.length === nImage,
+        `no crop ever comes back: at most ${SC.MAX_PLAN_ROUNDS} rounds, the last asking for every sample left (${failing.rounds.length} rounds)`);
+}
+
+group('Identity metric — sample weights (how the image check learns from a planned subset)');
+{
+    const r = rng(5), n = 120, D = 24, X = new Float64Array(n * D), stretch = new Int32Array(n), sample = new Int32Array(n);
+    for (let i = 0; i < n; i++) { const a = i % 3; for (let d = 0; d < D; d++) X[i * D + d] = PROTO[a][d] + 0.8 * gauss(r); stretch[i] = a * 10 + Math.floor(i / 30); sample[i] = Math.floor(i / 3); }
+    const o = { metricPcaDims: 8, metricDims: 2, metricReg: 0.1 };
+    const probe = Float64Array.from(PROTO[1].subarray(0, D));
+    const plain = SC.learnIdentityMetric(X, n, D, stretch, sample, o).project(probe);
+    const ones = SC.learnIdentityMetric(X, n, D, stretch, sample, o, new Float64Array(n).fill(1)).project(probe);
+    ok(plain.every((v, i) => v === ones[i]), 'weights of 1 are bit-identical to no weights (a run that embeds every sample)');
+    // a weight of 2 on a whole sample = that sample twice
+    const dupRows = [...Array(n).keys()].concat([30, 31, 32]);
+    const Xd = new Float64Array(dupRows.length * D); dupRows.forEach((r2, j) => Xd.set(X.subarray(r2 * D, (r2 + 1) * D), j * D));
+    const dup = SC.learnIdentityMetric(Xd, dupRows.length, D, Int32Array.from(dupRows, r2 => stretch[r2]), Int32Array.from(dupRows, (r2, j) => j < n ? sample[r2] : 1000), o).project(probe);
+    const w2 = new Float64Array(n).fill(1); w2[30] = w2[31] = w2[32] = 2;
+    const wtd = SC.learnIdentityMetric(X, n, D, stretch, sample, o, w2).project(probe);
+    const fp = SC.fitPCA(Xd, dupRows.length, D, 4).project(probe), fw = SC.fitPCA(X, n, D, 4, { weights: w2 }).project(probe);
+    ok(fp.every((v, i) => Math.abs(Math.abs(v) - Math.abs(fw[i])) < 1e-6), 'fitPCA: a weight of 2 = the row twice');
+    ok(Math.abs(Math.abs(dup[0]) - Math.abs(wtd[0])) < 0.05, `learnIdentityMetric: a weight of 2 ≈ the sample twice (${dup[0].toFixed(3)} vs ${wtd[0].toFixed(3)})`);
 }
 
 group('Image check — cancellation and failure reasons');
@@ -566,6 +743,52 @@ group('fitPCA — recovers the dominant direction');
     ok(along > 3 && across < 0.3 * along, `first component follows the planted direction (|pc1| ${along.toFixed(2)}, |pc2| ${across.toFixed(2)})`);
 }
 
+group('fitPCA keeping every direction = centring only; the identity metric does not care about a rotation');
+{
+    // The size check asks for metricPcaDims (64) of at most 16 bone lengths: every
+    // direction is kept, so the PCA basis could only rotate the centred rows. It
+    // now just centres them. That is safe only because learnIdentityMetric's
+    // answers (cosines between projected rows) are the same for rotated rows.
+    const r = rng(9), n = 240, D = 6, X = new Float64Array(n * D), stretch = new Int32Array(n), sample = new Int32Array(n);
+    const proto = [0, 1, 2].map(() => Float64Array.from({ length: D }, () => 2 * gauss(r)));
+    for (let i = 0; i < n; i++) {
+        const a = i % 3;
+        for (let d = 0; d < D; d++) X[i * D + d] = proto[a][d] + 0.7 * gauss(r);
+        stretch[i] = a * 10 + Math.floor(i / 40); sample[i] = Math.floor(i / 3);
+    }
+    const w = Float64Array.from({ length: n }, (_, i) => 1 + (i % 4));
+    const pca = SC.fitPCA(X, n, D, 64, { weights: w });
+    const mean = new Float64Array(D); let W = 0;
+    for (let i = 0; i < n; i++) { W += w[i]; for (let d = 0; d < D; d++) mean[d] += w[i] * X[i * D + d]; }
+    for (let d = 0; d < D; d++) mean[d] /= W;
+    const probe = Float64Array.from({ length: D }, () => gauss(r));
+    const p = pca.project(probe);
+    ok(pca.dims === D && p.every((v, d) => v === probe[d] - mean[d]), 'k ≥ D: project = the row minus the (weighted) mean, every dimension kept');
+    const into = pca.projectInto(probe, new Float64Array(D + 3), 3);
+    ok(p.every((v, d) => v === into[3 + d]), 'projectInto writes the same values at the offset');
+    // A random rotation R: rows x -> R x
+    const R = new Float64Array(D * D);
+    for (let c = 0; c < D; c++) {
+        const v = Float64Array.from({ length: D }, () => gauss(r));
+        for (let c2 = 0; c2 < c; c2++) { let dot = 0; for (let d = 0; d < D; d++) dot += v[d] * R[d * D + c2]; for (let d = 0; d < D; d++) v[d] -= dot * R[d * D + c2]; }
+        let nn = 0; for (let d = 0; d < D; d++) nn += v[d] * v[d]; nn = Math.sqrt(nn);
+        for (let d = 0; d < D; d++) R[d * D + c] = v[d] / nn;
+    }
+    const rot = (x) => { const y = new Float64Array(D); for (let i = 0; i < D; i++) { let s = 0; for (let j = 0; j < D; j++) s += R[i * D + j] * x[j]; y[i] = s; } return y; };
+    const XR = new Float64Array(n * D);
+    for (let i = 0; i < n; i++) XR.set(rot(X.subarray(i * D, (i + 1) * D)), i * D);
+    const o = { metricPcaDims: 64, metricDims: 3, metricReg: 0.1 };
+    const m = SC.learnIdentityMetric(X, n, D, stretch, sample, o, w), mR = SC.learnIdentityMetric(XR, n, D, stretch, sample, o, w);
+    const cos = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };   // unit vectors
+    let worst = 0;
+    for (let t = 0; t < 20; t++) {
+        const a = X.subarray((t * 11) * D, (t * 11 + 1) * D), b = X.subarray((t * 7 + 3) * D, (t * 7 + 4) * D);
+        const d = Math.abs(cos(m.project(a), m.project(b)) - cos(mR.project(rot(a)), mR.project(rot(b))));
+        if (!(d <= worst)) worst = d;
+    }
+    ok(worst < 1e-9, `rotated rows give the same cosines between projected rows (worst difference ${worst.toExponential(1)})`);
+}
+
 group('Crop geometry (ui/image-embedder.js)');
 {
     globalThis.window = globalThis;           // image-embedder imports app-state, which is DOM-free at import
@@ -577,23 +800,25 @@ group('Crop geometry (ui/image-embedder.js)');
         const pts = NODES.map(n => { const [x, y] = TEMPLATE[n]; return [400 + x, 300 - y]; });   // nose to the right in image coords
         const sk = { nose: 0, tti: 3, body: NODES.map((n, i) => i).filter(i => !/^Tail/.test(NODES[i])) };
         const g = E.cropGeometry({ getPoint: i => pts[i] }, sk);
-        ok(g && Math.abs(g.L - 85) < 1e-9 && Math.abs(g.angle) < 1e-9 && Math.abs(g.scale - 160 / (1.3 * 85)) < 1e-9,
-            `geometry: body length 85, nose angle 0, scale 160/(1.3 L) (${g && g.L}, ${g && g.angle}, ${g && g.scale.toFixed(4)})`);
+        ok(g && Math.abs(g.L - 85) < 1e-9 && Math.abs(g.angle) < 1e-9 && Math.abs(g.scale - E.CROP / (1.3 * 85)) < 1e-9,
+            `geometry: body length 85, nose angle 0, scale CROP/(1.3 L) (${g && g.L}, ${g && g.angle}, ${g && g.scale.toFixed(4)})`);
         ok(E.cropGeometry({ getPoint: i => i === 0 ? null : pts[i] }, sk) === null, 'no nose → no crop');
-        const crop = new Uint8Array(160 * 160).fill(255), data = new Float32Array(3 * 224 * 224);
+        const S = E.CROP, I = E.INPUT;
+        ok(S === 160 && I === 192, `crop 160 px, model input 192 px — the calibrated sizes (${S}, ${I})`);
+        const crop = new Uint8Array(S * S).fill(255), data = new Float32Array(3 * I * I);
         E.writeInputTensor(crop, data, 0);
-        ok(Math.abs(data[0] - (1 - 0.485) / 0.229) < 1e-5 && Math.abs(data[2 * 224 * 224] - (1 - 0.406) / 0.225) < 1e-5,
-            'input tensor: 224x224, ImageNet-normalised per channel');
+        ok(Math.abs(data[0] - (1 - 0.485) / 0.229) < 1e-5 && Math.abs(data[2 * I * I] - (1 - 0.406) / 0.225) < 1e-5,
+            `input tensor: ${I}x${I}, ImageNet-normalised per channel`);
         {   // the precomputed resize table must reproduce the per-pixel formula exactly
-            let st = 7; const rc = new Uint8Array(160 * 160).map(() => (st = (st * 1103515245 + 12345) >>> 0) >>> 24);
-            const got = new Float32Array(3 * 224 * 224); E.writeInputTensor(rc, got, 0);
+            let st = 7; const rc = new Uint8Array(S * S).map(() => (st = (st * 1103515245 + 12345) >>> 0) >>> 24);
+            const got = new Float32Array(3 * I * I); E.writeInputTensor(rc, got, 0);
             const M = [0.485, 0.456, 0.406], SD = [0.229, 0.224, 0.225], ref = new Float32Array(got.length);
-            for (let y = 0; y < 224; y++) {
-                const sy = Math.min(Math.max((y + 0.5) * 160 / 224 - 0.5, 0), 159), y0 = Math.floor(sy), y1 = Math.min(y0 + 1, 159), fy = sy - y0;
-                for (let x = 0; x < 224; x++) {
-                    const sx = Math.min(Math.max((x + 0.5) * 160 / 224 - 0.5, 0), 159), x0 = Math.floor(sx), x1 = Math.min(x0 + 1, 159), fx = sx - x0;
-                    const v = ((rc[y0 * 160 + x0] * (1 - fx) + rc[y0 * 160 + x1] * fx) * (1 - fy) + (rc[y1 * 160 + x0] * (1 - fx) + rc[y1 * 160 + x1] * fx) * fy) / 255;
-                    for (let c = 0; c < 3; c++) ref[c * 224 * 224 + y * 224 + x] = (v - M[c]) / SD[c];
+            for (let y = 0; y < I; y++) {
+                const sy = Math.min(Math.max((y + 0.5) * S / I - 0.5, 0), S - 1), y0 = Math.floor(sy), y1 = Math.min(y0 + 1, S - 1), fy = sy - y0;
+                for (let x = 0; x < I; x++) {
+                    const sx = Math.min(Math.max((x + 0.5) * S / I - 0.5, 0), S - 1), x0 = Math.floor(sx), x1 = Math.min(x0 + 1, S - 1), fx = sx - x0;
+                    const v = ((rc[y0 * S + x0] * (1 - fx) + rc[y0 * S + x1] * fx) * (1 - fy) + (rc[y1 * S + x0] * (1 - fx) + rc[y1 * S + x1] * fx) * fy) / 255;
+                    for (let c = 0; c < 3; c++) ref[c * I * I + y * I + x] = (v - M[c]) / SD[c];
                 }
             }
             ok(got.every((v, i) => Object.is(v, ref[i])), 'input tensor: table-driven resize is bit-identical to the per-pixel formula');

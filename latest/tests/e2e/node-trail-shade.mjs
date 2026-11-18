@@ -25,14 +25,14 @@
  * Run: node tests/e2e/node-trail-shade.mjs   (SHOT_DIR=… saves the menu and a
  * comparison of the five shades over a dark and a light background)
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8298);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const SHOT_DIR = process.env.SHOT_DIR || '';
 let fails = 0;
 const check = (c, m, extra) => {
@@ -40,21 +40,18 @@ const check = (c, m, extra) => {
     if (!c) fails++;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 const SHADES = ['Very dark', 'Dark', 'Normal', 'Light', 'Very light'];
 
 let browser;
 try {
-    browser = await chromium.launch({ args: ['--disable-dev-shm-usage'] });
+    browser = await launchBrowser({ args: ['--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 1700, height: 900 }, deviceScaleFactor: 2 });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.evaluate(() => { try { localStorage.removeItem('nodeTrailShade'); } catch (e) { /* none */ } });
     await page.reload();
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
 
     const settleOpen = () => page.waitForTimeout(250);
     const settleClose = () => page.waitForTimeout(700);
@@ -314,14 +311,14 @@ try {
     // ---- 4. remembered across a reload --------------------------------------------
     await page.evaluate(() => localStorage.setItem('nodeTrailShade', 'veryLight'));
     await page.reload();
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 60000 });
     m = await menus();
     cs = checkedShade(m);
     check(m.shade === 'veryLight' && JSON.stringify(cs) === '{"toolbar":["Very light"],"menubar":["Very light"]}',
         'after a reload the remembered shade is restored and checked in both menus', { shade: m.shade, cs });
     await page.evaluate(() => localStorage.setItem('nodeTrailShade', 'sepia'));
     await page.reload();
-    await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 60000 });
+    await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 60000 });
     m = await menus();
     check(m.shade === 'dark', `an unrecognised stored shade falls back to Dark (${m.shade})`);
     await page.evaluate(() => localStorage.removeItem('nodeTrailShade'));

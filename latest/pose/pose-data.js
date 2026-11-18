@@ -332,6 +332,33 @@ export class FrameIdentityMap extends Map {
     forEach(cb, thisArg) {
         for (var e of this._iter(0)) cb.call(thisArg, e[1], e[0], this);
     }
+
+    /**
+     * `cb(key, value)` for every live entry, in insertion order, with no
+     * allocation per entry (the iterators build a `[k, v]` array each, ~4M of
+     * them on a large project). `cb` must not modify the map.
+     * `from` / `to` (entry positions, default 0 / `entrySpan()`) visit a stretch,
+     * so a long scan can be done in pieces: consecutive stretches visit what one
+     * call visits, in the same order, while `layoutStamp()` is unchanged.
+     * @returns {number} where the next stretch starts (`to`)
+     */
+    forEachKeyValue(cb, from, to) {
+        var end = to == null ? this._n : Math.min(to, this._n);
+        for (var i = from > 0 ? from : 0; i < end; i++) {
+            if (!(this._state[i] & FIM_LIVE)) continue;
+            cb(this._keyAt(i), this._valAt(i));
+        }
+        return end;
+    }
+
+    /** Entry positions in use (live + deleted): `forEachKeyValue`'s whole range. */
+    entrySpan() { return this._n; }
+
+    /**
+     * Changes when entries move to other positions (a clear or a compaction), so a
+     * scan done in stretches knows its positions no longer mean the same entries.
+     */
+    layoutStamp() { return this._clears + ':' + this._compactions; }
 }
 
 export class Skeleton {
@@ -1279,6 +1306,116 @@ function splicePointScores(handle, n, idx, del) {
     return storePointScores(out, 0, out.length);
 }
 
+// --------------------------------------------------------------------------
+// Skeleton-edit helpers (module-private)
+//
+// Used by `Session.propagateNodeAdded` / `propagateNodeRemoved`. They keep the
+// three things a skeleton node edit has to move — the 2D buffers, the per-
+// instance `nulledNodes` set, and the group's flat 3D — on ONE node index
+// space. Anything that drifts here mis-seats every node past the edit onto its
+// neighbour, which is the same class of bug the plane pool's "address by id,
+// never by index" rule exists to prevent.
+// --------------------------------------------------------------------------
+
+/** Fan-out radius, in source pixels, for a hidden node placed near a centroid. */
+const HIDDEN_NODE_SPREAD = 20;
+
+/**
+ * Give node `idx` a position near the instance's placed points and switch it
+ * off, so it draws a grey, clickable marker instead of nothing at all.
+ *
+ * Only for USER instances with something to centre on: a predicted instance's
+ * points are model output and must not be invented, and an instance with no
+ * placed points has no centroid, so both are left empty.
+ *
+ * The offset angle is derived from how many nodes are already switched off, so
+ * two nodes added in a row do not land on top of each other.
+ *
+ * @param {Instance} inst
+ * @param {number} idx
+ */
+function placeHiddenNode(inst, idx) {
+    if (!inst || inst.type !== 'user') return;
+    let cx = 0, cy = 0, c = 0;
+    for (let k = 0, n = inst.numNodes; k < n; k++) {
+        if (k === idx || !inst.hasPoint(k)) continue;
+        cx += inst.getX(k); cy += inst.getY(k); c++;
+    }
+    if (c === 0) return;
+    cx /= c; cy /= c;
+    if (!inst.nulledNodes) inst.nulledNodes = new Set();
+    const seq = inst.nulledNodes.size;
+    const angle = (2 * Math.PI * seq) / 8;
+    inst.setPoint(idx,
+        Math.round(cx + Math.cos(angle) * HIDDEN_NODE_SPREAD),
+        Math.round(cy + Math.sin(angle) * HIDDEN_NODE_SPREAD));
+    inst.nulledNodes.add(idx);
+}
+
+/**
+ * Re-seat `inst.nulledNodes` after node `idx` was spliced out. The set holds
+ * node INDICES, so every member above the removed one shifts down by one —
+ * leave it alone and a switched-off node silently becomes its neighbour.
+ * @param {Instance} inst
+ * @param {number} idx
+ */
+function dropNulledNode(inst, idx) {
+    const nn = inst && inst.nulledNodes;
+    if (!nn || nn.size === 0) return;
+    const next = new Set();
+    for (const k of nn) {
+        if (k === idx) continue;
+        next.add(k > idx ? k - 1 : k);
+    }
+    inst.nulledNodes = next;
+}
+
+/**
+ * Append one absent (all-NaN) keypoint to a flat `Float64Array(3N)`.
+ * @param {Float64Array} pts @returns {Float64Array}
+ */
+function grow3dByOneNode(pts) {
+    const out = new Float64Array(pts.length + POINT3D_STRIDE);
+    out.set(pts, 0);
+    for (let i = pts.length; i < out.length; i++) out[i] = NaN;
+    return out;
+}
+
+/**
+ * Splice keypoint `idx` out of a flat `Float64Array(3N)`, keeping every other
+ * keypoint's value exactly.
+ * @param {Float64Array} pts @param {number} idx @returns {Float64Array}
+ */
+function remove3dNode(pts, idx) {
+    const n = (pts.length / POINT3D_STRIDE) | 0;
+    if (idx < 0 || idx >= n) return pts;
+    const out = new Float64Array(pts.length - POINT3D_STRIDE);
+    const head = idx * POINT3D_STRIDE;
+    out.set(pts.subarray(0, head), 0);
+    out.set(pts.subarray(head + POINT3D_STRIDE), head);
+    return out;
+}
+
+/**
+ * Drop a group's cached reprojections. Both caches are per-node arrays built at
+ * the OLD node count — `reprojections` is the raw `{cam: [[x,y]|null, …]}` the
+ * triangulation sweeps store, and `reprojectedInstances` is the `Instance`
+ * form `getOrComputeReprojectedInstance` hands the renderer. Left behind, they
+ * draw the previous skeleton over the new one until something re-triangulates.
+ *
+ * `reprojectedInstances` is handed back to `NO_REPROJECTED_INSTANCES` rather
+ * than `clear()`ed: a group with nothing cached is exactly what the shared
+ * empty map is for, and a cleared Map of its own would keep the JSMap this
+ * project-wide sweep has just emptied.
+ * @param {InstanceGroup} group
+ */
+function clearGroupReprojections(group) {
+    if (group.reprojectedInstances !== NO_REPROJECTED_INSTANCES) {
+        group.reprojectedInstances = NO_REPROJECTED_INSTANCES;
+    }
+    if (group.reprojections) group.reprojections = null;
+}
+
 
 /** Auto-incrementing ID counter for UnlinkedInstance */
 let _unlinkedIdCounter = 0;
@@ -1462,6 +1599,14 @@ export class InstanceGroup {
          * @type {'ba'|'dlt'|undefined}
          */
         this.triangulationMethod = undefined;
+        /**
+         * The solve settings `points3d` was produced under
+         * (`triangulationSettingsKey`, pose/triangulation.js): `adoptPrior3d` only
+         * reuses 3D solved under the settings in force now. In memory only, so 3D
+         * read from a file has none and is re-solved rather than trusted.
+         * @type {string|undefined}
+         */
+        this.solveSettings = undefined;
         /**
          * @type {Map<string, Instance>} camera name -> reprojected instance.
          * Starts as the shared read-only `NO_REPROJECTED_INSTANCES`; write
@@ -1708,10 +1853,41 @@ export class Session {
          * `setTrackerNumAnimals`), which also marks the project dirty.
          */
         this.numAnimals = null;
+        /**
+         * Which identity has the tail marks ("id_0"), for Track All's tail-mark
+         * pass (pose/tail-mark.js), or null for off. Persisted as
+         * `metadata.lucid.tailMarkedIdentity`.
+         * @type {?string}
+         */
+        this.tailMarkedIdentity = null;
+        /**
+         * What each identity should show, per identity cue (pose/identity-cues.js):
+         * `{tailBands: {id_0: 0, id_1: 1, ...}}` (cue id -> identity name -> class), or
+         * null for none. Track All then relabels so each identity holds the animal that
+         * shows it. Persisted as `metadata.lucid.identityMarks`.
+         * @type {?Object<string, Object<string, *>>}
+         */
+        this.identityMarks = null;
+        /**
+         * The image ID-switch check's model for this session: null = the
+         * built-in one; else a package choice (`modelChoiceOf`,
+         * pose/image-model-manifest.js: key, name, input, threshold, url or
+         * folder). Persisted as `metadata.lucid.imageModel`.
+         * @type {?Object}
+         */
+        this.imageModel = null;
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */
         this.trackOccupancy = null;
+        /**
+         * The provenance of the .slp this session was loaded from, without
+         * LUC3D's own keys (e.g. campy-live-export's copies of the recording's
+         * session.json). Written back on save — `import-export/slp-provenance.js`.
+         * In memory only, never in `metadata.lucid`; null when there was none.
+         * @type {Object|null}
+         */
+        this.fileProvenance = null;
     }
 
     addIdentity(name, color) {
@@ -1871,6 +2047,47 @@ export class Session {
     }
 
     /**
+     * The tracks that "Propagate IDs → Tracks" would make: one per identity
+     * assigned anywhere in the project, in identities-array order so the indices
+     * are stable. Reads `frameIdentityMap`, which is whole-project and never
+     * evicted. The SLP exporters use the same plan, so an export writes the same
+     * tracks whether or not the command was run. Changes nothing.
+     *
+     * @returns {{names: string[], idToTrackIdx: Map<number, number>}} `names` is
+     *   empty when no identity is assigned.
+     */
+    identityTrackPlan() {
+        var usedSet = new Set();
+        for (var idVal of this.frameIdentityMap.values()) {
+            if (idVal != null && idVal >= 0) usedSet.add(idVal);
+        }
+        var names = [];
+        var idToTrackIdx = new Map();
+        var nameSeen = {};
+        // Auto-generated identity names look like "id_<identityId>" (the
+        // placeholder `getOrCreateIdentityForTrack` stamps when "Propagate
+        // Tracks → IDs" ran with no custom naming) — using that literally as
+        // a track name breaks the app's normal "track_N" naming convention
+        // (e.g. a Tracks-→-IDs-→-Tracks round trip would otherwise rename
+        // track_0/track_1 to id_0/id_1 instead of restoring track_0/track_1).
+        // A genuinely user-given name (e.g. "Alice") is still preserved as-is.
+        var AUTO_IDENTITY_NAME_RE = /^id_\d+$/;
+        for (var ix = 0; ix < this.identities.length; ix++) {
+            var ident = this.identities[ix];
+            if (!usedSet.has(ident.id)) continue;
+            var trimmedName = ident.name != null ? String(ident.name).trim() : '';
+            var base = (trimmedName !== '' && !AUTO_IDENTITY_NAME_RE.test(trimmedName))
+                ? trimmedName : ('track_' + names.length);
+            var name = base, dup = 2;
+            while (nameSeen[name]) { name = base + '_' + dup; dup++; }  // de-dup
+            nameSeen[name] = true;
+            idToTrackIdx.set(ident.id, names.length);
+            names.push(name);
+        }
+        return { names: names, idToTrackIdx: idToTrackIdx };
+    }
+
+    /**
      * "Propagate IDs → Tracks": overwrite every instance's track with its
      * identity. Identity/grouping is the source of truth here — each instance
      * that belongs to an identity-bearing InstanceGroup gets a trackIdx whose
@@ -1910,36 +2127,10 @@ export class Session {
         // data for every frame outside the resident window.
         var self = this;
 
-        // 1. Which identities are actually assigned anywhere, project-wide.
-        //    Preserves identities-array order for stable, reproducible track
-        //    indices. Build new tracks = identity names (unique + non-empty).
-        var usedSet = new Set();
-        for (var idVal of this.frameIdentityMap.values()) {
-            if (idVal != null && idVal >= 0) usedSet.add(idVal);
-        }
-        var newTracks = [];
-        var idToTrackIdx = new Map();   // identityId → new trackIdx
-        var nameSeen = {};
-        // Auto-generated identity names look like "id_<identityId>" (the
-        // placeholder `getOrCreateIdentityForTrack` stamps when "Propagate
-        // Tracks → IDs" ran with no custom naming) — using that literally as
-        // a track name breaks the app's normal "track_N" naming convention
-        // (e.g. a Tracks-→-IDs-→-Tracks round trip would otherwise rename
-        // track_0/track_1 to id_0/id_1 instead of restoring track_0/track_1).
-        // A genuinely user-given name (e.g. "Alice") is still preserved as-is.
-        var AUTO_IDENTITY_NAME_RE = /^id_\d+$/;
-        for (var ix = 0; ix < this.identities.length; ix++) {
-            var ident = this.identities[ix];
-            if (!usedSet.has(ident.id)) continue;
-            var trimmedName = ident.name != null ? String(ident.name).trim() : '';
-            var base = (trimmedName !== '' && !AUTO_IDENTITY_NAME_RE.test(trimmedName))
-                ? trimmedName : ('track_' + newTracks.length);
-            var name = base, dup = 2;
-            while (nameSeen[name]) { name = base + '_' + dup; dup++; }  // de-dup
-            nameSeen[name] = true;
-            idToTrackIdx.set(ident.id, newTracks.length);
-            newTracks.push(name);
-        }
+        // 1. Which identities are assigned, and the track each one becomes.
+        var plan = this.identityTrackPlan();
+        var newTracks = plan.names;
+        var idToTrackIdx = plan.idToTrackIdx;   // identityId → new trackIdx
 
         // 2. Remap the EXISTING, complete frameIdentityMap onto the new track
         //    indices. No frameGroups walk needed for this — every
@@ -2531,6 +2722,48 @@ export class Session {
     }
 
     /**
+     * The records of `frameIdentityEntries()`, same order and same skips, as
+     * `cb(frameIdx, camName, trackIdx, identityId)`: no record object, no
+     * `[k, v]` pair and no generator step per entry. For whole-map scans that
+     * run in one task (the ID timeline's rebuild). `cb` must not modify the map.
+     * `from` / `to` scan a stretch of positions (see `frameIdentityScan`).
+     * @param {function(number, string, number, number): void} cb
+     * @returns {number} where the next stretch starts
+     */
+    forEachFrameIdentity(cb, from, to) {
+        var self = this, map = this.frameIdentityMap;
+        if (!map) return 0;
+        var visit = function (key, identityId) {
+            if (_fimIsPacked(key)) {
+                // _fimUnpack + _fimDecode, inlined
+                var frameIdx = Math.floor(key / FIM_CAM_STRIDE);
+                var rem = key - frameIdx * FIM_CAM_STRIDE;
+                var camIdx = Math.floor(rem / FIM_TRACK_STRIDE);
+                var cam = self.cameras[camIdx];
+                cb(frameIdx, cam ? cam.name : String(camIdx), (rem - camIdx * FIM_TRACK_STRIDE) - 1, identityId);
+                return;
+            }
+            var parts = self._fimDecode(key);
+            if (parts) cb(parts.frameIdx, parts.camName, parts.trackIdx, identityId);
+        };
+        if (typeof map.forEachKeyValue === 'function') return map.forEachKeyValue(visit, from, to);
+        for (var e of map) visit(e[0], e[1]);
+        return Infinity;
+    }
+
+    /**
+     * `forEachFrameIdentity`'s whole range of positions for a scan in stretches
+     * (`from` / `to`), and a stamp that changes when the positions stop meaning
+     * the same entries; null when the map cannot be scanned in stretches.
+     * @returns {?{span: number, stamp: string}}
+     */
+    frameIdentityScan() {
+        var map = this.frameIdentityMap;
+        if (!map || typeof map.entrySpan !== 'function') return null;
+        return { span: map.entrySpan(), stamp: map.layoutStamp() };
+    }
+
+    /**
      * Raw per-frame identity value (may be the negative "explicit no identity"
      * sentinel), or undefined when there is no entry.
      * @returns {number|undefined}
@@ -2603,6 +2836,115 @@ export class Session {
             out.push([rec.frameIdx + ':' + rec.camName + ':' + rec.trackIdx, rec.identityId]);
         }
         return out;
+    }
+
+    /**
+     * The identity the instance groups imply for (frameIdx, cameraName,
+     * trackIdx): the `identityId` of every group at that frame whose member on
+     * that camera carries that track. This is exactly the entry
+     * `stampFrameIdentitiesFromGroups` (import-export/frame-identity-metadata.js)
+     * writes on load, so the two must keep the same rule: groups with an
+     * identity >= 0, members with a track >= 0.
+     * @returns {number|undefined|null} the identity; undefined when no group
+     *   implies one; null when two groups imply DIFFERENT ones (the loader's
+     *   pick would then depend on iteration order)
+     */
+    _derivedFrameIdentity(frameIdx, cameraName, trackIdx) {
+        if (trackIdx == null || trackIdx < 0) return undefined;
+        var groups = this.instanceGroups.get(frameIdx);
+        if (!groups) return undefined;
+        var found;
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (g.identityId == null || g.identityId < 0) continue;
+            var inst = g.instances.get(cameraName);
+            if (!inst || inst.trackIdx !== trackIdx) continue;
+            if (found === undefined) found = g.identityId;
+            else if (found !== g.identityId) return null;
+        }
+        return found;
+    }
+
+    /**
+     * `frameIdentityMap` minus what the instance groups already say, for the
+     * `.slp` writers (import-export/frame-identity-metadata.js). After Track All
+     * the map holds one entry per grouped 2D detection, each equal to its
+     * group's identity — 3,458,373 entries, 101 MB of JSON, on an 8-camera
+     * project — and the loader can rebuild all of those from the groups.
+     *
+     *   entries — map entries the groups do not reproduce: no group implies the
+     *             key, groups imply a different value, or groups disagree. Same
+     *             `[["frameIdx:camName:trackIdx", identityId], ...]` shape as
+     *             `exportFrameIdentityEntries`.
+     *   dropped — keys the groups imply that the map does NOT hold (an entry
+     *             removed after grouping), so the loader deletes them again.
+     *
+     * Rebuild = derive from the groups, delete `dropped`, set `entries`. That
+     * gives back exactly this map's entries whatever order the loader walks the
+     * groups in, because every key whose derived value is ambiguous is in one
+     * of the two lists.
+     * @returns {{entries: Array<[string, number]>, dropped: string[]}}
+     */
+    frameIdentityExceptions() {
+        var entries = [];
+        for (var rec of this.frameIdentityEntries()) {
+            if (this._derivedFrameIdentity(rec.frameIdx, rec.camName, rec.trackIdx) === rec.identityId) continue;
+            entries.push([rec.frameIdx + ':' + rec.camName + ':' + rec.trackIdx, rec.identityId]);
+        }
+        var dropped = [];
+        var seen = null;
+        for (var [frameIdx, groups] of this.instanceGroups) {
+            for (var gi = 0; gi < groups.length; gi++) {
+                var g = groups[gi];
+                if (g.identityId == null || g.identityId < 0) continue;
+                for (var [camName, inst] of g.instances) {
+                    if (!inst || inst.trackIdx == null || inst.trackIdx < 0) continue;
+                    if (this.hasFrameIdentity(frameIdx, camName, inst.trackIdx)) continue;
+                    var key = frameIdx + ':' + camName + ':' + inst.trackIdx;
+                    if (!seen) seen = new Set();
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    dropped.push(key);
+                }
+            }
+        }
+        return { entries: entries, dropped: dropped };
+    }
+
+    /**
+     * Set serialized `[key, identityId]` pairs into `frameIdentityMap` WITHOUT
+     * clearing it first (`ingestFrameIdentityEntries` replaces the map). Keys in
+     * either form, as `ingestFrameIdentityEntries` accepts them.
+     * @param {Array<[string|number, number]>} entries
+     * @returns {number} entries set
+     */
+    applyFrameIdentityEntries(entries) {
+        if (!entries) return 0;
+        for (var i = 0; i < entries.length; i++) {
+            this.frameIdentityMap.set(this._fimNormalizeKey(entries[i][0]), entries[i][1]);
+        }
+        return entries.length;
+    }
+
+    /**
+     * Delete serialized keys (either form) from `frameIdentityMap`.
+     * @param {Array<string|number>} keys
+     * @returns {number} entries deleted
+     */
+    deleteFrameIdentityKeys(keys) {
+        if (!keys) return 0;
+        var n = 0;
+        for (var i = 0; i < keys.length; i++) {
+            if (this.frameIdentityMap.delete(this._fimNormalizeKey(keys[i]))) n++;
+        }
+        return n;
+    }
+
+    /** A serialized key -> the key `frameIdentityMap` stores (packed when encodable). */
+    _fimNormalizeKey(k) {
+        if (_fimIsPacked(k)) return k;
+        var parts = _parseFrameIdentityKey(String(k));
+        return parts ? this._fimKey(parts.frameIdx, parts.camName, parts.trackIdx) : k;
     }
 
     /**
@@ -2949,6 +3291,39 @@ export class Session {
     }
 
     /**
+     * `predictedNodeScore` for every node of one instance: the function maps a
+     * node index `k` to exactly what `predictedNodeScore(cameraName, frameIdx,
+     * inst, k)` returns, with the instance's store row (lazy) resolved once
+     * instead of per node (By Cam's per-frame pass asks for every node).
+     *
+     * @param {string} cameraName
+     * @param {number} frameIdx
+     * @param {Instance} inst
+     * @returns {(k: number) => number}
+     */
+    predictedNodeScorer(cameraName, frameIdx, inst) {
+        const none = function () { return NaN; };
+        if (!inst || inst.type !== 'predicted') return none;
+        const n = inst.numNodes;
+        const inRange = function (k) { return Number.isInteger(k) && k >= 0 && k < n; };
+        if (inst.hasPointScores()) return function (k) { return inRange(k) ? inst.pointScore(k) : NaN; };
+        const loader = this.lazyLoader;
+        if (!loader || !Number.isInteger(inst._rawInstIndex) || inst._rawInstIndex < 0) return none;
+        if (typeof loader.predictedPointScorer !== 'function') {
+            if (typeof loader.predictedPointScore !== 'function') return none;
+            return (k) => this.predictedNodeScore(cameraName, frameIdx, inst, k);
+        }
+        const scoreOf = loader.predictedPointScorer(cameraName, frameIdx, inst._rawInstIndex);
+        if (!scoreOf) return none;
+        const nodes = this.skeleton && this.skeleton.nodes;
+        return function (k) {
+            if (!inRange(k)) return NaN;
+            const name = nodes ? nodes[k] : undefined;
+            return name == null ? NaN : scoreOf(name);
+        };
+    }
+
+    /**
      * Sorted list of all frame indices.
      * @returns {number[]}
      */
@@ -3234,21 +3609,69 @@ export class Session {
 
     /**
      * Propagate a skeleton node addition to all instances.
-     * Appends one empty node slot to every Instance.
+     * Appends one node slot to every Instance.
+     *
+     * **`opts.hidden` places the new node and switches it OFF**, rather than
+     * leaving the slot empty. An empty slot draws no marker, and a node with no
+     * marker can never be clicked — so on a USER instance the node the person
+     * just added to the skeleton would be unreachable, and they could never
+     * build a full-keypoint instance with it. That is the same failure
+     * `InteractionManager`'s instance-creation path already guards against;
+     * this takes the same remedy, fanning the node out from the centroid of the
+     * instance's placed points and recording it in `nulledNodes` so it draws
+     * grey and contributes nothing to triangulation until the user moves it.
+     * `nulledNodes` round-trips through the `.slp` (finite xy + `visible:
+     * false`), so the hidden state survives a save/reload.
+     *
+     * PREDICTED instances are deliberately left EMPTY: their points are model
+     * output, and fabricating one would make a prediction say something the
+     * model never did. `_convertToUserInstance` fills and flags them at the
+     * moment they become editable, which is the right time.
+     *
+     * Default `hidden: false` keeps the raw data-model behaviour (an empty
+     * slot) for callers that only want the arrays re-shaped; the skeleton
+     * editor passes `true`.
      *
      * RESIDENT-ONLY by necessity — see `_warnResidentOnlyStructuralEdit`.
+     * @param {{hidden?: boolean}} [opts]
      */
-    propagateNodeAdded() {
+    propagateNodeAdded(opts) {
         this._warnResidentOnlyStructuralEdit('Skeleton node added');
+        const hidden = !!(opts && opts.hidden);
         // Update all instances in FrameGroups. `insertNodeAt` grows the flat
         // coordinate/occlusion buffers AND any backup together, so a later
         // restorePoints() stays node-aligned (luc3d #189 follow-up #1).
         for (const fg of this.frameGroups.values()) {
             for (const instances of fg.instances.values()) {
-                for (const inst of instances) inst.insertNodeAt(inst.numNodes);
+                for (const inst of instances) {
+                    inst.insertNodeAt(inst.numNodes);
+                    if (hidden) placeHiddenNode(inst, inst.numNodes - 1);
+                }
             }
             for (const unlinkedList of fg.unlinkedInstances.values()) {
-                for (const ul of unlinkedList) ul.instance.insertNodeAt(ul.instance.numNodes);
+                for (const ul of unlinkedList) {
+                    ul.instance.insertNodeAt(ul.instance.numNodes);
+                    if (hidden) placeHiddenNode(ul.instance, ul.instance.numNodes - 1);
+                }
+            }
+        }
+        // Keep the 3D node-aligned with the 2D. `points3d` is a flat
+        // Float64Array(3N) on the SAME node index space, so a group left at the
+        // old length would report the new node as triangulated-at-garbage the
+        // moment the array grew for any other reason. Appending one NaN triple
+        // is the lossless answer: every solved keypoint keeps its value and the
+        // new node reads as absent. The cached reprojections go, because they
+        // are per-node arrays built from the old length. The re-shaped array
+        // goes back through `pooledPoints3d`: this walks every group in the
+        // project, which is a BULK path, and leaving each one on its own
+        // ArrayBuffer would undo the slab pooling for the whole project.
+        for (const groups of this.instanceGroups.values()) {
+            for (const group of groups) {
+                if (group.points3d) {
+                    group.points3d = pooledPoints3d(grow3dByOneNode(group.points3d));
+                }
+                clearGroupReprojections(group);
+                group.markDirty();
             }
         }
     }
@@ -3256,6 +3679,15 @@ export class Session {
     /**
      * Propagate a skeleton node removal to all instances.
      * Removes node `nodeIdx` from every Instance.
+     *
+     * The 3D is SPLICED, not discarded. `points3d` is indexed by the same node
+     * index as the 2D, so it has to lose exactly the one node — and dropping
+     * the whole array instead (which is what this used to do) threw away every
+     * triangulated keypoint in the project because one node was deleted, with
+     * no way to get them back short of re-running Triangulate All. Groups are
+     * still marked dirty, so a re-solve is still offered; it is just no longer
+     * compulsory. Cached reprojections are cleared for the same reason as in
+     * `propagateNodeAdded`.
      *
      * RESIDENT-ONLY by necessity — see `_warnResidentOnlyStructuralEdit`.
      * @param {number} nodeIdx - The index of the removed node
@@ -3266,17 +3698,28 @@ export class Session {
         // backup together (luc3d #189 follow-up #1).
         for (const fg of this.frameGroups.values()) {
             for (const instances of fg.instances.values()) {
-                for (const inst of instances) inst.removeNodeAt(nodeIdx);
+                for (const inst of instances) {
+                    inst.removeNodeAt(nodeIdx);
+                    dropNulledNode(inst, nodeIdx);
+                }
             }
             for (const unlinkedList of fg.unlinkedInstances.values()) {
-                for (const ul of unlinkedList) ul.instance.removeNodeAt(nodeIdx);
+                for (const ul of unlinkedList) {
+                    ul.instance.removeNodeAt(nodeIdx);
+                    dropNulledNode(ul.instance, nodeIdx);
+                }
             }
         }
         // Mark all instance groups as dirty (triangulation needs recomputing)
+        // and splice the removed node out of their 3D, re-pooling it for the
+        // same reason as in `propagateNodeAdded`.
         for (const groups of this.instanceGroups.values()) {
             for (const group of groups) {
+                if (group.points3d) {
+                    group.points3d = pooledPoints3d(remove3dNode(group.points3d, nodeIdx));
+                }
+                clearGroupReprojections(group);
                 group.markDirty();
-                group.points3d = null;
             }
         }
     }
@@ -3757,6 +4200,71 @@ export function pooledPoints3d(points) {
 /** Is `points3d` a view into the slab pool? (diagnostics / tests) */
 export function isPooledPoints3d(points3d) {
     return !!points3d && ArrayBuffer.isView(points3d) && _p3SlabBuffers.has(points3d.buffer);
+}
+
+// --------------------------------------------------------------------------
+// 3D read from a file
+// --------------------------------------------------------------------------
+
+/** `points3d` arrays the loaders read from a file (see `markPoints3dFromFile`). */
+var _filePoints3d = new WeakSet();
+
+/**
+ * Record that `points3d` is a group's 3D as READ FROM A FILE (an `.slp`'s
+ * stored 3D, LUCID's own or another tool's), so `ui/rendering.js`'s
+ * reprojection fill always reprojects it rather than re-solving — even with a
+ * reprojection-error threshold set, the one case in which the fill otherwise
+ * re-solves a clean group. A re-solve would show LUCID's answer instead of the
+ * file's: the reprojections and errors of 3D the project does not hold.
+ *
+ * Keyed by the ARRAY, not the group, so it lapses by itself: every path that
+ * re-solves or edits a group's 3D assigns a new array (nothing writes a
+ * group's `points3d` in place), and that array is not in the set.
+ * @param {Float64Array|null} points3d
+ */
+export function markPoints3dFromFile(points3d) {
+    if (points3d) _filePoints3d.add(points3d);
+}
+
+/** Is `points3d` a group's 3D as read from a file? (`markPoints3dFromFile`) */
+export function isPoints3dFromFile(points3d) {
+    return !!points3d && _filePoints3d.has(points3d);
+}
+
+/** Smoothed `points3d` array -> the same group's 3D before any smoothing. */
+var _smoothedPoints3d = new WeakMap();
+
+/**
+ * Record that `points3d` holds SMOOTHED 3D (`pose/temporal-smoothing.js`) and
+ * what it held before the first smoothing (`source`, same layout). Two uses:
+ *  - the reprojection fill reprojects smoothed 3D like 3D read from a file: a
+ *    re-solve from the 2D would draw the unsmoothed answer, and the pass would
+ *    look as if it did nothing;
+ *  - every later pass filters `source`, not the already-smoothed values, so a
+ *    second run replaces the first instead of smoothing on top of it, and
+ *    turning both kernels off restores it.
+ * The pass writes in place, so this keys the group's own array; like
+ * `markPoints3dFromFile` it lapses when a re-solve or edit assigns a new one.
+ * @param {Float64Array|null} points3d
+ * @param {Float64Array} source
+ */
+export function markPoints3dSmoothed(points3d, source) {
+    if (points3d) _smoothedPoints3d.set(points3d, source);
+}
+
+/** Does `points3d` hold smoothed 3D? (`markPoints3dSmoothed`) */
+export function isPoints3dSmoothed(points3d) {
+    return !!points3d && _smoothedPoints3d.has(points3d);
+}
+
+/** The 3D `points3d` held before it was first smoothed, or null. */
+export function unsmoothedPoints3d(points3d) {
+    return (points3d && _smoothedPoints3d.get(points3d)) || null;
+}
+
+/** Forget that `points3d` is smoothed (after its source is copied back). */
+export function clearPoints3dSmoothed(points3d) {
+    if (points3d) _smoothedPoints3d.delete(points3d);
 }
 
 

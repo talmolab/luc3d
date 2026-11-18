@@ -27,15 +27,15 @@
  * `lucidInsts.length === 0`, so an emptied camera-frame streams back verbatim
  * unless the store itself was mutated.
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8101);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FIXTURE = '_custom-delete-roundtrip.slp';
 const FIXTURE_PATH = path.join(repoRoot, FIXTURE);
 
@@ -44,16 +44,13 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 
 try { fs.unlinkSync(FIXTURE_PATH); } catch (e) { /* ignore */ }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 const NF = 12;           // frames
 const CAMS = ['camA', 'camB', 'camC'];
 const PER_CAM = 2;       // instances per camera per frame -> 12*3*2 = 72 rows
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
 
     // =======================================================================
     // Page 1 — build a real multi-camera project and save it through the real
@@ -73,7 +70,7 @@ try {
     });
 
     await page1.goto(`http://localhost:${PORT}/index.html`);
-    await page1.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page1.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     const built = await page1.evaluate(async ({ NF, CAMS, PER_CAM }) => {
         const pd = await import('/pose/pose-data.js');
@@ -169,7 +166,7 @@ try {
     page2.on('pageerror', e => { console.log('  [p2 pageerror]', String(e).slice(0, 300)); fails++; });
     page2.on('dialog', async d => { await d.accept(''); });
     await page2.goto(`http://localhost:${PORT}/index.html`);
-    await page2.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page2.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
     // Real lazy-reopen entry point, then wait for the session to appear.
     await page2.evaluate(async (fixture) => {
@@ -181,7 +178,7 @@ try {
 
     await page2.waitForFunction(
         () => { const s = window.__lucid && window.__lucid.state; return !!(s && s.session && s.session.lazyLoader); },
-        { timeout: 30000 });
+        null, { timeout: 30000 });
 
     const storeRows = () => page2.evaluate(() => {
         let n = 0;
@@ -390,7 +387,7 @@ try {
     page3.on('pageerror', e => { console.log('  [p3 pageerror]', String(e).slice(0, 300)); fails++; });
     page3.on('dialog', async d => { await d.accept(''); });
     await page3.goto(`http://localhost:${PORT}/index.html`);
-    await page3.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    await page3.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
     await page3.evaluate(async (fixture) => {
         const sessionLoader = await import('/loading/session-loader.js');
         const resp = await fetch('/' + fixture);
@@ -399,7 +396,7 @@ try {
     }, RESAVE);
     await page3.waitForFunction(
         () => { const s = window.__lucid && window.__lucid.state; return !!(s && s.session && s.session.lazyLoader); },
-        { timeout: 30000 });
+        null, { timeout: 30000 });
 
     const reopened = await page3.evaluate(async () => {
         const TRI = await import('/pose/triangulation.js');

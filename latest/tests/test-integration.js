@@ -231,7 +231,9 @@
             // Add an InstanceGroup so we can verify dirty marking
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
-            group.points3d = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+            // Flat Float64Array(3N), the canonical shape since luc3d #189.
+            group.points3d = new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            group.reprojections = { cam1: [[1, 1], [2, 2], [3, 3]] };
             session.instanceGroups.set(0, [group]);
 
             // Remove middle node 'b'
@@ -248,9 +250,15 @@
             assertEqual(skeleton.nodes.length, 2);
             assertDeepEqual(skeleton.nodes, ['a', 'c']);
 
-            // Verify InstanceGroup marked dirty and 3D points cleared
+            // The group is marked dirty, its 3D is SPLICED (not discarded — one
+            // deleted node must not cost the project every triangulated
+            // keypoint it has), and its cached reprojections, which are arrays
+            // at the OLD node count, are dropped so they get recomputed.
             assertTrue(group.dirty, 'Group should be marked dirty');
-            assertNull(group.points3d, '3D points should be cleared');
+            assertEqual(group.points3d.length, 6, 'one keypoint spliced out of the 3D');
+            assertDeepEqual(Array.from(group.points3d), [1, 2, 3, 7, 8, 9],
+                'the removed node is gone and every other keypoint keeps its value');
+            assertNull(group.reprojections, 'stale per-node reprojections dropped');
         });
 
         it('adding an edge updates skeleton correctly', function () {
@@ -352,6 +360,7 @@
                 { vw: 640, vh: 480, cw: 640, ch: 480 },   // 1:1
                 { vw: 1280, vh: 1024, cw: 640, ch: 512 },  // 2:1 scale
                 { vw: 320, vh: 240, cw: 960, ch: 720 },    // 3:1 upscale
+                { vw: 640, vh: 480, cw: 800, ch: 480 },    // pillarboxed
             ];
 
             for (var t = 0; t < testCases.length; t++) {
@@ -362,18 +371,18 @@
                     var vx = testPoints[p][0];
                     var vy = testPoints[p][1];
 
-                    // Video -> Canvas
+                    // Video -> Canvas ({x, y, scale}: an object, not an array —
+                    // indexing it gave undefined, so this used to compare NaN)
                     var canvasCoords = videoToCanvas(vx, vy, tc.vw, tc.vh, tc.cw, tc.ch);
 
-                    // Canvas -> Video (reverse)
-                    var scaleX = tc.vw / tc.cw;
-                    var scaleY = tc.vh / tc.ch;
-                    var recoveredVx = canvasCoords[0] * scaleX;
-                    var recoveredVy = canvasCoords[1] * scaleY;
+                    // Canvas -> Video (reverse): undo the centred fit
+                    var s = canvasCoords.scale;
+                    var recoveredVx = (canvasCoords.x - (tc.cw - tc.vw * s) / 2) / s;
+                    var recoveredVy = (canvasCoords.y - (tc.ch - tc.vh * s) / 2) / s;
 
-                    assertApprox(recoveredVx, vx, 1.0,
+                    assertApprox(recoveredVx, vx, 1e-9,
                         'Round-trip X at ' + vx + ',' + vy + ' (' + tc.vw + 'x' + tc.vh + '->' + tc.cw + 'x' + tc.ch + ')');
-                    assertApprox(recoveredVy, vy, 1.0,
+                    assertApprox(recoveredVy, vy, 1e-9,
                         'Round-trip Y at ' + vx + ',' + vy + ' (' + tc.vw + 'x' + tc.vh + '->' + tc.cw + 'x' + tc.ch + ')');
                 }
             }

@@ -23,26 +23,24 @@
  *      color-by-track and color-by-identity mode, so the panel agrees with the
  *      2D views and the 3D viewport.
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8092);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 try {
-  const browser = await chromium.launch();
+  const browser = await launchBrowser();
   const page = await browser.newPage();
   const errs = [];
   page.on('pageerror', e => errs.push(String(e)));
   await page.goto(`http://localhost:${PORT}/index.html`);
-  await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+  await page.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
   const info = await page.evaluate(async () => {
     const pd = await import('/pose/pose-data.js');
@@ -195,7 +193,7 @@ try {
   const errs2 = [];
   page2.on('pageerror', e => errs2.push(String(e)));
   await page2.goto(`http://localhost:${PORT}/index.html`);
-  await page2.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+  await page2.waitForFunction(() => window.__lucid && window.__lucid.state, null, { timeout: 30000 });
 
   const ta = await page2.evaluate(async () => {
     const pd = await import('/pose/pose-data.js');

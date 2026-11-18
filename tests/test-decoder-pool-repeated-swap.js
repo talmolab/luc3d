@@ -428,5 +428,69 @@
                 );
             }
         });
+
+        // A decoder trimmed into the cold reserve is kept for reuse, but its
+        // decoded-frame cache must go at once, not with the decoder 60 s later:
+        // measured on 3 open 8-camera sessions, the reserve held 1.8 GB of
+        // ImageBitmaps right after a switch, which V8 counts toward the limit
+        // that sets off back-to-back full GCs. The reused decoders are cleared
+        // by switchSource, so they are not released here.
+        it('a decoder moved to the cold reserve has its frames released at once', async function () {
+            var mutationLog = [];
+            var videoFiles = [];
+            var oldIdx = [], newIdx = [];
+            for (var c = 0; c < 4; c++) { videoFiles.push({ file: { name: 'old_cam' + c + '.mp4', size: 1024 }, sessionIdx: 0, decoder: null }); oldIdx.push(c); }
+            for (var c2 = 0; c2 < 2; c2++) { videoFiles.push({ file: { name: 'new_cam' + c2 + '.mp4', size: 1024 }, sessionIdx: 1, decoder: null }); newIdx.push(4 + c2); }
+            var sessions = [makeSession('S_old', oldIdx), makeSession('S_new', newIdx)];
+            var pool = [];
+            for (var p = 0; p < 4; p++) {
+                var dec = makeMockDecoder('pool-' + p, mutationLog);
+                dec.released = 0;
+                dec.releaseFrames = function () { this.released++; };
+                pool.push(dec);
+                videoFiles[p].decoder = dec;
+            }
+            var timers = [];
+            var state = {
+                currentFrame: 0, totalFrames: 100, fps: 30, isPlaying: false,
+                triangulationResults: new Map(), sessions: sessions,
+                activeSessionIdx: 0, session: sessions[0], videoFiles: videoFiles,
+                views: [], decoderPool: pool,
+            };
+            var timeline = {
+                _session: sessions[0], _zoom: 1, _scrollFrame: 0,
+                _maxZoom: function () { return 10; }, setData: function (s) { this._session = s; },
+                setTotalFrames: function () {}, _clampScroll: function () {}, redraw: function () {},
+            };
+            var noop = function () {};
+            var switchSession = buildSwitchSession({
+                state: state, timeline: timeline, viewport3d: null, videoController: null,
+                paneManager: makeStubPaneManager(), setVideoController: noop,
+                OnDemandVideoDecoder: function () { throw new Error('should reuse the pool'); },
+                createViewForVideoFile: noop, updateTotalFrames: noop, rebuildVideoController: noop,
+                fitCanvasesToCells: noop, refreshPaneInteractions: noop, drawAllOverlays: noop,
+                populateViewStrip: noop, populateSessionStrip: noop,
+                sessionHasCalibration: function () { return false; },
+                getInstanceGroupsForFrame: function () { return []; },
+                setReprojErrorVisible: noop, updateInfoPanel: noop, showLoading: noop, hideLoading: noop,
+                setup3DViewport: noop, setStatus: noop, document: makeStubDocument(),
+                // The 60 s close timer is recorded, never run: the release must not wait for it.
+                setTimeout: function (fn, ms) { timers.push(ms); return timers.length; },
+            });
+
+            await switchSession(1);
+
+            var cold = state._decoderPoolCold || [];
+            assertEqual(cold.length, 2, 'the 2 surplus decoders go to the cold reserve (got ' + cold.length + ')');
+            cold.forEach(function (d) {
+                assertEqual(d.released, 1, d.id + ' (cold reserve) should have had releaseFrames() once, got ' + d.released);
+            });
+            for (var k = 0; k < 2; k++) {
+                assertEqual(state.decoderPool[k].released, 0,
+                    state.decoderPool[k].id + ' was reused via switchSource (which clears it); releaseFrames should not run, got ' +
+                    state.decoderPool[k].released);
+            }
+            assertTrue(timers.indexOf(60000) >= 0, 'the cold reserve still closes its decoders after 60 s');
+        });
     });
 })();
