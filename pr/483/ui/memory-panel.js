@@ -1,7 +1,12 @@
 /**
  * ui/memory-panel.js — the Memory panel (`#tabMemory`, right-edge rail): the
- * page's JavaScript heap over the last five minutes, the heap limit as a
- * reference line, and what the project holds.
+ * page's JavaScript heap over the last five minutes, V8's limit for
+ * JavaScript objects as a reference line, and what the project holds.
+ *
+ * The line is named "JS object limit", not "heap limit": `jsHeapSizeLimit`
+ * caps JavaScript objects only, while `usedJSHeapSize` also counts typed-array
+ * memory, which sits outside that cap. A big project reads well above the line
+ * and is fine (05mice after Track All: 5.6 GB used, objects under 1.9 GB).
  *
  * It reads the heap once a second from the moment the app starts, panel open
  * or not, so opening it shows the last five minutes, a run done with it
@@ -29,13 +34,13 @@
  * The samples live in a ring in memory (`MemoryRing`): nothing goes to the
  * `.slp` or `localStorage`. Test hook: `window.__lucidMemoryPanel`.
  */
-import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=4c5ac4ca71b8';
-import { setInfoTip, ICON_INFO } from './info-tip.js?v=4c5ac4ca71b8';
-import { state } from './app-state.js?v=4c5ac4ca71b8';
+import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=25827083184f';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=25827083184f';
+import { state } from './app-state.js?v=25827083184f';
 import {
     MEMORY_SAMPLE_MS, MEMORY_WINDOW_MS, UA_MEMORY_EVERY_MS,
     MemoryRing, readHeap, summarizeUaMemory, projectCounts, formatMB, plotGeometry,
-} from './memory-plot.js?v=4c5ac4ca71b8';
+} from './memory-plot.js?v=25827083184f';
 
 const TAB = 'tabMemory';
 const PLOT_W = 260;
@@ -43,7 +48,7 @@ const PLOT_H = 90;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 export const MEMORY_INFO_TEXT =
-    'Chrome\'s JavaScript heap for this page; it also counts many typed arrays, which live outside the ~4 GB heap cap, so it can read above the limit. ' +
+    'Chrome\'s count of this page\'s memory: JavaScript objects plus typed arrays (most of a big project\'s keypoints), but the dashed limit caps the objects only, so the line can go well above it without trouble. ' +
     'It leaves out web workers (Track All, the Triangulate pool, the image check), video decoding, and Chrome\'s GPU and other processes: Chrome\'s Task Manager (Shift+Esc) shows those.';
 
 const ring = new MemoryRing();
@@ -234,7 +239,7 @@ function build(pane) {
     const legend = document.createElement('div');
     legend.className = 'memory-legend';
     legend.innerHTML = '<span class="memory-key memory-key-used"></span>used' +
-        '<span class="memory-key memory-key-limit"></span>heap limit' +
+        '<span class="memory-key memory-key-limit"></span>JS object limit' +
         '<span class="memory-legend-ua" id="memoryLegendUa" hidden>' +
         '<span class="memory-key memory-key-ua"></span>whole page, workers too</span>';
     body.appendChild(legend);
@@ -255,7 +260,7 @@ function build(pane) {
 
     const peak = row(body, 'Peak (5 min)', 'memoryPeak');
     const total = row(body, 'Allocated', 'memoryTotal');
-    const limit = row(body, 'Heap limit', 'memoryLimit');
+    const limit = row(body, 'JS object limit', 'memoryLimit');
     const ua = row(body, 'Whole page, workers too', 'memoryUa');
     const uaWorkers = row(body, 'of which workers', 'memoryUaWorkers');
     ua.row.hidden = true;

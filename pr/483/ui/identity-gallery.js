@@ -10,10 +10,13 @@
 // each identity's tracked frames and 3D centroids, which frames to sample, which
 // camera to cut each sample from, the crop square, its 2D at a frame (hydrating a
 // lazy project's members for the read), and the projected path. The
-// drawing half decodes one frame per sample (`view.decoder.getFrame`) AFTER the
-// box is on screen, one queue per camera with the cameras side by side, so the
-// summary never waits on video, and stops
-// when the box closes. Resting the pointer on a sample shows it enlarged beside
+// drawing half decodes one frame per sample AFTER the box is on screen, one
+// queue per camera with the cameras side by side, so the summary never waits on
+// video, and stops when the box closes. Each frame is a caller-owned copy
+// (`view.decoder.peekFrame`, closed once drawn), never `getFrame`: a jump through
+// getFrame keeps the frame in the view's cache and warms the 24 frames before it
+// in the background, and 25 samples left ~1.1 GB of decoded video in Chrome's
+// GPU process after the summary closed (8 cameras, 1280x1024). Resting the pointer on a sample shows it enlarged beside
 // the tile: the crop is copied at up to the enlarged size when it is drawn (a
 // decoder's frame may be closed by the next decode), so the preview is a sharper
 // image, not the 88 px tile scaled up. A map enlarges the same way — its path
@@ -23,9 +26,26 @@
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=4c5ac4ca71b8';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=4c5ac4ca71b8';
-import { keyframeIndices } from './image-embedder.js?v=4c5ac4ca71b8';
+import { state } from './app-state.js?v=25827083184f';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=25827083184f';
+import { keyframeIndices } from './image-embedder.js?v=25827083184f';
+
+/**
+ * Frame `frame` of `view` for drawing, and whether the caller must close it:
+ * `peekFrame`'s copy (no cache write, step cursor or back-warm; owned) when the
+ * decoder has one, else `getFrame`'s (the decoder's own; never closed here).
+ */
+export async function galleryFrame(view, frame) {
+    var d = view && view.decoder;
+    if (!d) return { img: null, owned: false };
+    if (typeof d.peekFrame === 'function') return { img: await d.peekFrame(frame), owned: true };
+    return { img: await d.getFrame(frame), owned: false };
+}
+
+/** Close a `galleryFrame` result the caller owns. */
+function releaseFrame(got) {
+    if (got && got.owned && got.img && typeof got.img.close === 'function') { try { got.img.close(); } catch (e) { /* ignore */ } }
+}
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;
@@ -667,12 +687,12 @@ export function renderIdentityGallery(host, session, opts) {
         var vw = (view && view.videoWidth) || (cam && cam.size && cam.size[0]) || 640;
         var vh = (view && view.videoHeight) || (cam && cam.size && cam.size[1]) || 480;
         var H = GALLERY_TILE, W = Math.max(48, Math.min(240, Math.round(H * vw / vh)));
-        var bg = null;
+        var bg = null, bgGot = null;
         if (view) {
-            try { bg = await view.decoder.getFrame(Math.max(0, Math.min((state.totalFrames || 1) - 1, state.currentFrame || 0))); }
+            try { bgGot = await galleryFrame(view, Math.max(0, Math.min((state.totalFrames || 1) - 1, state.currentFrame || 0))); bg = bgGot.img; }
             catch (e) { bg = null; }
         }
-        if (token !== mapToken || !alive()) return;
+        if (token !== mapToken || !alive()) { releaseFrame(bgGot); return; }
         var tile = zoom.tile();
         if (tile && tile.classList.contains('identity-gallery-map-canvas')) zoom.hide();   // that map is being replaced
         var last = Math.max(1, (state.totalFrames || 1) - 1);
@@ -747,6 +767,7 @@ export function renderIdentityGallery(host, session, opts) {
             r.map.appendChild(c);
             r.map.appendChild(tip);
         });
+        releaseFrame(bgGot);   // drawn into every map and copied into bgBig: nothing keeps it
     };
     if (select) {
         select.addEventListener('change', function () {
@@ -786,8 +807,8 @@ export function renderIdentityGallery(host, session, opts) {
         return jobs;
     };
 
-    // Draw a sample's image into its tile, as soon as it is decoded: a decoder's
-    // cached frame may be closed once another is decoded.
+    // Draw a sample's image into its tile, as soon as it is decoded (the image is
+    // closed right after: the tile and its preview keep copies of the crop).
     var drawSample = function (job, img) {
         var r = job.r, fig = job.fig, frame = job.frame, cam = job.cam, box = job.box, pts = job.pts;
         var c = hiDpiCanvas(GALLERY_TILE, GALLERY_TILE, 'identity-gallery-img'), ctx = c.getContext('2d');
@@ -845,11 +866,12 @@ export function renderIdentityGallery(host, session, opts) {
             q.sort(function (a, b) { return a.frame - b.frame; });
             for (var k = 0; k < q.length; k++) {
                 if (!alive()) return;
-                var img = null;
-                try { img = await q[k].view.decoder.getFrame(q[k].frame); } catch (e) { img = null; }
-                if (!alive()) return;
-                try { drawSample(q[k], img); }
+                var got = null;
+                try { got = await galleryFrame(q[k].view, q[k].frame); } catch (e) { got = null; }
+                if (!alive()) { releaseFrame(got); return; }
+                try { drawSample(q[k], got && got.img); }
                 catch (e) { console.warn('[identity-gallery] ' + q[k].r.id.name + ':', e); }
+                releaseFrame(got);   // drawSample copied the crop (tile + preview): nothing keeps it
             }
         }));
     };

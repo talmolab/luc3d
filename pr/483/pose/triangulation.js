@@ -10,27 +10,27 @@
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d,
-         isPoints3dSmoothed } from './pose-data.js?v=4c5ac4ca71b8';
+         isPoints3dSmoothed } from './pose-data.js?v=25827083184f';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=4c5ac4ca71b8';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=25827083184f';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=4c5ac4ca71b8';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=25827083184f';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=4c5ac4ca71b8';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=4c5ac4ca71b8';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=4c5ac4ca71b8';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=4c5ac4ca71b8';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=4c5ac4ca71b8';
-import { createGroupSolver } from './triangulation-pool.js?v=4c5ac4ca71b8';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=4c5ac4ca71b8';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=25827083184f';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=25827083184f';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=25827083184f';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=25827083184f';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=25827083184f';
+import { createGroupSolver } from './triangulation-pool.js?v=25827083184f';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=25827083184f';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=4c5ac4ca71b8';
+         dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=25827083184f';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=4c5ac4ca71b8';
-import { noteTriangulateRun, noteTriangulateRunMarked, markTriangulatedGroups, carryTriangulateMark } from './run-state.js?v=4c5ac4ca71b8';
+import { update3DViewport } from './initialization.js?v=25827083184f';
+import { noteTriangulateRun, noteTriangulateRunMarked, markTriangulatedGroups, carryTriangulateMark } from './run-state.js?v=25827083184f';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -50,7 +50,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=4c5ac4ca71b8';
+} from './triangulation-core.js?v=25827083184f';
 export {
     triangulatePointDLT, triangulatePoints, clearPointsBehindEveryView, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,

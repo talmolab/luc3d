@@ -16,7 +16,7 @@
 // because the binding is read INSIDE the function body, never at module top
 // level, where a circular import is still `undefined`.
 
-import { planeState } from './plane-definition.js?v=4c5ac4ca71b8';
+import { planeState } from './plane-definition.js?v=25827083184f';
 
 /**
  * The toolbar buttons Defining Plane Mode blocks.
