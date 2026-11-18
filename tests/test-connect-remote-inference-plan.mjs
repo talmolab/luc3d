@@ -201,6 +201,15 @@ describe('planRemoteRun', () => {
     expect(planRemoteRun({ ...base, outputDir: null }).error).toContain('output folder');
     expect(planRemoteRun({ ...base, views: [base.views[2]] }).error).toContain('No view');
   });
+  it('per-view models: each view runs its own folders; a view without one is skipped', () => {
+    const { models, ...rest } = base;
+    const p = planRemoteRun({ ...rest, perViewModels: { cam1: ['/data/models/a'], cam2: ['/data/models/c', '/data/models/ci'] } });
+    expect(p.error).toBeNull();
+    expect(p.jobs.map((j) => j.view + ':' + j.spec.model_paths.join())).toEqual(['cam1:/data/models/a', 'cam2:/data/models/c,/data/models/ci']);
+    expect(p.skipped.find((s) => s.view === 'cam5').reason).toBe('no model');
+    expect(p.skipped.find((s) => s.view === 'cam4').reason).toContain('lazy');
+    expect(planRemoteRun({ ...rest, perViewModels: {} }).error).toBe('Assign a model to a view.');
+  });
 });
 
 describe('pending fetches', () => {

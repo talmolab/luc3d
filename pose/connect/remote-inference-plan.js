@@ -285,7 +285,8 @@ export function buildViewSpec(config, v, ctx) {
  *   hasPredictionsDir: boolean,
  *   stamp: string,
  *   project: {name: string, id: string},
- *   models: string[],
+ *   models?: string[],                         // one model for every view, or
+ *   perViewModels?: Record<string, string[]>,  // each view's own model folders (a view without one is skipped)
  * }} o
  * @returns {{jobs: Array<{view: string, spec: Record<string, any>, outputPath: string}>, skipped: Array<{view: string, reason: string}>, error: string | null}}
  */
@@ -293,16 +294,21 @@ export function planRemoteRun(o) {
   const skipped = [];
   const jobs = [];
   const fail = (error) => ({ jobs: [], skipped, error });
-  if (!o.models || o.models.length === 0) return fail("Add a model on the worker.");
+  const modelsOf = (view) => (o.perViewModels ? o.perViewModels[view] || [] : o.models || []);
+  if (!o.perViewModels && (!o.models || o.models.length === 0)) return fail("Add a model on the worker.");
   if (!o.outputDir) return fail("Choose an output folder on the worker.");
   const ready = [];
   for (const v of o.views) {
     if (v.skip) skipped.push({ view: v.view, reason: v.skip });
+    else if (modelsOf(v.view).length === 0) skipped.push({ view: v.view, reason: "no model" });
     else if (!v.workerPath) skipped.push({ view: v.view, reason: "its video is not on the worker" });
     else if (v.framesSpec === "") skipped.push({ view: v.view, reason: "no frames to run" });
     else ready.push(v);
   }
-  if (ready.length === 0) return fail("No view has a video on the worker and frames to run.");
+  if (ready.length === 0) {
+    if (o.perViewModels && o.views.every((v) => v.skip || modelsOf(v.view).length === 0)) return fail("Assign a model to a view.");
+    return fail("No view has a video on the worker and frames to run.");
+  }
   for (const v of ready) {
     if (v.framesSpec && v.framesSpec.length > MAX_FRAMES_SPEC_CHARS) return fail(framesTooLongMessage(v.view, v.framesSpec.length));
   }
@@ -312,7 +318,7 @@ export function planRemoteRun(o) {
     const outputPath = remoteOutputPath({
       dir: o.outputDir, hasPredictionsDir: o.hasPredictionsDir, session: o.session, view: v.view, stamp: o.stamp,
     });
-    const spec = buildViewSpec({ ...o.config, modelPaths: o.models }, v, { outputPath, project: o.project });
+    const spec = buildViewSpec({ ...o.config, modelPaths: modelsOf(v.view) }, v, { outputPath, project: o.project });
     jobs.push({ view: v.view, spec, outputPath });
   }
   return { jobs, skipped, error: null };
