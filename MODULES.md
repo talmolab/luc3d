@@ -13917,7 +13917,7 @@ synchronous.
   the vendored reader reads a big column-chunked table's columns side by side
   on that many workers (LUCID local patch, column reads; 05mice reopen ~14.5 →
   ~2.9 s), and reads `/session_data`'s datasets (the 3D groups) on the same
-  workers, every dataset in pieces over all of them (HardFight's 3D reads ~0.88 → ~0.25 s). A project saved before the column chunks has its big tables read in row blocks on the same workers (HardFight ~2.1 → ~0.8 s). `open()` does not: a per-camera folder load already opens its
+  workers, every dataset in pieces over all of them (HardFight's 3D reads ~0.88 → ~0.25 s). A project saved before the column chunks has its big tables read in row blocks on the same workers, each split into columns by its worker (HardFight ~2.1 → ~0.6 s). `open()` does not: a per-camera folder load already opens its
   cameras at once. Lazy reopen of a SINGLE multi-camera
   project `.slp` (Load Project for large projects): one interleaved store shared
   by every camera, split into the same per-camera maps. Sets `_sharedStore =

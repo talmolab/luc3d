@@ -11,8 +11,10 @@
  *   - the copy has that layout (so the column read stands aside);
  *   - read with a pool (`lucidReadWorkers: 3`, `__lucidPoolTableBytes = 1`,
  *     small blocks) the store equals the one-worker read: every column, type
- *     for type, value for value; blocks went to more than one worker; and the
- *     byte count goes from 0 to the total without going back;
+ *     for type, value for value; the blocks went to all three workers, each
+ *     split into narrowed columns there (`lucidReadRowColumns`; the instance
+ *     score column widens to Float64Array when a later block does not fit);
+ *     and the byte count goes from 0 to the total without going back;
  *   - a block that fails falls back to the one-worker read: same store, count
  *     still ends at the total;
  *   - a contiguous table (no chunks) is read in blocks too, and gives the same.
@@ -60,7 +62,7 @@ try {
                     xy: (f % 11 === 3 && j === 1) ? [NaN, NaN] : [val(f * 8 + d * 4 + j), val(f * 8 + d * 4 + j + 0.5)],
                     visible: !(f % 11 === 3 && j === 1), complete: true, score: Math.abs(Math.sin(f + j)) * 0.99,
                 }));
-                insts.push(new S.PredictedInstance({ points, skeleton, track: f % 13 === 0 ? null : tracks[d], score: d ? 0.1 : 0.5 }));
+                insts.push(new S.PredictedInstance({ points, skeleton, track: f % 13 === 0 ? null : tracks[d], score: (d && f > 2500) ? 0.1 : 0.5 }));
             }
             if (f % 4 === 0) insts.push(new S.Instance({ points: Array.from({ length: NODES }, (_, j) => ({ xy: [val(f + j), val(f + j + 0.25)], visible: true, complete: true })), skeleton, track: tracks[0] }));
             lfs.push(new S.LabeledFrame({ video, frameIdx: f, instances: insts }));
@@ -103,7 +105,7 @@ try {
         const orig = Worker.prototype.postMessage;
         let wseq = 0, msgs = [], corrupt = 0;
         Worker.prototype.postMessage = function (m, t) {
-            if (m && m.payload && TABLES.includes(m.payload.path) && (m.type === 'getDatasetValue' || m.type === 'lucidReadColumn')) {
+            if (m && m.payload && TABLES.includes(m.payload.path) && (m.type === 'getDatasetValue' || m.type === 'lucidReadColumn' || m.type === 'lucidReadRowColumns')) {
                 if (!this.__wid) this.__wid = ++wseq;
                 msgs.push([this.__wid, m.type]);
                 if (corrupt && msgs.length === corrupt) m = { ...m, payload: { ...m.payload, path: 'no_such_table' } };
@@ -144,16 +146,17 @@ try {
         };
         const countsOk = (c) => c.length > 10 && c[0][0] === 0 && c[c.length - 1][0] === c[c.length - 1][1] &&
             c.every((x, i) => x[0] <= x[1] && (i === 0 || x[0] >= c[i - 1][0]));
-        const summary = (r) => ({ workers: new Set(r.msgs.map(m => m[0])).size, columnReads: r.msgs.filter(m => m[1] === 'lucidReadColumn').length, blocks: r.msgs.length, countsOk: countsOk(r.counts), steps: r.counts.length });
+        const summary = (r) => ({ workers: new Set(r.msgs.map(m => m[0])).size, columnReads: r.msgs.filter(m => m[1] === 'lucidReadColumn').length, blocks: r.msgs.length, splitBlocks: r.msgs.filter(m => m[1] === 'lucidReadRowColumns').length, countsOk: countsOk(r.counts), steps: r.counts.length });
 
         const ref = await read(chunked.file);
+        const scoreType = ref.st.instancesData.score.constructor.name;
         const pool = await read(chunked.file, { workers: 3 });
         const failed = await read(chunked.file, { workers: 3, fail: 5 });
         const cref = await read(contiguous.file);
         const cpool = await read(contiguous.file, { workers: 3 });
         Worker.prototype.postMessage = orig;
         return {
-            layout: chunked.layout, clayout: contiguous.layout,
+            layout: chunked.layout, clayout: contiguous.layout, scoreType,
             ref: summary(ref),
             pool: { ...compare(ref.st, pool.st), ...summary(pool) },
             failed: { ...compare(ref.st, failed.st), ...summary(failed), warns: failed.warns },
@@ -164,12 +167,13 @@ try {
         Object.values(res.clayout).every(t => !t.chunks),
         'the fixture copies hold the older layouts (100-row chunks; contiguous)', { chunked: res.layout, contiguous: res.clayout });
     check(res.ref.workers === 1 && res.ref.columnReads === 0, 'one worker reads the older tables whole-row, as before', res.ref);
+    check(res.scoreType === 'Float64Array', 'the instance score column is Float64Array (its last blocks hold 0.1, which Float32Array cannot): the pool must widen it', res.scoreType);
     const ok = (r) => r.cols >= 20 && r.values > 100000 && r.diffs.length === 0;
-    check(ok(res.pool) && res.pool.workers === 3 && res.pool.columnReads === 0 && res.pool.countsOk,
-        `three workers read the row blocks (${res.pool.blocks} blocks) and give the same store; the count goes 0 → total over ${res.pool.steps} steps`, res.pool);
+    check(ok(res.pool) && res.pool.workers === 3 && res.pool.columnReads === 0 && res.pool.splitBlocks === res.pool.blocks && res.pool.blocks > 10 && res.pool.countsOk,
+        `three workers read the row blocks and split them into columns (${res.pool.blocks} blocks): same store, type for type; the count goes 0 → total over ${res.pool.steps} steps`, res.pool);
     check(ok(res.failed) && res.failed.warns.some(w => /pooled row read of .* failed, reading on one worker instead/.test(w)) && res.failed.countsOk,
         'a failed block falls back to the one-worker read: same store, count ends at the total', res.failed);
-    check(ok(res.contiguous) && res.contiguous.workers === 3 && res.contiguous.countsOk,
+    check(ok(res.contiguous) && res.contiguous.workers === 3 && res.contiguous.splitBlocks > 10 && res.contiguous.countsOk,
         'a contiguous table is read in blocks on the pool too, and gives the same store', res.contiguous);
     check(errs.length === 0, 'no page errors', errs);
 } finally {
