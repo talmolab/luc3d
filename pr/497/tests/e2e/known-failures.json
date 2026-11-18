@@ -1,4 +1,0 @@
-{
-  "about": "Files in tests/e2e/ that fail on main for a known reason. tests/run-e2e-tests.mjs runs them and lists them, but they do not fail the run; it says when one passes again so it can come off this list. Every entry needs a reason (an issue or PR, and what fails). Keep this list short: fix the test or the app instead whenever you can.",
-  "files": {}
-}
