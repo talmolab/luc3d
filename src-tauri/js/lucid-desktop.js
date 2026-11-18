@@ -35,6 +35,12 @@
  *     that worked (`<html data-lucid-native-menu="1">`).
  *  7. macOS: a file `<input>` clicked without user activation (WebKit would
  *     drop it) asks for one click in the page instead.
+ *     7b. Linux: each file-input click leaves a one-shot hint (folder input or
+ *     not) for the native chooser Rust shows (`__lucidTakeFileInputHint`).
+ *     7c. Windows: Files / folder handles are posted to Rust
+ *     (`chrome.webview.postMessageWithAdditionalObjects`), which answers with
+ *     their disk paths; folders picked with showDirectoryPicker are reported
+ *     right after the pick.
  *  8. Updates: Check for Updates… (macOS luc3d menu / Help menu elsewhere),
  *     a silent check 10 s after start and every 6 h with a small notice, the
  *     update channel, and install-then-restart, never over unsaved work.
@@ -42,7 +48,8 @@
  *     commands (run/cancel by job id, detection, the read-only model-folder
  *     picker); `lucidDesktop.fs` — grant-checked path helpers, incl.
  *     `pathOfFile(file)` (the disk path of a File from a file input, from what
- *     the user picked in that dialog: src-tauri/src/input_paths.rs, macOS). The Inference
+ *     the user picked in that dialog — macOS, Linux — or asked of WebView2 —
+ *     Windows: src-tauri/src/input_paths.rs). The Inference
  *     panel (`ui/inference-panel.js`) is their only user.
  */
 (function () {
@@ -259,21 +266,27 @@
             makeDir: function (path) { return call('make_dir', { path: String(path) }); },
             /**
              * {supported, picks:[{paths, directories, seq}]}: what the user chose in
-             * the page's own file-input dialogs this run (macOS; the app grants them).
+             * the page's own file-input dialogs this run (macOS, Linux; on Windows
+             * the folders picked with showDirectoryPicker). The app grants them.
              */
             inputPicks: function () { return call('input_picks', {}); },
             /**
              * The disk path of a File the page got from a file input, or null:
-             * matched against the recorded picks (newest first) by its
-             * webkitRelativePath under a picked folder, or by name for a picked
-             * file, and confirmed by size. Resolves {path, root} — root is the
-             * picked folder (null for a picked file).
+             * on Windows asked of WebView2 directly (§7c); else matched against
+             * the recorded picks (newest first) by its webkitRelativePath under
+             * a picked folder, or by name for a picked file. Always confirmed by
+             * size. Resolves {path, root} — root is the picked folder holding it
+             * (null for a picked file).
              */
             pathOfFile: async function (file) {
                 if (!file || typeof file.name !== 'string') return null;
                 var res;
                 try { res = await call('input_picks', {}); } catch (e) { return null; }
                 if (!res || !res.supported) return null;
+                if (webview2Paths) {
+                    var direct = await webview2PathOfFile(file);
+                    if (direct) return direct;
+                }
                 var rel = String(file.webkitRelativePath || '');
                 var relParts = rel ? rel.split('/').filter(Boolean) : [];
                 var picks = (res.picks || []).slice().sort(function (a, b) { return b.seq - a.seq; });
@@ -1412,6 +1425,150 @@
         };
     }
     installPickerGestureFallback();
+
+    // ------------------------------------------------------------------
+    // 7b. Linux: which file input opened the chooser
+    // ------------------------------------------------------------------
+
+    /*
+     * WebKitGTK's file-chooser request does not say whether the input is a
+     * folder (`webkitdirectory`) input, and its own dialog is files-only.
+     * src-tauri/src/input_paths.rs shows the chooser itself and first calls
+     * __lucidTakeFileInputHint(): what the click that opened it left here
+     * (one-shot, and only while fresh, so a click that opened nothing cannot
+     * turn a later chooser into a folder chooser). It only records; the click
+     * itself is untouched. Clicks reach it three ways: the capturing listener
+     * (an input in the document, incl. through its <label> or the keyboard),
+     * and the patched click() / showPicker() (inputs never added to it).
+     */
+    var FILE_INPUT_HINT_MS = 5000;
+    var fileInputHint = null;
+
+    function noteFileInput(el) {
+        if (!el || el.type !== 'file') return;
+        fileInputHint = {
+            dir: !!(el.webkitdirectory || (el.hasAttribute && el.hasAttribute('webkitdirectory'))),
+            t: Date.now(),
+        };
+    }
+
+    function installFileInputHint() {
+        if (platform !== 'linux' || typeof HTMLInputElement !== 'function') return;
+        var proto = HTMLInputElement.prototype;
+        var origClick = proto.click;
+        proto.click = function () {
+            noteFileInput(this);
+            return origClick.apply(this, arguments);
+        };
+        if (typeof proto.showPicker === 'function') {
+            var origShowPicker = proto.showPicker;
+            proto.showPicker = function () {
+                noteFileInput(this);
+                return origShowPicker.apply(this, arguments);
+            };
+        }
+        document.addEventListener('click', function (e) {
+            var t = e && e.target;
+            if (t && t.tagName === 'INPUT') noteFileInput(t);
+        }, true);
+        Object.defineProperty(window, '__lucidTakeFileInputHint', {
+            value: function () {
+                var h = fileInputHint;
+                fileInputHint = null;
+                if (!h || Date.now() - h.t > FILE_INPUT_HINT_MS) return 'null';
+                return JSON.stringify({ dir: h.dir });   // single/multiple: WebKit's request says
+            },
+            writable: false, configurable: false, enumerable: false,
+        });
+    }
+    installFileInputHint();
+
+    // ------------------------------------------------------------------
+    // 7c. Windows: disk paths from WebView2
+    // ------------------------------------------------------------------
+
+    /*
+     * WebView2 shows Chromium's own pickers and has no hook for their answer,
+     * but it can hand the host a real File or FileSystemHandle posted with
+     * chrome.webview.postMessageWithAdditionalObjects, path included. The
+     * message is an OBJECT {lucidPathOf: id} (not a string: wry's IPC handler
+     * reads only strings, so Tauri never sees it); Rust answers with
+     * PostWebMessageAsJson {lucidPathOfReply: id, items:[{path, kind}], root},
+     * having granted those paths. A page cannot make a disk-backed File or a
+     * handle the user did not give it.
+     */
+    var WEBVIEW2_REPLY_MS = 3000;
+    var webview2Paths = (platform === 'windows' && window.chrome && window.chrome.webview &&
+        typeof window.chrome.webview.postMessageWithAdditionalObjects === 'function')
+        ? window.chrome.webview : null;
+    var webview2Pending = new Map();
+    var webview2Seq = 0;
+    var webview2Listening = false;
+
+    /** Post `objects` (Files / handles) → Promise<reply | null> (null: no answer). */
+    function webview2PathsOf(objects) {
+        if (!webview2Paths) return Promise.resolve(null);
+        if (!webview2Listening) {
+            webview2Listening = true;
+            webview2Paths.addEventListener('message', function (e) {
+                var d = e && e.data;
+                if (!d || typeof d !== 'object' || typeof d.lucidPathOfReply !== 'string') return;
+                var done = webview2Pending.get(d.lucidPathOfReply);
+                if (done) done(d);
+            });
+        }
+        var id = 'p' + (++webview2Seq) + '-' + Math.random().toString(36).slice(2, 10);
+        return new Promise(function (resolve) {
+            var timer = setTimeout(function () { webview2Pending.delete(id); resolve(null); }, WEBVIEW2_REPLY_MS);
+            webview2Pending.set(id, function (d) { clearTimeout(timer); webview2Pending.delete(id); resolve(d); });
+            try {
+                webview2Paths.postMessageWithAdditionalObjects({ lucidPathOf: id }, objects);
+            } catch (e) {   // not a postable object (a plain Blob, …)
+                clearTimeout(timer);
+                webview2Pending.delete(id);
+                resolve(null);
+            }
+        });
+    }
+
+    /** {path, root} of a disk-backed File, size-checked, or null. */
+    async function webview2PathOfFile(file) {
+        var r = await webview2PathsOf([file]);
+        var items = (r && Array.isArray(r.items)) ? r.items : [];
+        for (var i = 0; i < items.length; i++) {
+            if (!items[i] || items[i].kind !== 'file') continue;
+            var path = String(items[i].path);
+            try {
+                var st = await call('path_stat', { path: path });
+                if (st && st.isFile && Number(st.size) === file.size) {
+                    return { path: path, root: r.root ? String(r.root) : null };
+                }
+            } catch (e) { /* not granted / gone */ }
+        }
+        return null;
+    }
+
+    // Report what the native showDirectoryPicker / showOpenFilePicker returned
+    // (LUCID's read-side folder picker on Windows), so the folder is granted
+    // and becomes the root of the Files read from it. Same handles returned,
+    // and the native picker is still called in the click's own task.
+    function installWebView2PickerReports() {
+        if (!webview2Paths) return;
+        ['showDirectoryPicker', 'showOpenFilePicker'].forEach(function (name) {
+            var orig = window[name];
+            if (typeof orig !== 'function') return;
+            var reporting = function () {
+                return orig.apply(window, arguments).then(function (res) {
+                    webview2PathsOf(Array.isArray(res) ? res : [res]);
+                    return res;
+                });
+            };
+            try {
+                Object.defineProperty(window, name, { value: reporting, writable: true, configurable: true, enumerable: false });
+            } catch (e) { /* leave the native one */ }
+        });
+    }
+    installWebView2PickerReports();
 
     // ------------------------------------------------------------------
     // 8. Updates

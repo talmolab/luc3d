@@ -12971,7 +12971,9 @@ LUCID differences: one sleap-nn job PER VIEW, all views with the SAME models
 (a per-view slot exists in the config, `perViewModels`); Data gains **Videos on
 disk**, now **Views**: a checkbox per session camera (run a subset), each
 with its video path found from the files the user OPENED
-(`lucidDesktop.fs.pathOfFile`, macOS capture in `src-tauri/src/input_paths.rs`),
+(`lucidDesktop.fs.pathOfFile`, `src-tauri/src/input_paths.rs`: macOS wraps wry's
+open panel, Linux answers WebKitGTK's `run-file-chooser` itself, Windows asks
+WebView2 for the path of a posted File / picked folder handle),
 else the path the .slp recorded if readable, else Choose folder… (native folder
 pick → matched, `ui/inference-video-paths.js`); predictions go to the picked
 session folder's `predictions/`. Lazy-loaded views are listed as blocked
