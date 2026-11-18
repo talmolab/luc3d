@@ -40,15 +40,15 @@
  * The samples live in a ring in memory (`MemoryRing`): nothing goes to the
  * `.slp` or `localStorage`. Test hook: `window.__lucidMemoryPanel`.
  */
-import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=6482763f0e6a';
-import { setInfoTip, ICON_INFO } from './info-tip.js?v=6482763f0e6a';
-import { state } from './app-state.js?v=6482763f0e6a';
-import { loadingCardText } from './loading-overlay.js?v=6482763f0e6a';
+import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=6bccb658b367';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=6bccb658b367';
+import { state } from './app-state.js?v=6bccb658b367';
+import { loadingCardText } from './loading-overlay.js?v=6bccb658b367';
 import {
-    MEMORY_SAMPLE_MS, MEMORY_WINDOW_MS, UA_MEMORY_EVERY_MS,
+    MEMORY_SAMPLE_MS, MEMORY_WINDOWS, UA_MEMORY_EVERY_MS,
     MemoryRing, readHeap, summarizeUaMemory, projectCounts, formatMB, plotGeometry,
-    runName, runSpans, placeRunLabels, formatDuration,
-} from './memory-plot.js?v=6482763f0e6a';
+    runName, runSpans, placeRunLabels, formatDuration, sampleAt, formatAgo, readingsCsv,
+} from './memory-plot.js?v=6bccb658b367';
 
 const TAB = 'tabMemory';
 const PLOT_W = 260;
@@ -61,7 +61,19 @@ export const MEMORY_INFO_TEXT =
     'Chrome\'s count of this page\'s memory: JavaScript objects plus typed arrays (most of a big project\'s keypoints), but the dashed limit caps the objects only, so the line can go well above it without trouble. ' +
     'It leaves out web workers (Track All, the Triangulate pool, the image check), video decoding, and Chrome\'s GPU and other processes: Chrome\'s Task Manager (Shift+Esc) shows those.';
 
+/** The window picked last (display taste: this browser only, never the `.slp`). */
+const WINDOW_KEY = 'lucidMemoryWindow';
+
+function storedWindow() {
+    let key = null;
+    try { key = localStorage.getItem(WINDOW_KEY); } catch (e) { /* storage off: the default */ }
+    return MEMORY_WINDOWS.find(function (w) { return w.key === key; }) || MEMORY_WINDOWS[0];
+}
+
 const ring = new MemoryRing();
+let _window = MEMORY_WINDOWS[0];
+/** Where the pointer is over the plot, 0..1 across it; null when it is not. */
+let _hoverFrac = null;
 let _timer = null;
 /** The panel's body is on screen: draw, and ask for the whole page. */
 let _onScreen = false;
@@ -125,7 +137,9 @@ function render(heap, now) {
         setText(e.total, formatMB(heap.total));
         setText(e.limit, formatMB(heap.limit));
         e.coarse.hidden = !heap.bucketized;
-        const g = plotGeometry(ring.toArray(), { width: PLOT_W, height: PLOT_H, now: now, windowMs: MEMORY_WINDOW_MS, limit: heap.limit });
+        const samples = ring.toArray();
+        const g = plotGeometry(samples, { width: PLOT_W, height: PLOT_H, now: now, windowMs: _window.ms, limit: heap.limit });
+        e.plotState = { samples: samples, yMax: g.yMax, now: now };
         setText(e.peak, formatMB(g.peak));
         e.usedPath.setAttribute('d', g.usedPath);
         e.uaPath.setAttribute('d', g.uaPath);
@@ -138,6 +152,7 @@ function render(heap, now) {
         }
         setText(e.scale, formatMB(g.yMax));
         renderRuns(e, now);
+        renderHover(e);
     }
     const uaShown = uaMemoryAvailable();
     e.uaRow.hidden = !uaShown;
@@ -156,9 +171,83 @@ function render(heap, now) {
     setText(e.sessions, c.sessions.toLocaleString('en-US'));
 }
 
+/**
+ * Under the pointer: a guide line and a dot on the reading nearest it, and the
+ * big number shows that reading with how long ago it was and what was
+ * running. Off the plot, the big number is the current reading again.
+ */
+function renderHover(e) {
+    const ps = e.plotState;
+    const s = ps && _hoverFrac != null ? sampleAt(ps.samples, ps.now - _window.ms + _hoverFrac * _window.ms) : null;
+    const on = !!(s && Number.isFinite(s.used));
+    e.hoverLine.setAttribute('visibility', on ? 'visible' : 'hidden');
+    e.hoverDot.setAttribute('visibility', on ? 'visible' : 'hidden');
+    e.readout.classList.toggle('memory-readout-hover', on);
+    if (!on) {
+        const last = ring.last();
+        if (last) setText(e.now, formatMB(last.used));
+        setText(e.nowLabel, 'used');
+        return;
+    }
+    const x = ((s.t - (ps.now - _window.ms)) / _window.ms * PLOT_W).toFixed(1);
+    const y = (PLOT_H - s.used / ps.yMax * PLOT_H).toFixed(1);
+    e.hoverLine.setAttribute('x1', x);
+    e.hoverLine.setAttribute('x2', x);
+    e.hoverDot.setAttribute('cx', x);
+    e.hoverDot.setAttribute('cy', y);
+    setText(e.now, formatMB(s.used));
+    setText(e.nowLabel, formatAgo(ps.now - s.t) + (s.run ? ' · ' + s.run : ''));
+}
+
+/** Switch the plot's window; a pick (`remember`) is kept in this browser. */
+function setWindow(w, remember) {
+    _window = w;
+    if (remember) {
+        try { localStorage.setItem(WINDOW_KEY, w.key); } catch (err) { /* best effort */ }
+    }
+    if (!_els) return;
+    const e = _els;
+    e.windowBtns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.window === w.key)); });
+    setText(e.axisStart, '−' + w.label);
+    setText(e.peakLabel, 'Peak (' + w.label + ')');
+    e.svg.setAttribute('aria-label', 'JavaScript heap used over the last ' + w.label);
+    e.runsKey = null;
+    if (_onScreen) render(readHeap(performance), performance.now());
+}
+
+/** Copy every reading kept (up to the last hour) to the clipboard as CSV. */
+function copyReadings(btn) {
+    const samples = ring.toArray();
+    const text = readingsCsv(samples, performance.timeOrigin);
+    const done = function (msg) {
+        btn.textContent = msg;
+        clearTimeout(btn._reset);
+        btn._reset = setTimeout(function () { btn.textContent = 'Copy readings'; }, 2000);
+    };
+    const ok = 'Copied ' + samples.length.toLocaleString('en-US') + ' readings';
+    const fallback = function () {
+        // The clipboard API needs a secure context; a hidden textarea does not.
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        let copied = false;
+        try { copied = document.execCommand('copy'); } catch (err) { copied = false; }
+        ta.remove();
+        done(copied ? ok : 'Could not copy');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done(ok); }, fallback);
+    } else {
+        fallback();
+    }
+}
+
 /** The runs' bands (SVG) and names (HTML over the plot, so the stretched SVG never distorts text). */
 function renderRuns(e, now) {
-    const spans = runSpans(ring.toArray(), { width: PLOT_W, now: now, windowMs: MEMORY_WINDOW_MS });
+    const spans = runSpans(ring.toArray(), { width: PLOT_W, now: now, windowMs: _window.ms });
     const places = placeRunLabels(spans, PLOT_W, 6, RUN_LABEL_LANES);
     const key = spans.map(function (s) { return s.name + '@' + s.x0.toFixed(1) + '-' + s.x1.toFixed(1) + ':' + Math.round(s.peak / 1048576); }).join('|');
     if (key === e.runsKey) return;
@@ -232,6 +321,23 @@ function build(pane) {
     info.innerHTML = ICON_INFO;
     setInfoTip(info, MEMORY_INFO_TEXT);
     h.appendChild(info);
+    const windows = document.createElement('span');
+    windows.className = 'memory-windows';
+    windows.setAttribute('role', 'group');
+    windows.setAttribute('aria-label', 'Plot window');
+    const windowBtns = MEMORY_WINDOWS.map(function (w) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'memory-window-btn';
+        b.dataset.window = w.key;
+        b.textContent = w.label;
+        b.title = 'Show the last ' + w.label;
+        b.setAttribute('aria-pressed', 'false');
+        b.addEventListener('click', function () { setWindow(w, true); });
+        windows.appendChild(b);
+        return b;
+    });
+    h.appendChild(windows);
     heapSec.appendChild(h);
 
     const unavailable = document.createElement('div');
@@ -252,6 +358,7 @@ function build(pane) {
     const nowLabel = document.createElement('span');
     nowLabel.className = 'memory-now-label';
     nowLabel.textContent = 'used';
+    nowLabel.id = 'memoryNowLabel';
     readout.appendChild(now);
     readout.appendChild(nowLabel);
     body.appendChild(readout);
@@ -269,6 +376,19 @@ function build(pane) {
     svg.appendChild(limitLine);
     svg.appendChild(uaPath);
     svg.appendChild(usedPath);
+    const hoverLine = svgEl('line', { class: 'memory-plot-hover', id: 'memoryHoverLine', x1: 0, x2: 0, y1: 0, y2: PLOT_H, visibility: 'hidden' });
+    const hoverDot = svgEl('circle', { class: 'memory-plot-hover-dot', id: 'memoryHoverDot', cx: 0, cy: 0, r: 2.5, visibility: 'hidden' });
+    svg.appendChild(hoverLine);
+    svg.appendChild(hoverDot);
+    svg.addEventListener('pointermove', function (ev) {
+        const r = svg.getBoundingClientRect();
+        _hoverFrac = r.width > 0 ? Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) : null;
+        if (_els) renderHover(_els);
+    });
+    svg.addEventListener('pointerleave', function () {
+        _hoverFrac = null;
+        if (_els) renderHover(_els);
+    });
     // The plot and the runs' names over it (HTML: the SVG is stretched to the panel's width).
     const plotWrap = document.createElement('div');
     plotWrap.className = 'memory-plot-wrap';
@@ -281,7 +401,7 @@ function build(pane) {
 
     const axis = document.createElement('div');
     axis.className = 'memory-axis';
-    const a0 = document.createElement('span'); a0.textContent = '−5 min';
+    const a0 = document.createElement('span'); a0.id = 'memoryAxisStart'; a0.textContent = '−5 min';
     const aMid = document.createElement('span');
     aMid.appendChild(document.createTextNode('top '));
     const scale = document.createElement('span'); scale.id = 'memoryScale'; scale.textContent = '–';
@@ -298,6 +418,17 @@ function build(pane) {
         '<span class="memory-key memory-key-ua"></span>whole page, workers too</span>';
     body.appendChild(legend);
     const legendUa = legend.querySelector('#memoryLegendUa');
+    const actions = document.createElement('div');
+    actions.className = 'memory-actions';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'memory-copy-btn';
+    copy.id = 'memoryCopy';
+    copy.textContent = 'Copy readings';
+    copy.title = 'Copy every reading kept (up to the last hour) as CSV: time, heap used, allocated, JS object limit, whole page, and what was running';
+    copy.addEventListener('click', function () { copyReadings(copy); });
+    actions.appendChild(copy);
+    body.appendChild(actions);
 
     const coarse = document.createElement('div');
     coarse.className = 'memory-note';
@@ -313,6 +444,7 @@ function build(pane) {
     body.appendChild(coarse);
 
     const peak = row(body, 'Peak (5 min)', 'memoryPeak');
+    const peakLabel = peak.row.querySelector('.label');
     const total = row(body, 'Allocated', 'memoryTotal');
     const limit = row(body, 'JS object limit', 'memoryLimit');
     const ua = row(body, 'Whole page, workers too', 'memoryUa');
@@ -336,6 +468,8 @@ function build(pane) {
         unavailable: unavailable, heapBody: body, now: now, coarse: coarse,
         usedPath: usedPath, uaPath: uaPath, limitLine: limitLine, scale: scale, legendUa: legendUa,
         runBands: runBands, runLabels: runLabels, runsKey: null,
+        svg: svg, readout: readout, nowLabel: nowLabel, hoverLine: hoverLine, hoverDot: hoverDot, plotState: null,
+        windowBtns: windowBtns, axisStart: a0, peakLabel: peakLabel,
         peak: peak.value, total: total.value, limit: limit.value,
         ua: ua.value, uaRow: ua.row, uaWorkers: uaWorkers.value, uaWorkersRow: uaWorkers.row,
         resident: resident.value, groups: groups.value, sessions: sessions.value,
@@ -347,6 +481,7 @@ export function setupMemoryPanel() {
     const pane = document.getElementById(TAB);
     if (!pane) return;
     _els = build(pane);
+    setWindow(storedWindow(), false);
     if (!_timer) {
         sample();
         _timer = setInterval(sample, MEMORY_SAMPLE_MS);
