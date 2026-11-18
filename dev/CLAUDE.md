@@ -15,7 +15,9 @@ Multi-view pose annotation GUI. Vanilla JS ES modules served as static files —
 python3 server.py 8080            # Windows: py server.py 8080 (or python3 -m http.server — no --offline)
 # App: http://localhost:8080/   Tests: http://localhost:8080/tests/test-runner.html
 python3 scripts/offline_deps.py install && python3 server.py --offline
+python3 server.py --isolated      # COOP/COEP: the Memory panel also counts web workers (Chrome)
 ```
+`--isolated` (opt-in; no deployed channel sends these headers) makes the page cross-origin isolated, so Chrome allows `measureUserAgentSpecificMemory()`, the whole page with its workers. The heap reading needs no flag in Chrome 157; older Chrome (Playwright's Chromium 153) rounds it and refreshes it every 20 minutes unless started with `--enable-precise-memory-info`. `LUC3D_E2E_ISOLATED=1` serves any e2e file, or the whole suite, isolated (all of it passed). Test: `tests/e2e/isolated-server.mjs`.
 
 ## Deployment
 `luc3d.sleap.ai` is the GitHub Pages custom domain (Cloudflare-proxied) for this repo; the `CNAME` at the `gh-pages` root makes it work. `.github/workflows/deploy.yml` publishes channels on `gh-pages`; `pr-preview.yml` owns `/pr/<n>/`. A deployed "build" is a copy of the repo at a ref.

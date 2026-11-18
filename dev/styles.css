@@ -3728,6 +3728,168 @@ button.tri-dropdown-item:disabled {
   top: var(--panel-section-header-height);
 }
 
+/* ---- Memory panel (ui/memory-panel.js) ---- */
+/* Its rows are .session-info-row (display: flex), which would beat [hidden]. */
+#tabMemory [hidden] {
+  display: none;
+}
+
+.memory-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.memory-now {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-now-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.memory-plot {
+  display: block;
+  width: 100%;
+  height: 90px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: visible;
+}
+
+/* The plot and the runs' names along its top (ui/memory-panel.js renderRuns). */
+.memory-plot-wrap {
+  position: relative;
+}
+
+.memory-plot-run {
+  fill: var(--text-muted);
+  fill-opacity: 0.16;
+}
+
+.memory-plot-run-alt {
+  fill-opacity: 0.28;
+}
+
+.memory-run-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.memory-run-label {
+  position: absolute;
+  top: 2px;
+  box-sizing: border-box;
+  padding: 0 3px;
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--text-secondary);
+  /* Readable where the line runs under it. */
+  text-shadow: 0 0 2px var(--bg-tertiary), 0 0 2px var(--bg-tertiary), 0 0 3px var(--bg-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+}
+
+.memory-plot-base {
+  stroke: var(--border-light);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-limit {
+  stroke: var(--error-color);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-used,
+.memory-plot-ua {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-used {
+  stroke: var(--accent);
+}
+
+.memory-plot-ua {
+  stroke: var(--warning-color);
+}
+
+.memory-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.memory-key {
+  display: inline-block;
+  width: 12px;
+  height: 0;
+  border-top: 2px solid var(--accent);
+}
+
+.memory-key-limit,
+.memory-key-ua {
+  margin-left: 8px;
+}
+
+.memory-key-limit {
+  border-top: 1px dashed var(--error-color);
+}
+
+.memory-legend-ua {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-key-ua {
+  border-top-color: var(--warning-color);
+}
+
+.memory-note {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warning-color);
+}
+
+.memory-note code {
+  white-space: nowrap;
+  font-size: 10px;
+}
+
 /* ---- Data Tables ---- */
 .data-table {
   width: 100%;
