@@ -23,6 +23,7 @@ import { resetPlaneState } from '../import-export/plane-metadata.js';
 import { createDemoSession } from '../demo-data.js';
 import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel } from '../ui/ui-wiring.js';
 import { setupPanelRail } from '../ui/panel-rail.js';
+import { setupMemoryPanel } from '../ui/memory-panel.js';
 import { setupDemoEntry } from '../ui/demo-entry.js';
 import { installInfoTips } from '../ui/info-tip.js';
 import { installNodeTooltip } from '../ui/node-tooltip.js';
@@ -72,6 +73,7 @@ async function init() {
         setupEmptyVideoController();
         setupUI();
         setupPanelRail({ toggleInfoPanel });
+        setupMemoryPanel();
         setupSkeletonEditing();
         setupVideosTab();
         setupRecordingInfo();

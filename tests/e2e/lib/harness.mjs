@@ -148,12 +148,20 @@ async function serveStatic(root, req, res) {
  * @param {boolean} [options.cors]  allow any origin (a second, cross-origin
  *   server such as a model package's), answering preflights with 204
  * @param {(req: http.IncomingMessage) => void} [options.onRequest]  sees every request
+ * @param {boolean} [options.isolated]  send COOP/COEP as `server.py --isolated`
+ *   does, so the page is cross-origin isolated (default: `LUC3D_E2E_ISOLATED=1`,
+ *   which runs any e2e file, or the whole suite, isolated)
  * @returns {Promise<{port: number, url: string, close(): void, kill(): void}>}
  */
-export async function startServer(root = repoRoot, { port, cors = false, onRequest } = {}) {
+export async function startServer(root = repoRoot, { port, cors = false, onRequest,
+    isolated = process.env.LUC3D_E2E_ISOLATED === '1' } = {}) {
     if (port === undefined) port = process.env.PORT ? Number(process.env.PORT) : 0;
     const server = http.createServer((req, res) => {
         if (onRequest) onRequest(req);
+        if (isolated) {
+            res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+            res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+        }
         if (cors) {
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Access-Control-Allow-Headers', '*');
