@@ -13916,7 +13916,8 @@ synchronous.
   projectReadWorkers()` (cores − 1, at most `PROJECT_READ_WORKERS_MAX` = 5):
   the vendored reader reads a big column-chunked table's columns side by side
   on that many workers (LUCID local patch, column reads; 05mice reopen ~14.5 →
-  ~2.9 s). `open()` does not: a per-camera folder load already opens its
+  ~2.9 s), and reads `/session_data`'s datasets (the 3D groups) on the same
+  workers, one dataset each (HardFight's 3D ~1.0 → ~0.5 s). `open()` does not: a per-camera folder load already opens its
   cameras at once. Lazy reopen of a SINGLE multi-camera
   project `.slp` (Load Project for large projects): one interleaved store shared
   by every camera, split into the same per-camera maps. Sets `_sharedStore =
