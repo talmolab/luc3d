@@ -147,13 +147,18 @@ export function newProject(force) {
     state.isPlaying = false;
     setVideoController(null);
 
-    // Close lazy loader if active
-    if (state.session && state.session.lazyLoader) {
-        state.session.lazyLoader.close();
-    }
+    // Close every session's lazy loader (the active one, and any other session
+    // of a multi-session project).
+    var closing = state.sessions.slice();
+    if (state.session && closing.indexOf(state.session) < 0) closing.push(state.session);
+    closing.forEach(function (s) { if (s && s.lazyLoader) s.lazyLoader.close(); });
 
-    // Clear session and annotation data
+    // Clear session and annotation data. The session LIST too: a session left
+    // in it stayed on the session strip, and the next folder loaded was added
+    // to it as a second session of the old project.
     state.session = null;
+    state.sessions = [];
+    state.activeSessionIdx = 0;
     // File ▸ Save must not write the new project over the old one's file.
     state.slpFileHandle = null;
     state.currentFrame = 0;
@@ -186,6 +191,9 @@ export function newProject(force) {
     paneManager.clearAll();
     var stripList = document.getElementById('viewStripList');
     if (stripList) stripList.innerHTML = '';
+    if (document.getElementById('sessionStripList')) populateSessionStrip();
+    // Nothing is open, so nothing is unsaved.
+    clearDirty();
 
     // Reset frame counter display
     clearReadout();
