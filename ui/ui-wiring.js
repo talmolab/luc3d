@@ -50,6 +50,7 @@ import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, p
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
          loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
 import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
+import { loadDemoProject } from '../loading/demo-project.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
@@ -121,6 +122,15 @@ import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
 } from './track-identity-ops.js';
 import { setSessionRotation } from './video-filters.js';
+
+/**
+ * The handle File ▸ Save may write back to for a file opened with
+ * `showOpenFilePicker`: an `.slp` only (Save writes `.slp` bytes, so never over
+ * a `.json` or an analysis `.h5`), else null.
+ */
+function saveTargetHandle(handle, file) {
+    return file && /\.slp$/i.test(file.name) ? handle : null;
+}
 
 // ============================================
 // Rename Track / Identity modal
@@ -1553,10 +1563,9 @@ export function setupMenus() {
                 });
                 if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
                 var file = await handles[0].getFile();
-                if (file.name.endsWith('.slp')) {
-                    state.slpFileHandle = handles[0];
-                }
-                handleLoadProject(file);
+                // The loader adopts the handle (File ▸ Save's target) only once it
+                // replaces the open project: a cancelled load keeps the old one.
+                handleLoadProject(file, saveTargetHandle(handles[0], file));
             } catch (e) {
                 if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
                 handleLoadProject();
@@ -1564,6 +1573,11 @@ export function setupMenus() {
         } else {
             handleLoadProject();
         }
+    });
+
+    document.getElementById('menuOpenDemo').addEventListener('click', function () {
+        closeMenus();
+        loadDemoProject();
     });
 
     document.getElementById('menuSessionFolderWizard').addEventListener('click', function () {
@@ -1611,9 +1625,8 @@ export function setupMenus() {
                         }]
                     });
                     if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
-                    state.slpFileHandle = handles[0];
                     var file = await handles[0].getFile();
-                    handleLoadSlpFile(file);
+                    handleLoadSlpFile(file, saveTargetHandle(handles[0], file));
                 } catch (e) {
                     if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
                     // Fallback to input picker

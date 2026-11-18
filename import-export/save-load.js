@@ -56,6 +56,7 @@ import { withCompactSave } from './compact-save.js';
 import { showCompactSaveModal } from '../ui/compact-save-modal.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 import { saveStartFolder } from '../loading/recording-folder.js';
+import { setPageDirty, setPageProject } from '../ui/page-title.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -131,6 +132,7 @@ export function newProject(force) {
     // Drop the "imported 3D points without a session" marker — a full reset
     // erases any such overlay (including the skeleton) by design.
     state.has3dImportWithoutSession = false;
+    setPageProject(null);
 
     // Detach interaction handlers from old canvases
     if (interactionManager) {
@@ -145,13 +147,20 @@ export function newProject(force) {
     state.isPlaying = false;
     setVideoController(null);
 
-    // Close lazy loader if active
-    if (state.session && state.session.lazyLoader) {
-        state.session.lazyLoader.close();
-    }
+    // Close every session's lazy loader (the active one, and any other session
+    // of a multi-session project).
+    var closing = state.sessions.slice();
+    if (state.session && closing.indexOf(state.session) < 0) closing.push(state.session);
+    closing.forEach(function (s) { if (s && s.lazyLoader) s.lazyLoader.close(); });
 
-    // Clear session and annotation data
+    // Clear session and annotation data. The session LIST too: a session left
+    // in it stayed on the session strip, and the next folder loaded was added
+    // to it as a second session of the old project.
     state.session = null;
+    state.sessions = [];
+    state.activeSessionIdx = 0;
+    // File ▸ Save must not write the new project over the old one's file.
+    state.slpFileHandle = null;
     state.currentFrame = 0;
     state.totalFrames = 0;
     state.fps = 30;
@@ -182,6 +191,9 @@ export function newProject(force) {
     paneManager.clearAll();
     var stripList = document.getElementById('viewStripList');
     if (stripList) stripList.innerHTML = '';
+    if (document.getElementById('sessionStripList')) populateSessionStrip();
+    // Nothing is open, so nothing is unsaved.
+    clearDirty();
 
     // Reset frame counter display
     clearReadout();
@@ -375,7 +387,7 @@ export function markDirty() {
     if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
-    document.title = '\u2022 LUC3D';
+    setPageDirty(true);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'inline-block';
 }
@@ -389,7 +401,7 @@ export function clearDirty() {
     } else if (state.session) {
         state.session.isDirty = false;
     }
-    document.title = 'LUC3D';
+    setPageDirty(false);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
 }
@@ -1200,6 +1212,8 @@ export async function quickSave(previousFile) {
         state.isSaving = false;
         hideLoading();
         clearDirty();
+        // The project is now the file it was saved to (Save As retitles the tab).
+        if (state.slpFileHandle && state.slpFileHandle.name) setPageProject(state.slpFileHandle.name);
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
         setStatus('Saved (' + sizeMB + ' MB)', 'success');
     } catch (err) {
@@ -1582,7 +1596,14 @@ export function saveProject() {
     }
 }
 
-export async function handleLoadProject(prePickedFile) {
+/**
+ * Open a project file (`.slp`, `.h5` or project `.json`); without one, pick it.
+ * @param {File} [prePickedFile]
+ * @param {?FileSystemFileHandle} [fileHandle]  the `.slp`'s own handle: File ▸ Save
+ *   writes back to it. Adopted only once the load replaces the open project; any
+ *   other load leaves no handle, so Save asks where to write.
+ */
+export async function handleLoadProject(prePickedFile, fileHandle) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
@@ -1616,10 +1637,10 @@ export async function handleLoadProject(prePickedFile) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
                 var _sl = await import('../loading/session-loader.js');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
-                    return _sl.handleLoadProjectSlpLazy(file);
+                    return _sl.handleLoadProjectSlpLazy(file, { fileHandle: fileHandle });
                 }
             }
-            return handleLoadSlpFile(file);
+            return handleLoadSlpFile(file, fileHandle);
         }
 
         var fileSize = file.size;
@@ -1641,6 +1662,7 @@ export async function handleLoadProject(prePickedFile) {
         // `readPlaneMetadata` only restores into an EMPTY model, so without
         // this the previous project's planes survive and this file's are lost.
         resetPlaneState();
+        setPageProject(file.name);
         var cameras;
         if (data.version === 3) {
             cameras = _restoreProjectV3(data);
@@ -1649,6 +1671,8 @@ export async function handleLoadProject(prePickedFile) {
         } else {
             cameras = _restoreLegacySession(data);
         }
+        // A .json project has no .slp to save back to: Save asks where.
+        state.slpFileHandle = null;
 
 
         // 2. Load videos — check if already loaded, only prompt for missing ones

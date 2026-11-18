@@ -15,7 +15,9 @@ Multi-view pose annotation GUI. Vanilla JS ES modules served as static files —
 python3 server.py 8080            # Windows: py server.py 8080 (or python3 -m http.server — no --offline)
 # App: http://localhost:8080/   Tests: http://localhost:8080/tests/test-runner.html
 python3 scripts/offline_deps.py install && python3 server.py --offline
+python3 server.py --isolated      # COOP/COEP: the Memory panel also counts web workers (Chrome)
 ```
+`--isolated` (opt-in; no deployed channel sends these headers) makes the page cross-origin isolated, so Chrome allows `measureUserAgentSpecificMemory()`, the whole page with its workers. The heap reading needs no flag in Chrome 157; older Chrome (Playwright's Chromium 153) rounds it and refreshes it every 20 minutes unless started with `--enable-precise-memory-info`. `LUC3D_E2E_ISOLATED=1` serves any e2e file, or the whole suite, isolated (all of it passed). Test: `tests/e2e/isolated-server.mjs`.
 
 ## Deployment
 `luc3d.sleap.ai` is the GitHub Pages custom domain (Cloudflare-proxied) for this repo; the `CNAME` at the `gh-pages` root makes it work. `.github/workflows/deploy.yml` publishes channels on `gh-pages`; `pr-preview.yml` owns `/pr/<n>/`. A deployed "build" is a copy of the repo at a ref.
@@ -48,6 +50,7 @@ Rules:
 - Node-only `.mjs` outside `lib/` is never rewritten (`is_rewritable`, shared by bundle and server) — `tests/test-stamp-version.mjs` holds CDN URLs as fixtures.
 - `MP4BOX_CDN` (unpkg mp4box@0.5.4) in `lib/sleap-io/chunk-X76PRJK6.js` is intentionally unmapped: unreachable because `index.html`'s mp4box `<script>` always sets `globalThis.MP4Box` first. If that tag is ever removed, the unpkg fallback goes live.
 - **The image ID-switch check is the one feature that does not work offline**: `TRANSFORMERS_URL` (`ui/image-embedder.js`) is `unmapped` because the model weights come from huggingface.co too. Offline it reports `MODEL_OFFLINE_REASON` and retries without reload via `importTransformers`. Test: `tests/e2e/image-check-offline.mjs`.
+- **File ▸ Open Demo** (`loading/demo-project.js`; also the empty dock's button and `?demo`) downloads 24 MB from the `demo/` folder of HF dataset `talmolab/slap-2m` at the commit `DEMO_REVISION`, and loads it as a session folder. Offline it fails with a status. Keep the clip OFF the repo (every deploy copies the repo into each channel). Moving the pin means updating `DEMO_FILES`' sizes. Test: `tests/e2e/demo-project.mjs`.
 - Test: `tests/e2e/offline-server.mjs` (all off-origin requests aborted). Licenses in `lib/LICENSES.txt`.
 
 ## Dependencies

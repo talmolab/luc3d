@@ -192,6 +192,21 @@ export function hideLoading() {
     setLoadingCpu(null);
 }
 
+/**
+ * What the card shows, for a caller that only watches (the Memory panel marks
+ * runs on its plot with it, `runName` in ui/memory-plot.js): `{ title,
+ * message }` while the card is up, null while it is hidden. Two text reads.
+ */
+export function loadingCardText() {
+    var overlay = _el('loadingOverlay');
+    if (!overlay || overlay.classList.contains('hidden')) return null;
+    var title = _el('loadingTitle'), status = _el('loadingStatus');
+    return {
+        title: title && !title.classList.contains('hidden') ? title.textContent : '',
+        message: status ? status.textContent : '',
+    };
+}
+
 /** How often the overlay's CPU line and graph refresh (ms). */
 export var CPU_SAMPLE_MS = 1000;
 

@@ -41,8 +41,11 @@ helpers used by every load path. Calls `init()` at module-load.
 
 **Key exports.**
 - `hideWelcomeOverlay()` — hides the dock empty-state overlay.
-- `loadDemoSession()` — File menu "Load Demo Session" handler. Loads
-  `sample_session/*.mp4` and synthetic data from `demo-data.js`.
+- `loadDemoSession()` — loads `sample_session/*.mp4` and synthetic data from
+  `demo-data.js`. No menu item calls it; e2e tests use it for a quick project.
+  (File ▸ Open Demo is the real-data `loading/demo-project.js`.)
+- `init()` ends with `setupDemoEntry()` (`ui/demo-entry.js`), so a `?demo`
+  URL starts loading the demo once the app is set up.
 - `addNewInstanceSmart()` — adds a new user instance to the focused view.
   Pose source priority: cached `lastUserPoints` → user instance on the current
   frame → user instance on the nearest **prior** frame (so ctrl+i inherits a
@@ -107,6 +110,9 @@ helpers used by every load path. Calls `init()` at module-load.
 - `../ui/panel-rail.js` — `setupPanelRail({ toggleInfoPanel })` (builds the
   right-edge icon rail and wraps each panel in its collapsible section; `toggleInfoPanel` from `../ui/ui-wiring.js` is handed
   in so the rail stays free of that import).
+- `../ui/memory-panel.js` — `setupMemoryPanel`, right after `setupPanelRail`
+  (builds `#tabMemory`, starts its once-a-second heap reading, and follows the
+  rail to draw only while it is seen).
 - `../ui/info-panel.js` — `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel` returns early with no session),
@@ -4352,6 +4358,49 @@ run is a no-op, Track Frame leaves it) and `tests/e2e/track-all-switches-to-id.m
 
 ---
 
+### ui/page-title.js
+
+**Purpose.** The browser tab's title: `LUC3D` with nothing open,
+`<project> - LUC3D` once a project is, with a leading `• ` while there are
+unsaved changes. The project's name is the file it was opened from or last
+saved to (`.slp` or project `.json`), else the folder it was loaded from (a
+multi-session load: the parent folder). Only loaders that START a project name
+it; adding a session to an open project keeps its name. Import-free.
+
+**Key exports.** `APP_TITLE`; `formatPageTitle(name, isDirty)` (pure);
+`setPageProject(name)` (null/blank: none); `pageProjectName()`;
+`setPageDirty(isDirty)`. The setters write `document.title` when there is one.
+
+**Imports from project modules.** None.
+
+**Imported by.** `import-export/save-load.js` (`markDirty`/`clearDirty`,
+`newProject`, `handleLoadProject`'s `.json` path, `quickSave`),
+`import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
+(`handleLoadProjectSlpLazy`, which takes `opts.projectName`; the single-SLP,
+per-camera and multi-session folder loaders), `ui/sessions-panes.js` (closing
+the last session).
+
+**Coverage.** `tests/test-page-title.mjs`.
+
+### ui/demo-entry.js
+
+**Purpose.** The ways into the demo (`loading/demo-project.js`) other than File
+▸ Open Demo (wired in `ui/ui-wiring.js`): the "No data? Open the demo" button
+on the empty video dock (`#dockDemoBtn`), shown only while nothing is loaded (a
+`MutationObserver` on `#videoDockEmpty`'s class re-checks, so closing a
+project's last panel does not offer it), and `?demo` in the page URL
+(`luc3d.sleap.ai/?demo` opens straight into it).
+
+**Key exports.** `demoRequested(search)`; `setupDemoEntry()` (called last in
+`pose/initialization.js`'s `init`).
+
+**Imports from project modules.** `ui/app-state.js`,
+`loading/demo-project.js`.
+
+**Imported by.** `pose/initialization.js`.
+
+**Tests.** `tests/e2e/demo-project.mjs`.
+
 ### ui/version-label.js
 
 **Purpose.** Which build this is, at the right end of the menu bar beside
@@ -5853,6 +5902,9 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
   `formatRemaining(ms)` and the clock hook `__setLoadingOverlayClock(fn)` are
   exported for tests; the raw estimate is `#loadingEta[data-ms]`.
 - `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`).
+- `loadingCardText()` — `{ title, message }` while the card is up, null while
+  hidden (two text reads). The Memory panel notes it with each heap reading to
+  mark runs on its plot.
 - `setLoadingCpu(source)` — a CPU line and last-minute graph under the detail
   line (`#loadingHardware` = `#loadingCpu` + `#loadingGraph`), sampled every
   `CPU_SAMPLE_MS` as busy thread-ms / cores via `createLoadMeter`; the tooltip
@@ -5897,7 +5949,7 @@ null-guarded (no `#loadingHardware` → `setLoadingCpu` does nothing), and with 
 **Imported by.** `import-export/save-load.js` (re-exports `showLoading`/
 `hideLoading`), `pose/tracker.js`, `pose/triangulation.js`, `ui/export-modals.js`,
 `ui/id-switch-modal.js`, `loading/session-loader.js` (Load Single Session
-Folder's three-step progress).
+Folder's three-step progress), `ui/memory-panel.js` (`loadingCardText`).
 
 **Notes / caveats.**
 - **The fill animates `transform: scaleX()`** under a 250 ms linear transition
@@ -11277,8 +11329,15 @@ either ID-switch check is run.
 
 **Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
 with placeholders at once and fills them AFTER the box paints: the maps first,
-then the images, one decoded frame per sample (`view.decoder.getFrame`, drawn
-immediately — a decoder's cached frame may be closed by the next decode). Every
+then the images, one decoded frame per sample, drawn immediately. **Each frame,
+and the map's background, is a caller-owned copy** (`galleryFrame`:
+`view.decoder.peekFrame`, closed once drawn; `getFrame` only for a decoder
+without `peekFrame`, whose frames are never closed here). Not `getFrame`: a jump
+through it keeps the frame in the view's frame cache and warms the 24 frames
+before it in the background (`_scheduleBackWarm`, `loading/video.js`), and the
+summary's samples left ~28 frames per camera cached for good on the 8-camera
+1280x1024 project: Chrome's GPU process ended a Track All + Triangulate All at
+~1.6 GB, ~0.47 GB with copies (VM, two runs each). Every
 row's samples are planned first (`planRow`: frame, camera, crop), then fetched one
 queue per decoder (`fetchSamples`): a decoder is asked for one frame at a time, in
 frame order, while the cameras' queues run side by side. And the samples land on
@@ -11291,7 +11350,7 @@ gap's worth. campy's cameras share keyframes; one that did not would only decode
 slower. 26 samples on an 8-camera project (keyframe every 250 frames): 2.3 s one
 after another, 1.3 s per camera side by side, 0.37 s on keyframes (local disk). Tiles
 fill in as their camera's frames arrive, not row by row. It stops as soon as the
-box is closed (test: e2e `identity-gallery` §5b). Without a video a sample says "no video" and the maps draw on a dark
+box is closed (test: e2e `identity-gallery` §5b; the copies, §5c). Without a video a sample says "no video" and the maps draw on a dark
 ground. The map is a darkened still of the chosen camera with the path coloured
 by TIME on a one-hue sequential ramp and a 0:00 → end key; hovering shows the
 nearest point's time, a click goes there. The chosen view is kept on
@@ -11317,7 +11376,7 @@ time captioned. Changing the map's camera hides a stale preview. The preview
 reads the element's `_zoom` (`{kind, w, h, draw, color, label, frame}`): one box
 serves both kinds.
 
-**Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
+**Key exports.** `renderIdentityGallery`, `galleryFrame`, `identityTracks`, `identityGroupAt`,
 `groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
 `memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
 `GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
@@ -11611,7 +11670,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   shared project skeleton — the user then adds video via File ▸ Load Videos);
   the **"−"** button (`btnRemoveSession`) calls `removeSession`. Folder-based
   session loading stays on the File menu (`menuLoadSessionFolder` →
-  `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`).
+  `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`), as does File ▸
+  Open Demo (`menuOpenDemo` → `loadDemoProject`, `loading/demo-project.js`).
 - Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
   Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
   `showGroupContextMenu`, `hideGroupContextMenu`. The context menu's **Delete
@@ -11788,7 +11848,7 @@ header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
-`file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
+`file-io.js`, `session-loader.js`, `demo-project.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js` (the track/identity helpers,
 Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
 `swapTracks`), `export-modals.js`,
@@ -12896,7 +12956,7 @@ actually stops the corresponding rendering / data work.
 
 **Purpose.** The right-edge icon rail and the stack of collapsible panel
 sections it drives (Instances, Visibility, ID Switches, Videos, Cameras,
-Skeleton, Session); it also shows/hides the info panel. It replaced the
+Skeleton, Session, Memory); it also shows/hides the info panel. It replaced the
 horizontal tab bar. Modelled on sleap-app's sidebar
 (`src/components/layout/AppShell.tsx` `Sidebar`; rules in `appStore.ts`
 `togglePanelOpen` / `openPanel` / `closePanel` / `toggleSectionCollapsed`) in
@@ -12942,6 +13002,11 @@ its default multi-panel (accordion) mode.
   covers the panel's right edge until the pointer leaves it.
 - The rail is a sibling AFTER `#infoPanelWrapper` in `.main-content`, so a
   collapsed wrapper still measures 0 wide and `isInfoPanelVisible` is unchanged.
+- **Panels that work only while seen** (the Memory panel draws its plot only
+  then) register `onPanelRailChange(fn)`; `syncPanelRail` calls every
+  listener after each repaint (open, fold, close, info panel shown/hidden,
+  Define Planes lock), and the listener asks `isPanelOnScreen(tabId)`
+  (expanded, info panel shown, not locked; scrolled out of view still counts).
 - Open / folded sections are display taste:
   `localStorage.lucidPanelRailSections` (`{open, folded}`, best-effort),
   restored once in `setupPanelRail`; whether the info panel is shown is not
@@ -12953,7 +13018,8 @@ its default multi-panel (accordion) mode.
 `clickPanelRailTab(tabId)` (the rail-click rule), `togglePanelSection(tabId)`
 (header chevron), `closePanelTab(tabId)` (header ✕), `getOpenPanelTabs()`
 (`[{tab, expanded}]` in stack order), `setPanelRailLocked(on)` (Define Planes
-disables the panel icons; the top button stays live), `syncPanelRail()`.
+disables the panel icons; the top button stays live), `syncPanelRail()`,
+`onPanelRailChange(fn)` (returns an unsubscribe), `isPanelOnScreen(tabId)`.
 
 **Imports from project modules.** `ui/panel-rail-icons.js` only.
 `toggleInfoPanel` is passed in, because `ui/id-switch-modal.js` and
@@ -12962,7 +13028,8 @@ cycle.
 
 **Imported by.** `pose/initialization.js` (`setupPanelRail`),
 `ui/id-switch-modal.js` (`showPanelTab` in `openIdSwitchPanel`),
-`ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`).
+`ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`),
+`ui/memory-panel.js` (`onPanelRailChange`, `isPanelOnScreen`).
 
 **User-facing features.** The icon rail on the window's right edge and the
 collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
@@ -12974,7 +13041,7 @@ release sleap-app uses through `lucide-react`; ISC, notice in the file header
 and `lib/LICENSES.txt`). sleap-app's glyph wherever the panel matches:
 Instances = Users, Visibility = Eye (sleap-app's View panel), Videos = Film,
 Skeleton = Bone. Others: ID Switches = ArrowLeftRight (two opposing arrows),
-Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
+Cameras = Camera, Session = FolderTree, Memory = MemoryStick, plus PanelRightClose / PanelRightOpen
 and the section headers' ChevronDown / ChevronRight / X (sleap-app's).
 Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 
@@ -12984,6 +13051,102 @@ throws on an unknown name).
 
 **Imports from project modules.** None (leaf). **Imported by.**
 `ui/panel-rail.js`.
+
+### ui/memory-panel.js
+
+**Purpose.** The Memory panel (`#tabMemory`, last on the right-edge rail): the
+page's JavaScript heap (`performance.memory.usedJSHeapSize`) over the last
+five minutes as an inline-SVG line, V8's limit (`jsHeapSizeLimit`) as a
+dashed reference line named **"JS object limit"** (never "heap limit": it caps
+JavaScript objects only, and `usedJSHeapSize` also counts typed arrays outside
+it, so a big project reads well above it and is fine: 05mice after Track All
+5.6 GB used, objects under 1.9 GB), the current reading as a `toLocaleString('en-US')` MB
+number, peak / allocated / limit rows, and what the project holds (frames in
+memory of the project's frames, `(lazy)` when lazy; frames with instance
+groups, the size of the frame-keyed `instanceGroups`; sessions). An ⓘ says what the number leaves out (workers, video decoding,
+Chrome's GPU and other processes) and that typed arrays count, so it can read
+above the ~4 GB cap.
+- **Reads the heap once a second from app start, open or not**, so opening
+  the panel shows the last five minutes (a run done with it closed included).
+  A reading is `performance.memory` into the ring: ~6 µs, the same on the demo
+  and on a 5.7 GB 8-camera project after Track All.
+- **Marks runs.** Each reading notes what was running
+  (`runName(loadingCardText())`: the progress card's title, or its message,
+  so Track All, Triangulate All, loads, saves, and the app's start-up card).
+  A run is a shaded band (`#memoryRunBands` rects, `<title>` = name, length,
+  peak) with its name along the top in HTML over the plot (`#memoryRunLabels`, two
+  rows; the SVG is stretched, so text never goes in it), placed by
+  `placeRunLabels`. Back-to-back bands alternate shades.
+  A run done with the panel closed is marked too.
+- **Draws ONLY while on screen** (`onPanelRailChange` → `isPanelOnScreen`;
+  folded, closed, info panel hidden or Define Planes open, it is not): the SVG,
+  the rows and the project counts (Map sizes, `projectCounts`), at once on
+  opening and then with each reading. Never a walk over frames, so it cannot
+  stall playback, Track All or Triangulate All. A gap in the readings (a
+  throttled background tab) is a gap in the line.
+- **Chrome 157 reports `performance.memory` live** on an ordinary page (checked
+  in a real, non-automated window and on luc3d.sleap.ai), no flag needed.
+  Older Chrome (Playwright's Chromium 153), and `about:blank` in any, rounds it
+  unless started with `--enable-precise-memory-info`: 100 fixed sizes,
+  multiples of 100,000 bytes, capped near 4 GB, refreshed every 20 minutes
+  (Chromium `HeapSizeCache`). `isBucketizedHeap` spots that and the panel says so.
+- **Firefox / Safari** (no `performance.memory`): "Not available in this
+  browser" instead of the plot; the project rows still update.
+- **`measureUserAgentSpecificMemory()`** (whole page, workers included) only
+  where `crossOriginIsolated` and only while on screen (Chrome forces a full GC
+  to answer when none comes within ~20 s: ~140 ms on a big project, so never
+  in the background): at most every 10 s, one call in flight, shown as
+  two rows and an orange line (named in the legend only while it is shown).
+  The deployed site sends no COOP/COEP headers,
+  so it is off there; `python3 server.py --isolated` sends them. A refused call
+  (Playwright's Chromium rejects it even when isolated) hides the two rows for
+  the rest of the page's life.
+- **Workers** are counted only by `measureUserAgentSpecificMemory()`, so only
+  on an isolated page (`server.py --isolated`) in Chrome.
+- Samples live in a `MemoryRing` in memory only: nothing in the `.slp` or
+  `localStorage` (the rail remembers only whether the panel is open).
+
+**Key exports.** `setupMemoryPanel()` (once, after `setupPanelRail`),
+`syncMemorySampling()`, `MEMORY_INFO_TEXT`. Test hook
+`window.__lucidMemoryPanel` (`isSampling`, `isDrawing`, `samplesTaken`, `samples`).
+
+**Imports from project modules.** `ui/panel-rail.js` (`onPanelRailChange`,
+`isPanelOnScreen`), `ui/info-tip.js` (`setInfoTip`, `ICON_INFO`),
+`ui/app-state.js` (`state`), `ui/memory-plot.js`.
+
+**Imported by.** `pose/initialization.js`.
+
+**User-facing features.** Memory panel. Tests: `tests/e2e/memory-panel.mjs`,
+`tests/test-memory-plot.mjs`, `tests/e2e/isolated-server.mjs`.
+
+### ui/memory-plot.js
+
+**Purpose.** The DOM-free half of the Memory panel, import-free for Node tests:
+`MemoryRing` (fixed-capacity sample ring, oldest first), `isBucketizedHeap` /
+`readHeap` (Chrome's `performance.memory`, null elsewhere),
+`summarizeUaMemory` (whole page + dedicated-worker bytes),
+`projectCounts(sessions)` (Map sizes and `lazyLoader.nFrames` only),
+`formatMB`, and `plotGeometry(samples, {width, height, now, windowMs, limit})`
+(SVG path data; y from 0 to max(limit, 1.1 x peak), so the limit line is
+always drawn; a step over `MEMORY_GAP_MS` breaks the line).
+Runs: `runName(card)` (the progress card's title, else its message up to the
+first count / colon / ellipsis, cut to 40 characters; null with no card),
+`formatDuration(ms)` ("45 s", "2 min 5 s", "1 h 3 min"),
+`runSpans(samples, {width, now, windowMs})` (one span per stretch of a `run`
+name, split by another name, none, or a gap; covers its samples plus one
+period, never past the right edge; keeps its peak), and
+`placeRunLabels(spans, width, charW, lanes)` (rows of names, never
+overlapping within a row; placed newest run first, then the longest, so the
+run that just ended keeps its name and a 1-second check between two long runs
+never takes their room; each name left-aligned at its band if it fits there,
+else right-aligned at its band's end, in the first row where it fits whole,
+else cut; hidden under three characters).
+
+**Key exports.** The above, plus `MEMORY_SAMPLE_MS` (1 s), `MEMORY_WINDOW_MS`
+(5 min), `MEMORY_RING_CAPACITY` (360), `MEMORY_GAP_MS`, `UA_MEMORY_EVERY_MS`.
+
+**Imports from project modules.** None (leaf). **Imported by.**
+`ui/memory-panel.js`, `tests/test-memory-plot.mjs`.
 
 ---
 
@@ -13058,7 +13221,9 @@ bridged into the test runner as `window.__PerCamSlpChoice`.
 
 **Purpose.** Where a `showDirectoryPicker` opens. `startIn` = a file handle opens
 in that file's folder; the project's `.slp` handle is `state.slpFileHandle` (Load
-Project, Load SLP and Save As keep it; it is what File ▸ Save writes). Without
+Project, Load SLP and Save As keep it; it is what File ▸ Save writes). A loader
+adopts it only once it replaces the open project, and New Project or closing the
+last session clears it (`tests/e2e/save-target-handle.mjs`). Without
 `startIn` or `id`, Chromium opens wherever ANY picker of the origin last picked
 (Load Project, Save As, an export…), else Documents — so a picker with neither
 lands somewhere that depends on the browser's history, not the project. An `id`
@@ -13145,6 +13310,36 @@ has no recording folder: Save writes that file, Save As opens beside it.
 Imports nothing.
 
 **Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`.
+
+### loading/demo-project.js
+
+**Purpose.** File ▸ Open Demo: a 15 s, 8-camera clip of SLAP-2M (two mice,
+proofread 2D in six cameras, the session's calibration) in the `demo/` folder
+of the Hugging Face dataset `talmolab/slap-2m`, whose README says where it was
+cut from. It is read from ONE commit (`DEMO_REVISION`): an upload to the
+dataset changes nothing until the pin moves, and moving it means updating
+`DEMO_FILES`' sizes too. Every file is fetched whole (24 MB), wrapped as a File
+with `webkitRelativePath` = `SLAP-2M demo/<path>`, and handed to
+`handleLoadSessionFolderPerCamera` as a picked folder would be, so nothing about
+the demo is special once loaded. Hugging Face answers cross-origin requests, so
+it works on every channel; it is not in the offline bundle, so offline it fails
+with a status message.
+
+**Key exports.** `DEMO_REVISION`, `DEMO_BASE_URL` (trailing slash),
+`DEMO_PROJECT_NAME` (the tab title), `DEMO_FILES` (`[path, bytes]`: the
+progress bar's total before any response);
+`fetchDemoFiles(baseUrl, onBytes, fetchFn?)` → Files (4 at a time, counting
+bytes as they stream); `loadDemoProject({baseUrl}?)` → true once loaded. It asks
+before replacing an open project (`confirm`), then `newProject(true)`, shows the
+download on the progress card (MB), loads the folder and names the project.
+
+**Imports from project modules.** `ui/app-state.js`,
+`loading/session-loader.js`, `import-export/save-load.js`,
+`ui/loading-overlay.js`, `ui/page-title.js`.
+
+**Imported by.** `ui/demo-entry.js`, `ui/ui-wiring.js` (File ▸ Open Demo).
+
+**Tests.** `tests/e2e/demo-project.mjs`.
 
 ### loading/campy-session.js
 
@@ -13578,7 +13773,9 @@ Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
 `import-export/save-load.js` via `shouldUseLazySlp`, and by
 `handleLoadSessionFolderSingleSlp` for a large root `.slp`, which passes
 `{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
-instead of prompting). **It shows the progress
+instead of prompting). `opts.fileHandle` (the picked `.slp`'s handle, from Load
+Project) becomes `state.slpFileHandle` when the old project is freed; without it
+the handle is cleared. **It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
@@ -15718,9 +15915,19 @@ loading-overlay/status-text UI helpers.
   suggested name is the session's name when there is one session. Save Compact
   Copy's picker gets the same `startIn` (else the project file's folder). Covered by
   `tests/e2e/save-opens-in-recording-folder.mjs`.
+- Tab title (`ui/page-title.js`): `markDirty` / `clearDirty` call
+  `setPageDirty`; `newProject` clears the project's name, `handleLoadProject`
+  sets a `.json`'s, and a save sets the name of the file it wrote.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
-  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
-  `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
+  is used by the 3D-import reset and File ▸ Open Demo; it clears
+  `state.slpFileHandle`, so Save never writes the new project over the old
+  one's file, and the session LIST (`state.sessions`, every session's lazy
+  loader closed, the session strip repainted) and the dirty flag: a session
+  left in the list stayed on the strip and the next folder loaded joined it —
+  `tests/e2e/demo-project.mjs` §5), `markDirty`, `clearDirty`,
+  `quickSave`, `saveAs`, `saveProjectSlp`, `saveProject`,
+  `handleLoadProject(file, fileHandle)` (hands `fileHandle`, an `.slp`'s own, to
+  the loader; a `.json` leaves none; routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
   eager parse, freeing any previously loaded project first). A `.json` loaded
@@ -15959,7 +16166,10 @@ path uses `resolveImportTrackIdx`, and the grouped-reconstruction path keeps
 first track.
 
 **Key exports.**
-- `handleLoadSlpFile(slpFile)` — replace-current-state load. Pre-allocates all
+- `handleLoadSlpFile(slpFile, fileHandle)` — replace-current-state load. Sets
+  `state.slpFileHandle` (File ▸ Save's target) to `fileHandle` or null at the
+  point it clears the old project, never before, so a load cancelled at its
+  first prompt leaves the open project's file alone. Pre-allocates all
   N session groups in the LoadingProgressModal before the per-session loop so
   the header reads the true "Session n of N"; re-engages `showLoading` after the
   non-embedded folder picker so the overlay stays up during video decode. Calls
@@ -16269,8 +16479,21 @@ fallback skeleton when loaded data carries none).
 tree, keeps a legacy `POST /convert-slp` endpoint alive when `h5py` is present,
 and implements **offline mode**.
 
-**CLI.** `python3 server.py [port] [--offline]`; `LUCID_OFFLINE=1` also enables
-offline. Prints which mode it started in.
+**CLI.** `python3 server.py [port] [--offline] [--isolated]`; `LUCID_OFFLINE=1`
+also enables offline, `LUCID_ISOLATED=1` isolation. Prints which mode it
+started in.
+
+**Isolated mode** (`--isolated`, opt-in). `LucidHandler.end_headers` adds
+`ISOLATION_HEADERS` (COOP `same-origin`, COEP `credentialless`) to EVERY
+response, errors and 304s included (an isolated page refuses a worker script
+without COEP). The page is then cross-origin isolated, and Chrome (157; not
+Playwright's Chromium 153) allows `measureUserAgentSpecificMemory()`: the whole
+page with its web workers, shown by the Memory panel (`ui/memory-panel.js`). `credentialless`, not
+`require-corp`, because the CDN scripts and Hugging Face send no CORP header.
+Off by default: no deployed channel sends these headers. Combines with
+`--offline`. The e2e harness does the same with `LUC3D_E2E_ISOLATED=1`
+(`startServer({ isolated })`), to run any file or the whole suite isolated.
+Test: `tests/e2e/isolated-server.mjs`.
 
 **Offline mode.** Reads `offline-deps.json` via `scripts/offline_deps.py` and
 rewrites the mapped CDN URLs in served `.html` / `.js` / `.mjs` bodies to
@@ -16284,7 +16507,8 @@ are ESM imports inside `ui/sessions-panes.js` and `ui/overlay-export-modal.js`.
 `load_manifest`, `package_status`, `replacement_map`, `rewrite_text`,
 `is_rewritable`.
 
-**User-facing features.** Local development; offline development.
+**User-facing features.** Local development; offline development; the Memory
+panel's whole-page reading with workers (`--isolated`).
 
 ---
 

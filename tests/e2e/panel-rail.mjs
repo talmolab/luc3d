@@ -48,6 +48,7 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 const EXPECTED = [
     ['tabInstances', 'Instances'], ['tabVisibility', 'Visibility'], ['tabIdSwitches', 'ID Switches'],
     ['tabVideos', 'Videos'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
+    ['tabMemory', 'Memory'],
 ];
 // First path of the Lucide glyph each panel must show. Instances/Visibility/
 // Videos/Skeleton are sleap-app's Users/Eye/Film/Bone; ID Switches is the
@@ -60,6 +61,7 @@ const FIRST_PATH = {
     tabCameras: 'M13.997 4a2 2 0 0 1',
     tabSkeleton: 'M17 10c.7-.7 1.69 0 2.5 0',
     tabSession: 'M20 10a1 1 0 0 0 1-1V6',
+    tabMemory: 'M12 12v-2', // memory-stick
 };
 
 let browser;
@@ -219,9 +221,10 @@ try {
             J(s.active) === J(opened) && J(s.pressed) === J(opened),
             `clicking ${tab} opens + expands it and folds the others; every open icon is active`);
     }
-    check(J(s.ariaExpanded) === J(opened.map(t => t === 'tabSession' ? 'true' : 'false')),
+    const lastTab = EXPECTED[EXPECTED.length - 1][0];
+    check(J(s.ariaExpanded) === J(opened.map(t => t === lastTab ? 'true' : 'false')),
         'the header chevrons say which section is expanded (aria-expanded)');
-    await click('tabSession');
+    await click(lastTab);
     s = await railState();
     check(!s.collapsed && s.content.length === 0 && J(s.open) === J(opened) && J(s.active) === J(opened),
         'clicking the expanded panel folds it to its header; the panel stays shown and every section stays open');
