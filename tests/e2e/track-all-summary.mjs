@@ -45,24 +45,21 @@
  *
  * Run: node tests/e2e/track-all-summary.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { answerTrackSetup } from './fixtures/track-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8291);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -246,7 +243,12 @@ try {
     check(JSON.stringify(s.buttons) === JSON.stringify(['Check by body size', 'Check by images…', 'Close', 'Triangulation Wizard…']),
         `precondition: the reopened box offers both checks (${JSON.stringify(s.buttons)})`);
     const onTab = () => page.evaluate(() => !!document.querySelector('#tabIdSwitches.active'));
-    const leaveTab = () => page.evaluate(() => document.querySelector('.panel-tab:not([data-tab="tabIdSwitches"])').click());
+    // Close the ID Switches section (its header ✕) if it is open, so a later
+    // `onTab()` sees whether the flow opened it again.
+    const leaveTab = () => page.evaluate(() => {
+        const x = document.querySelector('.panel-section.open[data-tab="tabIdSwitches"] .panel-section-close');
+        if (x) x.click();
+    });
     // whether the box came back, with `cue`'s row no longer reading `was` (before this, the tab opened instead)
     const backWith = (cue, was) => page.waitForFunction(([c, w]) => {
         const r = document.querySelector('#trackSummaryOverlay .track-summary-check[data-cue="' + c + '"] .track-summary-check-text');
@@ -477,7 +479,7 @@ try {
     check(s.headline === 'Review the possible ID switches.' && s.primary === 'Review switches',
         `primary is Review switches ("${s.headline}" / "${s.primary}")`);
     check(JSON.stringify(s.buttons) === JSON.stringify(['Close', 'Review switches']), `no alternative checks offered: ${JSON.stringify(s.buttons)}`);
-    await page.evaluate(() => document.querySelector('.panel-tab[data-tab="tabInfo"], .panel-tab:not([data-tab="tabIdSwitches"])').click());
+    await page.evaluate(() => document.querySelector('.panel-rail-btn[data-tab]:not([data-tab="tabIdSwitches"])').click());
     await page.click('#trackSummaryPrimary');
     await page.waitForFunction(f => window.__lucid.state.currentFrame === f, fx.firstGo, { timeout: 10000 }).catch(() => {});
     const after = await page.evaluate(() => ({

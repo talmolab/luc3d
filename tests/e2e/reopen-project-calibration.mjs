@@ -12,10 +12,10 @@
  * real loader, and asserts the cameras come back with their real (non-identity)
  * intrinsics + extrinsics.
  *
- * Run from repo root with the app served (see occlusion-roundtrip.mjs). BASE
- * overridable.
+ * Run: node tests/e2e/reopen-project-calibration.mjs (serves the app itself;
+ * BASE= to use a server already running).
  */
-import { chromium } from 'playwright';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import os from 'os';
@@ -23,7 +23,8 @@ import path from 'path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..', '..');
-const BASE = process.env.BASE || 'http://localhost:8080';
+// BASE= points at an app already being served; otherwise serve this checkout.
+const BASE = process.env.BASE || (await startServer(REPO)).url;
 
 const CAM_ORDER = ['side', 'back', 'mid'];
 // Distinct, non-identity calibration per camera so we can prove it round-trips.
@@ -96,7 +97,7 @@ async function reopenAndInspect(page, fixture) {
 }
 
 async function main() {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchBrowser({ headless: true });
   const page = await browser.newPage();
   let tmpRoot = null;
   try {

@@ -119,6 +119,23 @@ export function fitPCA(X, n, D, k, opts) {
     var mean = new Float64Array(D);
     for (var r = 0; r < n; r++) { var wr = w ? w[r] : 1; W += wr; for (var d = 0; d < D; d++) mean[d] += wr * X[r * D + d]; }
     for (var d1 = 0; d1 < D; d1++) mean[d1] /= w ? W : Math.max(1, n);
+    if (k === D) {
+        // Every direction kept: the basis would only ROTATE the centred rows, and
+        // everything downstream (learnIdentityMetric's scatter, whitening and
+        // eigen-directions, then cosines) answers the same under a rotation. The
+        // size check asks for this (≤ 16 bone lengths, metricPcaDims 64): six
+        // subspace iterations over every sample were ~0.6 s of Track All's end on
+        // an 8-camera, 108,000-frame project, for nothing.
+        var projectIntoId = function (x, out, off) {
+            for (var c0 = 0; c0 < D; c0++) out[off + c0] = x[c0] - mean[c0];
+            return out;
+        };
+        return {
+            dims: D,
+            projectInto: projectIntoId,
+            project: function (x) { return projectIntoId(x, new Float64Array(D), 0); },
+        };
+    }
     var seed = 12345, rnd = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
     var Q = new Float64Array(D * k);
     for (var i = 0; i < Q.length; i++) Q[i] = rnd();
@@ -144,13 +161,14 @@ export function fitPCA(X, n, D, k, opts) {
         }
         orth(Z); Q.set(Z);                           // Q <- orth((X - mean)^T (X - mean) Q)
     }
+    var projectInto = function (x, out, off) {
+        for (var c5 = 0; c5 < k; c5++) { var s3 = 0; for (var d9 = 0; d9 < D; d9++) s3 += (x[d9] - mean[d9]) * Q[d9 * k + c5]; out[off + c5] = s3; }
+        return out;
+    };
     return {
         dims: k,
-        project: function (x) {
-            var out = new Float64Array(k);
-            for (var c5 = 0; c5 < k; c5++) { var s3 = 0; for (var d9 = 0; d9 < D; d9++) s3 += (x[d9] - mean[d9]) * Q[d9 * k + c5]; out[c5] = s3; }
-            return out;
-        },
+        projectInto: projectInto,
+        project: function (x) { return projectInto(x, new Float64Array(k), 0); },
     };
 }
 
@@ -172,6 +190,33 @@ function median(arr) {
  * @returns {object} grid, or {fail: reason}
  */
 export function buildGrid(session, o, needSize) {
+    var steps = gridSteps(session, o, needSize, 0), r;
+    while (!(r = steps.next()).done) { /* no pauses */ }
+    return r.value;
+}
+
+/** The longest stretch of sampling between two pauses of `buildGridAsync`, in ms. */
+export const GRID_SLICE_MS = 25;
+
+/**
+ * `buildGrid` in slices: `await pause()` whenever sampling has run for
+ * `sliceMs` (default GRID_SLICE_MS; the clock is read every 256 samples), so a
+ * caller can let the page paint (~0.1 s of sampling on an 8-camera,
+ * 108,000-frame project). The same loops in the same order: the same grid.
+ * @param {function(): Promise} pause
+ * @returns {Promise<object>} grid, or {fail: reason}
+ */
+export async function buildGridAsync(session, o, needSize, pause, sliceMs) {
+    var steps = gridSteps(session, o, needSize, sliceMs > 0 ? sliceMs : GRID_SLICE_MS), r;
+    while (!(r = steps.next()).done) await pause();
+    return r.value;
+}
+
+/**
+ * buildGrid's body: yields (to be resumed) whenever `sliceMs` > 0 of sampling
+ * have passed; returns the grid or {fail}.
+ */
+function* gridSteps(session, o, needSize, sliceMs) {
     if (!(typeof o.fps === 'number' && isFinite(o.fps) && o.fps > 0)) return { fail: 'Unknown frame rate (set the fps)' };
     if (!(o.sampleHz > 0)) return { fail: 'sampleHz must be positive' };
     var step = Math.max(1, Math.round(o.fps / o.sampleHz));
@@ -203,34 +248,57 @@ export function buildGrid(session, o, needSize) {
     }
     var X = new Float64Array(T * K * Math.max(B, 1)).fill(NaN), C = new Float64Array(T * K * 3).fill(NaN);
     var G = new Array(T * K).fill(null);      // the InstanceGroup behind each (sample, identity)
-    var p = [0, 0, 0], q = [0, 0, 0], extents = [];
+    var extents = [];
+    // Each group's nodes are read ONCE into `xyz` (`ok`: present), and the bones,
+    // centroid and extent read from there in the same order with the same
+    // arithmetic as reading the points3d each time (bit-identical). A node shared
+    // by several bones used to be read once per bone; ~135,000 groups on an
+    // 8-camera, 108,000-frame project.
+    var used = [];
+    boneIdx.forEach(function (bi) { if (used.indexOf(bi[0]) < 0) used.push(bi[0]); if (used.indexOf(bi[1]) < 0) used.push(bi[1]); });
+    bodyNodes.forEach(function (nd) { if (used.indexOf(nd) < 0) used.push(nd); });
+    var xyz = new Float64Array(nodes.length * 3), ok = new Uint8Array(nodes.length), p = [0, 0, 0];
+    var bodyPts = new Int32Array(bodyNodes.length);           // the present body nodes, in bodyNodes order
+    var seenAt = new Int32Array(K).fill(-1);                   // sample at which identity k was last seen
+    var clock = typeof performance !== 'undefined' ? performance : Date, sliceStart = sliceMs > 0 ? clock.now() : 0;
     for (var i = 0; i < T; i++) {
+        if (sliceMs > 0 && i > 0 && (i & 255) === 0 && clock.now() - sliceStart >= sliceMs) {
+            yield i;
+            sliceStart = clock.now();
+        }
         var groups = session.instanceGroups.get(frames[i]) || [];
-        var seen = new Set();
         for (var gi = 0; gi < groups.length; gi++) {
             var g = groups[gi], k = kOf.get(g.identityId);
             if (k == null || !g.points3d) continue;
-            if (seen.has(k)) {                          // duplicate identity this frame: ambiguous
+            if (seenAt[k] === i) {                      // duplicate identity this frame: ambiguous
                 for (var c0 = 0; c0 < 3; c0++) C[(i * K + k) * 3 + c0] = NaN;
                 G[i * K + k] = null; continue;
             }
-            seen.add(k); G[i * K + k] = g;
+            seenAt[k] = i; G[i * K + k] = g;
             var P3 = g.points3d;
+            for (var u = 0; u < used.length; u++) {
+                var nd2 = used[u];
+                if (readPoint3d(P3, nd2, p)) { xyz[nd2 * 3] = p[0]; xyz[nd2 * 3 + 1] = p[1]; xyz[nd2 * 3 + 2] = p[2]; ok[nd2] = 1; }
+                else ok[nd2] = 0;
+            }
             for (var b = 0; b < B; b++) {
-                if (readPoint3d(P3, boneIdx[b][0], p) && readPoint3d(P3, boneIdx[b][1], q)) {
-                    X[(i * K + k) * B + b] = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+                var na = boneIdx[b][0], nb = boneIdx[b][1];
+                if (ok[na] && ok[nb]) {
+                    X[(i * K + k) * B + b] = Math.hypot(xyz[na * 3] - xyz[nb * 3], xyz[na * 3 + 1] - xyz[nb * 3 + 1], xyz[na * 3 + 2] - xyz[nb * 3 + 2]);
                 }
             }
-            var sx = 0, sy = 0, sz = 0, n = 0, pts = [];
+            var sx = 0, sy = 0, sz = 0, n = 0;
             for (var bn = 0; bn < bodyNodes.length; bn++) {
-                if (readPoint3d(P3, bodyNodes[bn], p)) { sx += p[0]; sy += p[1]; sz += p[2]; n++; pts.push([p[0], p[1], p[2]]); }
+                var nd3 = bodyNodes[bn];
+                if (ok[nd3]) { sx += xyz[nd3 * 3]; sy += xyz[nd3 * 3 + 1]; sz += xyz[nd3 * 3 + 2]; bodyPts[n++] = nd3; }
             }
             if (n) {
                 C[(i * K + k) * 3] = sx / n; C[(i * K + k) * 3 + 1] = sy / n; C[(i * K + k) * 3 + 2] = sz / n;
-                if (i % 7 === 0 && pts.length >= 2) {           // body extent, sampled sparsely
+                if (i % 7 === 0 && n >= 2) {                    // body extent, sampled sparsely
                     var ext = 0;
-                    for (var a1 = 0; a1 < pts.length; a1++) for (var a2 = a1 + 1; a2 < pts.length; a2++) {
-                        var e = Math.hypot(pts[a1][0] - pts[a2][0], pts[a1][1] - pts[a2][1], pts[a1][2] - pts[a2][2]);
+                    for (var a1 = 0; a1 < n; a1++) for (var a2 = a1 + 1; a2 < n; a2++) {
+                        var e1 = bodyPts[a1] * 3, e2 = bodyPts[a2] * 3;
+                        var e = Math.hypot(xyz[e1] - xyz[e2], xyz[e1 + 1] - xyz[e2 + 1], xyz[e1 + 2] - xyz[e2 + 2]);
                         if (e > ext) ext = e;
                     }
                     extents.push(ext);
@@ -371,7 +439,7 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
     var w = weights || null, wOf = function (r) { return w ? w[r] : 1; };
     var pca = fitPCA(X, n, D, o.metricPcaDims || 64, { weights: w }), d = pca.dims;
     var Y = new Float64Array(n * d);
-    for (var r = 0; r < n; r++) Y.set(pca.project(X.subarray(r * D, (r + 1) * D)), r * d);
+    for (var r = 0; r < n; r++) pca.projectInto(X.subarray(r * D, (r + 1) * D), Y, r * d);
     var groups = function (key) {
         var m = new Map();
         for (var r2 = 0; r2 < n; r2++) { var g = key[r2]; if (g < 0) continue; if (!m.has(g)) m.set(g, []); m.get(g).push(r2); }
@@ -388,7 +456,7 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
         rows.forEach(function (r3) {
             var wr = wOf(r3);
             for (var x = 0; x < d; x++) dv[x] = Y[r3 * d + x] - mu[x];
-            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sw[x2 * d + y2] += dv[x2] * dv[y2] * wr;
+            for (var x2 = 0; x2 < d; x2++) for (var y2 = x2; y2 < d; y2++) Sw[x2 * d + y2] += dv[x2] * dv[y2] * wr;
             nw++; sw += wr;
         });
     });
@@ -396,16 +464,28 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
         for (var p = 0; p < rows.length; p++) for (var q = p + 1; q < rows.length; q++) {
             var wp = wOf(rows[p]);                    // one sample: both rows weigh the same
             for (var x = 0; x < d; x++) dv[x] = Y[rows[p] * d + x] - Y[rows[q] * d + x];
-            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sb[x2 * d + y2] += dv[x2] * dv[y2] * wp;
+            for (var x2 = 0; x2 < d; x2++) for (var y2 = x2; y2 < d; y2++) Sb[x2 * d + y2] += dv[x2] * dv[y2] * wp;
             nb++; sb += wp;
         }
     });
-    var unit = function (z) {
-        var nn = 0; for (var x = 0; x < z.length; x++) nn += z[x] * z[x];
-        nn = Math.sqrt(nn) || 1; for (var x2 = 0; x2 < z.length; x2++) z[x2] /= nn;
+    // Both are symmetric, so only the upper triangle was summed: each entry got
+    // the same products in the same order as a full pass (a*b === b*a), so the
+    // mirror is bit-identical to summing both halves, at half the cost.
+    for (var xm = 0; xm < d; xm++) for (var ym = xm + 1; ym < d; ym++) {
+        Sw[ym * d + xm] = Sw[xm * d + ym];
+        Sb[ym * d + xm] = Sb[xm * d + ym];
+    }
+    // Scale out[off .. off+len) to unit length (the same operations, in the same
+    // order, whether the vector is its own array or a stretch of a shared one).
+    var unitAt = function (z, off, len) {
+        var nn = 0; for (var x = 0; x < len; x++) nn += z[off + x] * z[off + x];
+        nn = Math.sqrt(nn) || 1; for (var x2 = 0; x2 < len; x2++) z[off + x2] /= nn;
         return z;
     };
-    if (nw < 20 || nb < 20) return { dims: d, project: function (x) { return unit(pca.project(x)); } };
+    if (nw < 20 || nb < 20) {
+        var pcaUnitInto = function (x, out, off) { return unitAt(pca.projectInto(x, out, off), off, d); };
+        return { dims: d, projectInto: pcaUnitInto, project: function (x) { return pcaUnitInto(x, new Float64Array(d), 0); } };
+    }
     var tr = 0;
     for (var x3 = 0; x3 < d; x3++) { for (var y3 = 0; y3 < d; y3++) { Sw[x3 * d + y3] /= sw; Sb[x3 * d + y3] /= sb; } tr += Sw[x3 * d + x3]; }
     for (var x4 = 0; x4 < d; x4++) Sw[x4 * d + x4] += (o.metricReg != null ? o.metricReg : 0.1) * tr / d;
@@ -422,13 +502,16 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
     for (var x8 = 0; x8 < d; x8++) order.forEach(function (col, j) {
         var s3 = 0; for (var y8 = 0; y8 < d; y8++) s3 += W1[x8 * d + y8] * em.vectors[y8 * d + col]; P[x8 * Q + j] = s3;
     });
+    var yBuf = new Float64Array(d);
+    var metricInto = function (x, out, off) {
+        var y = pca.projectInto(x, yBuf, 0);
+        for (var j = 0; j < Q; j++) { var s4 = 0; for (var x9 = 0; x9 < d; x9++) s4 += y[x9] * P[x9 * Q + j]; out[off + j] = s4; }
+        return unitAt(out, off, Q);
+    };
     return {
         dims: Q,
-        project: function (x) {
-            var y = pca.project(x), z = new Float64Array(Q);
-            for (var j = 0; j < Q; j++) { var s4 = 0; for (var x9 = 0; x9 < d; x9++) s4 += y[x9] * P[x9 * Q + j]; z[j] = s4; }
-            return unit(z);
-        },
+        projectInto: metricInto,
+        project: function (x) { return metricInto(x, new Float64Array(Q), 0); },
     };
 }
 
@@ -461,13 +544,14 @@ export function learnIdentityMetric(X, n, D, stretch, sample, o, weights) {
  * @param {number} every grid samples per feature sample (1 for size)
  * @returns {Array<{frame, startFrame, identityA, identityB, nameA, nameB, score, cameras}>} sorted by frame
  */
-export function contactChangeScores(grid, feat, o, every) {
+export function contactChangeScores(grid, feat, o, every, has) {
     var T = grid.T, K = grid.K, frames = grid.frames, idents = grid.idents;
+    var hasFeat = has || function (i, k) { return !!feat(i, k); };
     var ce = contactEpisodes(grid, o.episodeGapSeconds), comp = ce.comp;
     var perSide = Math.max(1, Math.round(o.windowSeconds * grid.hz / every)), span = grid.secToSamples(o.maxSpanSeconds);
     var minN = Math.max(0, Math.round((o.minApartSeconds || 0) * grid.hz / every));
     var usable = function (i, k, p) {
-        return grid.hasCen(i, k) && !(comp[i * K + p] >= 0 && comp[i * K + p] === comp[i * K + k]) && !!feat(i, k);
+        return grid.hasCen(i, k) && !(comp[i * K + p] >= 0 && comp[i * K + p] === comp[i * K + k]) && hasFeat(i, k);
     };
     var collect = function (k, p, from, dir, limit) {
         var got = [];
@@ -734,7 +818,13 @@ async function scoreContacts(grid, views, o, every, unitRows, fitProgress, sampl
     var T = grid.T, K = grid.K;
     var stretchOf = new Int32Array(T * K).fill(-1);
     grid.tl.forEach(function (t, ti) { for (var i = t.start; i <= t.end; i++) stretchOf[i * K + t.k] = ti; });
-    var feats = new Map();    // row (sample * K + identity) -> [{c, u}]
+    // Each view's features go into ONE flat buffer (its rows in `rowAt`), and a
+    // row's [{c, u}] entries are built only when the scoring reads that row: it
+    // reads the samples around contacts, not all of them (~135,000 rows of
+    // arrays, objects and lists on an 8-camera, 108,000-frame project, mostly
+    // garbage). `rowHas` answers "does it have features?" without building any.
+    var feats = new Map();    // row (sample * K + identity) -> [{c, u}], built on first read
+    var rowHas = new Uint8Array(T * K), viewFeat = [];
     for (var ci = 0; ci < views.length; ci++) {
         throwIfAborted(o.signal);
         if (fitProgress) await fitProgress(ci, views.length);
@@ -757,20 +847,73 @@ async function scoreContacts(grid, views, o, every, unitRows, fitProgress, sampl
             st[j] = stretchOf[data.rows[r2]]; sm[j] = Math.floor(data.rows[r2] / K);
             if (wt) wt[j] = wRow(r2);
         });
-        var metric = learnIdentityMetric(Xt, use.length, D, st, sm, o, wt);
+        var metric = learnIdentityMetric(Xt, use.length, D, st, sm, o, wt), Q = metric.dims;
+        // rowAt: a row's first index in this view; nextAt chains any further ones in push order
+        var U = new Float64Array(n * Q), rowAt = new Int32Array(T * K).fill(-1), lastAt = new Int32Array(T * K).fill(-1);
+        var nextAt = new Int32Array(n).fill(-1);
         for (var r3 = 0; r3 < n; r3++) {
-            var row = data.rows[r3];
-            if (!feats.has(row)) feats.set(row, []);
-            feats.get(row).push({ c: ci, u: metric.project(X.subarray(r3 * D, (r3 + 1) * D)) });
+            metric.projectInto(X.subarray(r3 * D, (r3 + 1) * D), U, r3 * Q);
+            var row3 = data.rows[r3];
+            if (rowAt[row3] < 0) rowAt[row3] = r3; else nextAt[lastAt[row3]] = r3;
+            lastAt[row3] = r3; rowHas[row3] = 1;
         }
+        viewFeat.push({ U: U, Q: Q, rowAt: rowAt, nextAt: nextAt });
     }
-    var scored = contactChangeScores(grid, function (i3, k3) { return feats.get(i3 * K + k3) || null; }, o, every);
+    var featOf = function (i3, k3) {
+        var row = i3 * K + k3;
+        if (!rowHas[row]) return null;
+        var list = feats.get(row);
+        if (!list) {
+            list = [];
+            for (var cj = 0; cj < viewFeat.length; cj++) {        // in view order, as when they were pushed per view
+                var vf = viewFeat[cj];
+                for (var r4 = vf.rowAt[row]; r4 >= 0; r4 = vf.nextAt[r4]) list.push({ c: cj, u: vf.U.subarray(r4 * vf.Q, (r4 + 1) * vf.Q) });
+            }
+            feats.set(row, list);
+        }
+        return list;
+    };
+    var scored = contactChangeScores(grid, featOf, o, every, function (i3, k3) { return rowHas[i3 * K + k3] === 1; });
     markContactChanges(scored, o);
     if (fitProgress) await fitProgress(views.length, views.length);
     return scored;
 }
 
 function failure(reason) { return { ok: false, reason: reason, flags: [], changes: [], encounters: [] }; }
+
+/**
+ * The grid as plain data — what `scoreSizeGrid` reads — for `postMessage` to a
+ * worker (structured clone copies it; the InstanceGroups in `grid.G` stay here).
+ * Inverse: `gridFromMessage`.
+ */
+export function sizeGridMessage(grid) {
+    return {
+        T: grid.T, K: grid.K, B: grid.B, X: grid.X, C: grid.C, frames: grid.frames,
+        idents: grid.idents.map(function (id) { return { id: id.id, name: id.name }; }),
+        bones: grid.bones, sep: grid.sep, step: grid.step, hz: grid.hz, tl: grid.tl,
+    };
+}
+
+/** A grid back from `sizeGridMessage`'s data, with `buildGrid`'s two helpers (and no `G`). */
+export function gridFromMessage(m) {
+    var K = m.K, C = m.C, hz = m.hz;
+    return {
+        T: m.T, K: K, B: m.B, X: m.X, C: C, G: null, frames: m.frames, idents: m.idents,
+        bones: m.bones, sep: m.sep, step: m.step, hz: hz, tl: m.tl,
+        secToSamples: function (sec) { return Math.max(1, Math.ceil(sec * hz)); },
+        hasCen: function (i, k) { return isFinite(C[(i * K + k) * 3]); },
+    };
+}
+
+/** The check's options a worker can receive: the numbers, strings and booleans (not `signal`, callbacks). */
+export function sizeScoreOptions(o) {
+    var out = {};
+    Object.keys(o).forEach(function (key) {
+        var v = o[key];
+        if (v === null || typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') out[key] = v;
+    });
+    return out;
+}
 
 /** The result both checks return. */
 function result(grid, scored, o, extra) {
@@ -793,13 +936,20 @@ function result(grid, scored, o, extra) {
  * with the bone lengths of every grid sample (each standardised by its spread
  * over the session) as ONE view.
  *
+ * Two halves: sampling the session (`buildGrid`, which needs its InstanceGroups)
+ * and scoring the grid (`scoreSizeGrid`, plain numbers). `opts.scoreGrid(grid, o)`
+ * (async), when given, scores instead — the app hands the grid to a worker
+ * (pose/size-check-pool.js) so the page is not held for it.
+ *
  * Async so a caller can keep the page painting: `opts.onProgress(done, total)`
- * is awaited before the work and at its end (seconds for a 30-minute, 5-animal
- * recording).
+ * is awaited before the scoring and at its end when it runs here (seconds for a
+ * 30-minute, 5-animal recording).
  *
  * @param {Session} session  needs `instanceGroups` (frame -> groups with
  *        `identityId` + flat `points3d`), `identities`, `skeleton.nodes`.
- * @param {object} opts      see SIZE_CHECK_DEFAULTS; `fps` is required. Plus `onProgress`.
+ * @param {object} opts      see SIZE_CHECK_DEFAULTS; `fps` is required. Plus `onProgress`, `scoreGrid`,
+ *        and `pauseSampling` (async; when given, the session is sampled in slices of
+ *        `samplingSliceMs`, default GRID_SLICE_MS, awaiting it between them — `buildGridAsync`).
  * @returns {Promise<object>} {ok, flags, changes ([]), encounters, identities,
  *   bones, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue} or
  *   {ok: false, reason}. `encounters` = the scored contact episodes: { frame (their
@@ -809,8 +959,24 @@ function result(grid, scored, o, extra) {
  */
 export async function checkSizeSwitches(session, opts) {
     var o = Object.assign({}, SIZE_CHECK_DEFAULTS, opts || {});
-    var grid = buildGrid(session, o, true);
+    var grid = typeof o.pauseSampling === 'function'
+        ? await buildGridAsync(session, o, true, o.pauseSampling, o.samplingSliceMs)
+        : buildGrid(session, o, true);
     if (grid.fail) return failure(grid.fail);
+    if (typeof o.scoreGrid === 'function') return o.scoreGrid(grid, o);
+    return scoreSizeGrid(grid, o);
+}
+
+/**
+ * The size check's second half: standardise every sample's bone lengths, learn
+ * the identity metric and score the contacts — reading only the grid's numbers
+ * and names (never `grid.G`), so it runs the same in a worker on
+ * `gridFromMessage(sizeGridMessage(grid))`.
+ * @param {object} grid  from buildGrid (or gridFromMessage)
+ * @param {object} o     the check's options (SIZE_CHECK_DEFAULTS merged)
+ * @returns {Promise<object>} as checkSizeSwitches
+ */
+export async function scoreSizeGrid(grid, o) {
     var T = grid.T, K = grid.K, B = grid.B, X = grid.X;
     var rows = [], vecs = [], mean = new Float64Array(B), sd = new Float64Array(B);
     for (var row = 0; row < T * K; row++) {

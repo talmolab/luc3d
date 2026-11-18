@@ -1,0 +1,124 @@
+name: Tests
+
+# Runs the three test suites (CLAUDE.md "Tests") on every pull request and on
+# every push to main, so a change that breaks a test is seen before it merges
+# and main never stays red unnoticed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to a pull request cancels its run still in progress.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Every e2e cache (jsdelivr libraries, the image model) lives here.
+  LUC3D_E2E_CACHE: ${{ github.workspace }}/../luc3d-e2e-cache
+  # Run the browser tests in Google Chrome (installed on GitHub's Ubuntu
+  # runners), not Playwright's own Chromium build: on Linux that build's
+  # headless shell died mid-run on export-bycam-store-copy.mjs, and Chrome is
+  # the browser people use. (On a Mac the suite runs in Playwright's Chromium.)
+  LUC3D_E2E_CHANNEL: chrome
+
+jobs:
+  unit:
+    name: Node and browser unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Node tests (tests/test-*.mjs)
+        run: node tests/run-mjs-tests.mjs
+      - name: Install Playwright
+        working-directory: tests/e2e
+        run: npm install --no-audit --no-fund
+      - name: Browser unit tests (tests/*.js via tests/test-runner.html)
+        run: node tests/e2e/run-unit-tests.mjs
+
+  e2e:
+    name: e2e ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Install Playwright
+        working-directory: tests/e2e
+        run: |
+          npm install --no-audit --no-fund
+          echo "PLAYWRIGHT_VERSION=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_ENV"
+          echo "RUNNER_IMAGE=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_ENV"
+      - name: Cache Playwright's browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
+      # The ~90 MB of Ubuntu packages the next step installs (Chromium's fonts and
+      # libraries, ffmpeg's codecs). Ubuntu's mirror sometimes sends them at
+      # ~100 kB/s, which made about 1 job in 15 spend 9-20 minutes here instead
+      # of 20 s; restoring them from the Actions cache takes seconds. A newer
+      # runner image, Playwright or package list (this file) starts from the
+      # last saved packages (restore-keys), so apt only downloads what changed.
+      - name: Cache Ubuntu's packages
+        uses: actions/cache@v6
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ env.RUNNER_IMAGE }}-playwright-${{ env.PLAYWRIGHT_VERSION }}-${{ hashFiles('.github/workflows/tests.yml') }}
+          restore-keys: apt-debs-
+      # Chromium is needed even when the tests run in Chrome: offline-server.mjs
+      # launches Playwright's own. ffmpeg (libx264) builds the test videos of
+      # eight files, which skip without it.
+      # apt uses a cached package whose checksum matches its index and
+      # downloads the rest; autoclean then drops versions the index no longer
+      # has, so the cache keeps only what is current.
+      - name: Install Chromium, its system libraries and ffmpeg
+        working-directory: tests/e2e
+        run: |
+          if compgen -G "$HOME/apt-debs/*.deb" > /dev/null; then
+            sudo cp "$HOME"/apt-debs/*.deb /var/cache/apt/archives/
+          fi
+          npx playwright install --with-deps chromium
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get autoclean
+          rm -rf "$HOME/apt-debs"
+          if compgen -G "/var/cache/apt/archives/*.deb" > /dev/null; then
+            mkdir -p "$HOME/apt-debs"
+            cp /var/cache/apt/archives/*.deb "$HOME/apt-debs/"
+          fi
+          echo "$(ls "$HOME/apt-debs" 2>/dev/null | wc -l) packages ($(du -sh "$HOME/apt-debs" 2>/dev/null | cut -f1)) kept for the cache"
+      # The CDN libraries and the image model, per shard (each shard runs the
+      # same files every time, so each keeps what its files download).
+      - name: Cache CDN and model downloads
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.LUC3D_E2E_CACHE }}
+          key: luc3d-e2e-${{ matrix.shard }}-${{ hashFiles('index.html', 'tests/test-runner.html', 'ui/image-embedder.js', 'offline-deps.json') }}
+      # So offline-server.mjs runs instead of skipping.
+      - name: Install the offline packages
+        run: python3 scripts/offline_deps.py install
+      # Two files at a time on the runner's 4 cores; each failure is rerun
+      # alone (with page tracing) before it counts.
+      - name: e2e tests, shard ${{ matrix.shard }} of 4
+        run: node tests/run-e2e-tests.mjs --shard ${{ matrix.shard }}/4 -j 2 --logs "$RUNNER_TEMP/e2e-logs"
+      - name: Keep the logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-logs-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-logs
+          retention-days: 7

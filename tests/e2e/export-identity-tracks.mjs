@@ -9,13 +9,13 @@
  * from the store once Propagate IDs → Tracks has written the identities to it.
  * The eager and hand-built lazy cases are in tests/test-export-identity-tracks.js.
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const PORT = Number(process.env.PORT || 8197);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const FRAMES = 200;
 const SWAP = 120;
 
@@ -25,9 +25,7 @@ const check = (c, m, extra) => {
     if (!c) fails++;
 };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise((r) => setTimeout(r, 1200));
-const browser = await chromium.launch({ headless: true });
+const browser = await launchBrowser({ headless: true });
 try {
     const page = await browser.newPage();
     page.on('pageerror', (e) => check(false, 'page error', String(e)));

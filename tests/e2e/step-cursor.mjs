@@ -20,15 +20,16 @@
  *  5. Landing on a frame and pausing warms the chunk behind it; holding the left
  *     arrow then finds (nearly) every frame already cached — a background prefetch
  *     keeps a chunk ahead, and the cache evicts the frames FARTHEST from the user,
- *     not the prefetched ones — with the same pixels; a jump cancels a warm-up.
+ *     not the prefetched ones — with the same pixels; a jump cancels a warm-up AND
+ *     stops its decoder (it used to decode the rest of its run alongside the jump).
  *  6. The stream is released after STEP_CURSOR_IDLE_MS idle, by
  *     `releaseStepCursor()`, and by `close()`.
  *
  * Needs ffmpeg (libx264); skipped with a note if absent.
  * Run: node tests/e2e/step-cursor.mjs
  */
-import { chromium } from 'playwright';
-import { spawn, spawnSync } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -36,7 +37,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8277);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -46,17 +48,14 @@ const ff = spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i',
     '-frames:v', '900', '-c:v', 'libx264', '-bf', '0', '-g', '300', '-keyint_min', '300', '-sc_threshold', '0',
     '-pix_fmt', 'yuv420p', vid]);
 if (ff.status !== 0 || !fs.existsSync(vid)) {
-    console.log('  (ffmpeg with libx264 unavailable — skipped)');
+    console.log('SKIP — ffmpeg with libx264 is not installed');
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(0);
 }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage();
     // (close() itself throws a pre-existing TypeError from the <video> load listener — not this test's subject)
     page.on('pageerror', e => { if (!/reading 'error'/.test(String(e))) { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; } });
@@ -65,8 +64,9 @@ try {
     await page.evaluate(() => {
         const inp = document.createElement('input'); inp.type = 'file'; inp.id = '__vid'; document.body.appendChild(inp);
         window.__decoded = 0;
+        window.__decoders = new Set();   // every decoder that decoded anything, with its own count
         const orig = VideoDecoder.prototype.decode;
-        VideoDecoder.prototype.decode = function (c) { window.__decoded++; return orig.call(this, c); };
+        VideoDecoder.prototype.decode = function (c) { window.__decoded++; this.__n = (this.__n || 0) + 1; window.__decoders.add(this); return orig.call(this, c); };
     });
     await page.setInputFiles('#__vid', vid);
     const r = await page.evaluate(async () => {
@@ -134,17 +134,28 @@ try {
         const heldRef = await run(false, heldFrames);
         res.heldIdentical = heldRef.every(x => { const p = heldPx[x.f]; return p && p.length === x.px.length && p.every((v, j) => v === x.px[j]); });
         res.heldCompared = heldFrames.length;
-        // a jump cancels an in-flight warm-up (land on 899: its chunk decodes from keyframe 600)
+        // a jump cancels an in-flight warm-up — and its decoding stops. A long one, started directly
+        // (the chunk behind 899, decoded from keyframe 600: mediabunny yields nothing before the
+        // chunk, so a cancel checked per yielded frame used to let the decoder run the whole way)
         window.LUCID_STEP_CURSOR = undefined;
-        clear(); dec._lastStepFrame = null;
-        await dec.getFrame(899);
-        let job = null; for (let i = 0; i < 100 && !job; i++) { await sleep(10); job = dec._backPrefetch; }
-        res.warmStarted = !!job;
+        clear(); dec._lastStepFrame = 899;
+        const known = new Set(window.__decoders);
+        dec._prefetchBack(899);
+        const job = dec._backPrefetch;
+        // jump as soon as the warm-up's own decoder is under way (this small video decodes its
+        // whole run in a few tens of ms, so a fixed wait can miss it)
+        let warm = null;
+        for (let i = 0; i < 5000 && !warm; i++) { await new Promise(z => setTimeout(z, 0)); warm = [...window.__decoders].find(d => !known.has(d) && d.__n >= 5) || null; }
+        const atJumpN = warm ? warm.__n : 0;
+        res.warmStarted = !!job && !!warm;
+        res.warmAtJump = atJumpN;
         await dec.getFrame(100);                                   // jump away
         const cnt = () => { let c = 0; for (let f = 899 - n; f < 899; f++) if (be.cache.has(f)) c++; return c; };
         const atJump = cnt(); await sleep(400);
         res.cancelled = !!job && job.cancelled === true && dec._backPrefetch !== job;
         res.grewAfterCancel = cnt() - atJump;
+        res.decodedAfterCancel = warm ? warm.__n - atJumpN : -1;
+        res.warmRunLeft = 899 - 600 + 1 - atJumpN;
         be.cacheSize = savedSize;
         // release: idle, explicit, close()
         window.LUCID_STEP_CURSOR = undefined;
@@ -179,6 +190,7 @@ try {
     check(r.cacheAfterHeld <= 30, `the cache stayed within its size (${r.cacheAfterHeld} ≤ 30)`);
     check(r.heldIdentical, `stepped-back frames pixel-identical to the frame-accurate decode (${r.heldCompared} compared, incl. 601 / 599 either side of the keyframe)`);
     check(r.warmStarted && r.cancelled && r.grewAfterCancel <= 1, `a jump cancels the warm-up in flight (cancelled: ${r.cancelled}, ${r.grewAfterCancel} frame(s) cached after)`);
+    check(r.warmStarted && r.warmRunLeft > 100 && r.decodedAfterCancel <= 8, `and its decoder stops: ${r.decodedAfterCancel} packets decoded after the jump (${r.warmAtJump} before it, ${r.warmRunLeft} left in its run)`);
 
     console.log('\n• release');
     check(r.openBeforeIdle && r.closedAfterIdle, 'stream closed after STEP_CURSOR_IDLE_MS idle');

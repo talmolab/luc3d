@@ -43,6 +43,8 @@ const THRESHOLD_DEFAULTS = {
     imageCheckHz: 2,
     imageCheckBackgroundHz: 0.1,
     imageCheckMaxViews: 3,
+    imageCheckGpuTimePct: 100,
+    imageCheckCpuTimePct: 100,
     imageCheckWebNN: 0,
 };
 
@@ -121,6 +123,7 @@ export function setReprojErrorVisible() {}
 export function showReprojectionsOnly() { return false; }
 export const REPROJ_ONLY_NOTE = '';
 export function showPredictedOnly() { return false; }
+export function holdOverlayDraws(fn) { return fn(); }
 export const PREDICTED_ONLY_NOTE = '';
 `;
 

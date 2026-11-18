@@ -417,6 +417,24 @@ const TRACKING_THRESHOLDS = [
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
     },
     {
+        // A whole percentage (1-100). New ids, as each time the scale changed (the unreleased
+        // imageCheckMaxGpu/Cpu were 10-100, then imageCheckGpuTime/CpuCores 0.10-1.00), so a value saved on
+        // an earlier scale is never read on this one — a stored 0.5 would otherwise become 1%.
+        // 100 (uncapped) by default: on real data (M5 MacBook Pro, 2026-10-30) the uncapped check, GPU or CPU,
+        // dropped no frame of a 1080p60 YouTube video playing beside it — see MODULES.md ui/image-embedder.js.
+        id: 'imageCheckGpuTimePct', label: 'Image check: GPU time (%)', default: 100,
+        min: 1, max: 100, step: 1,
+        desc: 'The share of time the image check may use the GPU (or WebNN device); the rest is left for other apps.',
+        tip: 'Fraction of GPU time to run image check, idling the remaining time.',
+    },
+    {
+        // a new id again: the unreleased imageCheckCpuCoresPct capped the thread count, not the time
+        id: 'imageCheckCpuTimePct', label: 'Image check: CPU time (%)', default: 100,
+        min: 1, max: 100, step: 1,
+        desc: 'The share of time each of the image check\'s CPU threads may run; the rest is left for other apps.',
+        tip: 'Fraction of CPU time to run image check, idling the remaining time.',
+    },
+    {
         id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
@@ -440,9 +458,21 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate', 'maxPenalty', 'matchReproj',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews',
+    'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
+
+/**
+ * The Tracking Wizard settings shown in its own "ID Switches" section rather than
+ * under Tracking Thresholds, in this order: the two after-tracking checks, then the
+ * image check's options. They configure the checks run AFTER tracking, not the
+ * tracker's matching.
+ */
+export const ID_SWITCH_SETTING_IDS = [
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz',
+    'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
+];
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.
 function clampThreshold(def, v) {
@@ -463,6 +493,7 @@ export function getTrackingThresholdDefs() {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),
             min: t.min, max: t.max, step: t.step, desc: t.desc, kind: t.kind || 'number',
+            tip: t.tip || '',
         };
     });
 }

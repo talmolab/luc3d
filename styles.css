@@ -63,6 +63,9 @@ input[type="number"]::-webkit-inner-spin-button {
   --warning-color: #f39c12;
   --success-color: #2ecc71;
   --info-panel-width: 300px;
+  --panel-rail-width: 44px;
+  --panel-rail-expanded-width: 132px;
+  --panel-section-header-height: 32px;
   --controls-bar-height: 56px;
   --status-bar-height: 28px;
   --menu-bar-height: 32px;
@@ -597,10 +600,36 @@ body {
   color: var(--text-muted);
   font-size: 13px;
   pointer-events: none;
-  z-index: 1;
+  /* Above dockview's own empty-state layer (`.dv-watermark-container`,
+     z-index 1, later in the DOM), or the demo button below cannot be clicked.
+     The rest of this layer ignores the pointer, so drops still reach the dock. */
+  z-index: 2;
 }
 
 .video-dock-empty.hidden {
+  display: none;
+}
+
+/* The empty dock ignores the pointer; its demo button must not. */
+.dock-demo-btn {
+  pointer-events: auto;
+  margin-top: 16px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dock-demo-btn:hover {
+  background: var(--bg-button-hover);
+  border-color: var(--accent);
+}
+
+.dock-demo-btn[hidden] {
   display: none;
 }
 
@@ -1801,6 +1830,61 @@ button.tri-dropdown-item:disabled {
 .track-setup-options .track-setup-switch-row {
   margin: 0;
   font-size: 12px;
+}
+
+/* The two compute caps share a row, and Try WebNN starts the row under them
+   (each starts a row; the cell beside "Views per animal" stays empty). */
+.track-setup-options .settings-node-weight-row[data-row="imageCheckGpuTimePct"],
+.track-setup-options .settings-node-weight-row[data-row="imageCheckWebNN"] {
+  grid-column-start: 1;
+}
+
+/* A label and its ⓘ, together on the left of the row; the label keeps its full width. */
+.track-setup-option-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.track-setup-option-head .settings-kbd-label {
+  flex: none;
+}
+
+/* An ⓘ outside the plane panel: the same look as .plane-pin-info. */
+.info-tip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.info-tip-btn:hover,
+.info-tip-btn:focus-visible {
+  color: var(--text-primary);
+}
+
+/* Inside a dialog, undo `.multi-frame-modal button` (padding, border, fill). */
+.multi-frame-modal .info-tip-btn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: inherit;
+}
+
+.multi-frame-modal .info-tip-btn:hover,
+.multi-frame-modal .info-tip-btn:focus-visible {
+  filter: none;
+  color: var(--text-primary);
 }
 
 /* Align Views to References modal (#226). The table grows with the camera
@@ -3401,106 +3485,485 @@ button.tri-dropdown-item:disabled {
   outline: 1px solid var(--accent);
 }
 
-/* ---- Panel Tabs ---- */
-/* One horizontal scroller holding EVERY tab, in a fixed order. The JS half
-   (setupPanelTabs) adds trackpad and click-drag scrolling and the two
-   `scroll-*` classes below; see ui/info-panel.js for why this replaced a
-   "More ▾" overflow dropdown. */
-.panel-tabs {
-  display: flex;
-  /* Each tab's offsetParent, so setupPanelTabs can read offsetLeft in the
-     scroller's own coordinate space when it scrolls one into view. */
+/* ---- Panel rail (right edge) ---- */
+/* sleap-app's sidebar rail (ui/panel-rail.js): one icon per info-panel panel
+   on the window's right edge. `.panel-rail` keeps a fixed-width slot in the
+   row; `.panel-rail-inner` is absolute so hovering widens it LEFTWARD over the
+   info panel to show each icon's name without reflowing anything. As in
+   sleap-app, `.expanded` (ui/panel-rail.js) is set on mouse enter and focus
+   entering the rail, and cleared on mouse leave and focus leaving it; the
+   widened rail takes the pointer (each row is its button). */
+.panel-rail {
   position: relative;
-  overflow-x: auto;
-  overflow-y: hidden;
-  /* The bar is the end of the line for a sideways swipe — never hand the
-     overscroll up to the app layout, let alone to the browser's back gesture. */
-  overscroll-behavior-x: contain;
-  /* Let touch pan it natively; setupPanelTabs deliberately skips touch
-     pointers so the gesture is not applied twice. */
-  touch-action: pan-x;
-  /* A surface whose job is to be dragged — the documented exception to the
-     app's "panel text can be selected" rule. Without it a drag smears a
-     selection across the tab names. */
+  width: var(--panel-rail-width);
+  flex: 0 0 var(--panel-rail-width);
+  /* A click surface, like the toolbar — the documented exception to the
+     app's "panel text can be selected" rule. */
   user-select: none;
   -webkit-user-select: none;
-  /* No scrollbar: the strip is ~31px tall and a horizontal bar under it would
-     sit on the active tab's 2px underline. The edge fades below say there is
-     more instead. */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  border-bottom: 1px solid var(--border-color);
+}
+
+.panel-rail-inner {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: var(--panel-rail-width);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg-secondary);
+  border-left: 1px solid var(--border-color);
+  transition: width var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.panel-rail.expanded .panel-rail-inner {
+  width: var(--panel-rail-expanded-width);
+  box-shadow: -8px 0 20px rgba(0, 0, 0, 0.45);
+}
+
+/* Icon first, name to its right, as in sleap-app: the rail widens leftward,
+   so the icons slide left with its edge. */
+.panel-rail-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 100%;
+  height: var(--panel-rail-width);
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.panel-rail-collapse {
+  height: 36px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.panel-rail-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.panel-rail-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.panel-rail-btn.active,
+.panel-rail-btn.active:hover:not(:disabled) {
+  color: var(--accent);
+  background: rgba(102, 126, 234, 0.08);
+}
+
+/* Active bar on the panel-facing edge, as in sleap-app. */
+.panel-rail-btn.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.panel-rail-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.panel-rail-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--panel-rail-width);
   flex-shrink: 0;
 }
 
-.panel-tabs::-webkit-scrollbar {
-  height: 0;
-  width: 0;
+.panel-rail-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
-/* Fade whichever edge has tabs behind it. A mask is painted in the element's
-   own box rather than with its scrolled content, so this stays pinned to the
-   edges while the tabs move underneath — and it costs no extra element, which
-   a gradient overlay inside a scroller would (it would scroll away). */
-.panel-tabs.scroll-left {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px);
-  mask-image: linear-gradient(to right, transparent 0, #000 18px);
+.panel-rail-collapse .panel-rail-icon svg {
+  width: 16px;
+  height: 16px;
 }
 
-.panel-tabs.scroll-right {
-  -webkit-mask-image: linear-gradient(to left, transparent 0, #000 18px);
-  mask-image: linear-gradient(to left, transparent 0, #000 18px);
+.panel-rail-label {
+  flex: 1;
+  min-width: 0;
+  padding-right: 12px;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
 }
 
-.panel-tabs.scroll-left.scroll-right {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
-  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+.panel-rail.expanded .panel-rail-label {
+  opacity: 1;
 }
 
-.panel-tabs.dragging {
-  cursor: grabbing;
-}
-
-.panel-tab {
-  /* Size to the tab's full name — never squished or truncated. The ones that
-     don't fit are reached by scrolling the bar. */
+/* ---- Panel sections (sleap-app's accordion stack, ui/panel-rail.js) ----
+   Each open panel is a section: a header (chevron + name folds the body, ✕
+   closes the panel) above the panel's own content. Sections take their
+   natural height; `.info-panel` is the ONE scroller (no inner overflow), and
+   each header sticks to its top while its section is in view. */
+.panel-section {
+  display: none;
   flex: 0 0 auto;
-  padding: 8px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.panel-section.open {
+  display: block;
+}
+
+.panel-section-header {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  height: var(--panel-section-header-height);
+  padding: 0 6px 0 4px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  /* Click surface (the fold / close buttons). */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.panel-section-toggle {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
   cursor: pointer;
-  transition: color var(--transition-fast), border-color var(--transition-fast);
+  text-align: left;
+}
+
+.panel-section-toggle:hover {
+  color: var(--text-primary);
+}
+
+.panel-section-chevron {
+  display: flex;
+  width: 16px;
+  justify-content: center;
+}
+
+.panel-section-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.panel-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.panel-tabs.dragging .panel-tab {
-  cursor: grabbing;
+.panel-section-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
 }
 
-.panel-tab:hover {
-  color: var(--text-secondary);
+.panel-section-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
 }
 
-.panel-tab.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+.panel-section-close svg {
+  width: 14px;
+  height: 14px;
 }
 
+.panel-section-toggle:focus-visible,
+.panel-section-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* A section's body: shown only while the section is open and unfolded. */
 .panel-tab-content {
   display: none;
-  flex: 1;
-  overflow-y: auto;
 }
 
 .panel-tab-content.active {
   display: block;
+}
+
+/* Rows that stick inside the info panel stick BELOW the section header. */
+.panel-section .data-table thead th,
+.panel-section .id-switch-toolbar {
+  top: var(--panel-section-header-height);
+}
+
+/* ---- Memory panel (ui/memory-panel.js) ---- */
+/* Its rows are .session-info-row (display: flex), which would beat [hidden]. */
+#tabMemory [hidden] {
+  display: none;
+}
+
+.memory-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The plot's window (ui/memory-panel.js setWindow): a small segmented switch at the heading's right. */
+.memory-windows {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.memory-window-btn {
+  padding: 1px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.memory-window-btn + .memory-window-btn {
+  border-left: 1px solid var(--border-color);
+}
+
+.memory-window-btn:hover {
+  color: var(--text-primary);
+}
+
+.memory-window-btn[aria-pressed="true"] {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.memory-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.memory-now {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-now-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.memory-plot {
+  display: block;
+  width: 100%;
+  height: 90px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: visible;
+}
+
+/* The plot and the runs' names along its top (ui/memory-panel.js renderRuns). */
+.memory-plot-wrap {
+  position: relative;
+}
+
+.memory-plot-run {
+  fill: var(--text-muted);
+  fill-opacity: 0.16;
+}
+
+.memory-plot-run-alt {
+  fill-opacity: 0.28;
+}
+
+.memory-run-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.memory-run-label {
+  position: absolute;
+  top: 2px;
+  box-sizing: border-box;
+  padding: 0 3px;
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--text-secondary);
+  /* Readable where the line runs under it. */
+  text-shadow: 0 0 2px var(--bg-tertiary), 0 0 2px var(--bg-tertiary), 0 0 3px var(--bg-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+}
+
+/* Under the pointer (ui/memory-panel.js renderHover). */
+.memory-plot-hover {
+  stroke: var(--text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.memory-plot-hover-dot {
+  fill: var(--accent-color);
+  stroke: var(--bg-tertiary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.memory-readout-hover .memory-now {
+  color: var(--accent-color);
+}
+
+.memory-plot-base {
+  stroke: var(--border-light);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-limit {
+  stroke: var(--error-color);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-used,
+.memory-plot-ua {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.memory-plot-used {
+  stroke: var(--accent);
+}
+
+.memory-plot-ua {
+  stroke: var(--warning-color);
+}
+
+.memory-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.memory-key {
+  display: inline-block;
+  width: 12px;
+  height: 0;
+  border-top: 2px solid var(--accent);
+}
+
+.memory-key-limit,
+.memory-key-ua {
+  margin-left: 8px;
+}
+
+.memory-key-limit {
+  border-top: 1px dashed var(--error-color);
+}
+
+.memory-legend-ua {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-key-ua {
+  border-top-color: var(--warning-color);
+}
+
+.memory-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 4px 0 2px;
+}
+
+.memory-copy-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.memory-copy-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.memory-note {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warning-color);
+}
+
+.memory-note code {
+  white-space: nowrap;
+  font-size: 10px;
 }
 
 /* ---- Data Tables ---- */
@@ -4424,7 +4887,8 @@ kbd {
 @media (max-width: 900px) {
   .info-panel-wrapper {
     position: absolute;
-    right: 0;
+    /* Beside the panel rail, which stays on the window edge. */
+    right: var(--panel-rail-width);
     top: 0;
     bottom: calc(var(--controls-bar-height) + var(--status-bar-height));
     z-index: 50;
@@ -6222,7 +6686,7 @@ kbd {
    Defining Plane Mode (View ▸ Define Planes)
 
    A MODE, not a modal: the banner sits under the toolbar for as long as the
-   mode is active, and the info panel swaps its tab bar for the Define Plane
+   mode is active, and the info panel swaps its panes for the Define Plane
    panel. Both are driven by ui/plane-definition.js.
    -------------------------------------------------------------------------- */
 
@@ -6284,8 +6748,8 @@ kbd {
 
 /* --- Define Plane info panel --------------------------------------------- */
 
-/* Mirrors .panel-tab-content's box so swapping the tabs for this panel does
-   not change the info panel's scroll behaviour. */
+/* Swapped in for the panel-section stack (setPanelPlaneMode); the info panel
+   stays its one scroller. */
 /* THE PANEL'S WIDTH BELONGS TO THE TABLES. The info panel is a fixed 300px and
    the Nodes table now has to show three coordinates, so every nested box that
    used to take a bite out of the width gives it back: the panel's own padding,
@@ -7238,7 +7702,10 @@ kbd {
    the hover, fire `mouseout` on the icon and flicker itself away. */
 .info-tip {
   position: fixed;
-  z-index: 10000;
+  /* Above every layer, modal overlays included (20000, 30000): an ⓘ inside a
+     dialog would otherwise show its tip BEHIND the dialog. Safe because it takes
+     no pointer events and lives only as long as the hover. */
+  z-index: 30001;
   max-width: 260px;
   padding: 6px 9px;
   border: 1px solid var(--border-light);

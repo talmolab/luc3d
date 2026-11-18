@@ -31,11 +31,13 @@
 import { noteProgress } from './progress-delta.js';
 import { state, getActiveSession } from './app-state.js';
 import { setSeekbarSwitchMarkers } from './seekbar-markers.js';
+import { showPanelTab } from './panel-rail.js';
 import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
          inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js';
 import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js';
@@ -298,13 +300,19 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
-    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
-    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    // The overlay's plain form (spinner + message), not a counter: the check (~0.5 s on an 8-camera,
+    // 108,000-frame project) has no progress worth counting — the counter used to print "0/1 frames (0%)",
+    // frozen until the overlay closed.
     showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, { fps: rate.fps });
+        // Sampling the session runs here (it reads the InstanceGroups), in slices of ~25 ms with the
+        // page painting between them (`pauseSampling`); the scoring goes to a worker
+        // (pose/size-check-pool.js). Without one it scores here, and `onProgress` lets the page paint
+        // between the two halves.
+        var paint = function () { return yieldToPaint(); };
+        return await checkSizeSwitches(session, { fps: rate.fps, scoreGrid: scoreSizeGridOffThread,
+            pauseSampling: paint, onProgress: paint });
     } finally { hideLoading(); }
 }
 
@@ -326,6 +334,8 @@ async function runImage(session, rate, inject) {
     try {
         embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); }, imageModel: pkg,
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
+            maxGpuPct: getTrackingThreshold('imageCheckGpuTimePct'),
+            maxCpuPct: getTrackingThreshold('imageCheckCpuTimePct'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
         // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs
@@ -528,12 +538,10 @@ function syncMarkers(session) {
     setSeekbarSwitchMarkers(all, state.totalFrames);
 }
 
-/** Show the right panel (if hidden) on the ID Switches tab. */
+/** Open + expand the ID Switches section, showing the right panel if hidden. */
 export function openIdSwitchPanel() {
-    var wrap = document.getElementById('infoPanelWrapper');
-    if (wrap && wrap.classList.contains('collapsed')) { var t = document.getElementById('infoPanelToggleBtn'); if (t) t.click(); }
-    var tab = document.querySelector('.panel-tab[data-tab="tabIdSwitches"]');
-    if (tab) tab.click();
+    // Never a rail click: clicking the already-expanded panel would FOLD it.
+    showPanelTab('tabIdSwitches');
 }
 
 /** Forget a session's results (a new tracking pass relabels everything) and clear its markers. */
