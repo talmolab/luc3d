@@ -600,10 +600,36 @@ body {
   color: var(--text-muted);
   font-size: 13px;
   pointer-events: none;
-  z-index: 1;
+  /* Above dockview's own empty-state layer (`.dv-watermark-container`,
+     z-index 1, later in the DOM), or the demo button below cannot be clicked.
+     The rest of this layer ignores the pointer, so drops still reach the dock. */
+  z-index: 2;
 }
 
 .video-dock-empty.hidden {
+  display: none;
+}
+
+/* The empty dock ignores the pointer; its demo button must not. */
+.dock-demo-btn {
+  pointer-events: auto;
+  margin-top: 16px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dock-demo-btn:hover {
+  background: var(--bg-button-hover);
+  border-color: var(--accent);
+}
+
+.dock-demo-btn[hidden] {
   display: none;
 }
 

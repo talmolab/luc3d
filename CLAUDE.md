@@ -50,6 +50,7 @@ Rules:
 - Node-only `.mjs` outside `lib/` is never rewritten (`is_rewritable`, shared by bundle and server) — `tests/test-stamp-version.mjs` holds CDN URLs as fixtures.
 - `MP4BOX_CDN` (unpkg mp4box@0.5.4) in `lib/sleap-io/chunk-X76PRJK6.js` is intentionally unmapped: unreachable because `index.html`'s mp4box `<script>` always sets `globalThis.MP4Box` first. If that tag is ever removed, the unpkg fallback goes live.
 - **The image ID-switch check is the one feature that does not work offline**: `TRANSFORMERS_URL` (`ui/image-embedder.js`) is `unmapped` because the model weights come from huggingface.co too. Offline it reports `MODEL_OFFLINE_REASON` and retries without reload via `importTransformers`. Test: `tests/e2e/image-check-offline.mjs`.
+- **File ▸ Open Demo** (`loading/demo-project.js`; also the empty dock's button and `?demo`) downloads 24 MB from the `demo/` folder of HF dataset `talmolab/slap-2m` at the commit `DEMO_REVISION`, and loads it as a session folder. Offline it fails with a status. Keep the clip OFF the repo (every deploy copies the repo into each channel). Moving the pin means updating `DEMO_FILES`' sizes. Test: `tests/e2e/demo-project.mjs`.
 - Test: `tests/e2e/offline-server.mjs` (all off-origin requests aborted). Licenses in `lib/LICENSES.txt`.
 
 ## Dependencies
