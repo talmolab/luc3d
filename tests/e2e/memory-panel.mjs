@@ -6,7 +6,9 @@
  *   §1  The heap is read once a second from app start, but nothing is drawn
  *       until the panel is on screen. Opened from the rail it draws the
  *       readings it already has at once: the plot gets a line, the reading is
- *       a `[\d,]+ MB` number, the heap limit is a reference line, and with
+ *       a `[\d,]+ MB` number, the JS object limit is a reference line, named
+ *       so in the legend and the row (never "heap limit": typed arrays sit
+ *       outside it, and a big project reads well above it), and with
  *       `--enable-precise-memory-info` the reading follows allocations. The ⓘ
  *       says what the number leaves out (workers, GPU process).
  *   §2  Folded, with the info panel hidden (`I`), or closed (✕), the panel
@@ -108,11 +110,17 @@ try {
         check(s.drawing && s.plot && MB_RE.test(s.now) && /^M[\d.]+ [\d.]+(L[\d.]+ [\d.]+){2,}$/.test(s.path),
             `opened from the rail it draws the readings it already has at once (${s.now})`, s);
         await waitTaken(page, s.taken + 1);
-        check(s.limitShown && MB_RE.test(s.limit), `the heap limit is a reference line (${s.limit})`);
+        check(s.limitShown && MB_RE.test(s.limit), `the JS object limit is a reference line (${s.limit})`);
+        const names = await page.evaluate(() => ({
+            legend: document.querySelector('#tabMemory .memory-legend').textContent,
+            row: document.getElementById('memoryLimit').previousElementSibling.textContent,
+        }));
+        check(/JS object limit/.test(names.legend) && names.row === 'JS object limit' && !/heap limit/i.test(names.legend + names.row),
+            'it is named "JS object limit" in the legend and the row, never "heap limit"', names);
         check(!s.coarse && !s.unavailable && s.ua === null && !s.uaLegend,
             'a live reading: no rounding note, no "not available", no whole-page rows on a non-isolated page');
-        check(/workers/.test(s.tip) && /GPU/.test(s.tip) && /typed arrays/.test(s.tip),
-            'the ⓘ says what the number leaves out (workers, GPU) and that typed arrays count');
+        check(/workers/.test(s.tip) && /GPU/.test(s.tip) && /typed arrays/.test(s.tip) && /objects only/.test(s.tip),
+            'the ⓘ says what the number leaves out (workers, GPU), that typed arrays count, and that the limit caps objects only');
 
         // The reading follows allocations.
         const before = (await panelState(page)).taken;

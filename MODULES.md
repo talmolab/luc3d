@@ -13046,8 +13046,11 @@ throws on an unknown name).
 
 **Purpose.** The Memory panel (`#tabMemory`, last on the right-edge rail): the
 page's JavaScript heap (`performance.memory.usedJSHeapSize`) over the last
-five minutes as an inline-SVG line, the heap limit (`jsHeapSizeLimit`) as a
-dashed reference line, the current reading as a `toLocaleString('en-US')` MB
+five minutes as an inline-SVG line, V8's limit (`jsHeapSizeLimit`) as a
+dashed reference line named **"JS object limit"** (never "heap limit": it caps
+JavaScript objects only, and `usedJSHeapSize` also counts typed arrays outside
+it, so a big project reads well above it and is fine: 05mice after Track All
+5.6 GB used, objects under 1.9 GB), the current reading as a `toLocaleString('en-US')` MB
 number, peak / allocated / limit rows, and what the project holds (frames in
 memory of the project's frames, `(lazy)` when lazy; frames with instance
 groups, the size of the frame-keyed `instanceGroups`; sessions). An ⓘ says what the number leaves out (workers, video decoding,
