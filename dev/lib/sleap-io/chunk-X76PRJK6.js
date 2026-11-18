@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=393cc3a7cd62";
+} from "./chunk-H7G4PJNA.js?v=b1447aff2467";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=393cc3a7cd62";
+} from "./chunk-YS7Q6CO6.js?v=b1447aff2467";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -10948,11 +10948,24 @@ function getDatasetMeta(path) {
   };
 }
 
+// LUCID local patch (narrow columns): the worker's copy of the main thread's
+// LUCID_NARROW_COLUMNS (keep the two lists the same). 1 = Uint8Array,
+// 2 = Float32Array, 3 = Uint32Array, 0 = Float64Array. Only columns LUCID
+// never writes into a loaded store, and only when every value fits exactly.
+function lucidNarrowKindW(name) {
+  switch (name) {
+    case 'x': case 'y': case 'score': case 'tracking_score': return 2;
+    case 'visible': case 'complete': case 'instance_type': case 'skeleton': return 1;
+    case 'point_id_start': case 'point_id_end': return 3;
+    default: return 0;
+  }
+}
+
 // Read a fixed-size 1-D compound dataset column-wise straight from the record
 // blob, skipping h5wasm's Dataset.value (which allocates ~8 Uint8Array.slice per
 // record \u2014 the dominant cost of opening a large project). Mirrors
 // readCompoundColumnsManual in ./h5-compound.ts (keep them in lockstep). Returns
-// { columns: { memberName: Float64Array }, buffers: ArrayBuffer[] } \u2014 the buffers
+// { columns: { memberName: TypedArray }, buffers: ArrayBuffer[] } \u2014 the buffers
 // are the postMessage transfer list so the columns move to the main thread
 // instead of being structured-cloned. Returns null (caller falls back to .value)
 // for anything not a plain-numeric compound. Values match .value except int64
@@ -10973,9 +10986,9 @@ function readCompoundColumnsWorker(dataset, M) {
   }
   if (!(M && M._malloc && M.get_dataset_data && M.HEAPU8 && M._free)) return null;
   const n = shape[0];
-  // Columns are Float64Array (every SLEAP field \u2014 coords, scores, and integer
-  // id/index columns up to 2^53 \u2014 is exact in f64) so their backing buffers can
-  // be TRANSFERRED to the main thread instead of structured-cloned. \`buffers\`
+  // Columns are typed arrays (Float64Array, or a narrower type that holds every
+  // value exactly: lucidNarrowKindW) so their backing buffers can be
+  // TRANSFERRED to the main thread instead of structured-cloned. \`buffers\`
   // is the postMessage transfer list.
   const columns = {};
   const buffers = [];
@@ -11000,9 +11013,17 @@ function readCompoundColumnsWorker(dataset, M) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   for (let j = 0; j < members.length; j++) {
     const m = members[j];
-    const col = new Float64Array(n);
     const off = m.offset, sz = m.size, isFloat = (m.type === 1);
     const signed = (m.signed !== false), le = (m.littleEndian !== false);
+    // LUCID local patch (narrow columns): the narrowest typed array that holds
+    // every value of this column exactly, else Float64Array (see
+    // lucidNarrowKindW). A value that does not fit switches the column to
+    // Float64Array, keeping the values read so far (they all fit exactly).
+    const kind = lucidNarrowKindW(m.name);
+    const narrowFloat = (kind === 2);
+    let col = kind === 1 ? new Uint8Array(n) : kind === 2 ? new Float32Array(n) :
+      kind === 3 ? new Uint32Array(n) : new Float64Array(n);
+    let narrow = (kind !== 0);
     for (let i = 0; i < n; i++) {
       const p = i * recSize + off;
       let v;
@@ -11012,6 +11033,17 @@ function readCompoundColumnsWorker(dataset, M) {
       else if (sz === 4) v = signed ? dv.getInt32(p, le) : dv.getUint32(p, le);
       else v = Number(signed ? dv.getBigInt64(p, le) : dv.getBigUint64(p, le));
       col[i] = v;
+      if (narrow) {
+        const w = col[i];
+        const fits = (w === v) ? !(v === 0 && !narrowFloat && 1 / v < 0) : (narrowFloat && v !== v);
+        if (!fits) {
+          const wide = new Float64Array(n);
+          wide.set(col.subarray(0, i));
+          wide[i] = v;
+          col = wide;
+          narrow = false;
+        }
+      }
     }
     columns[m.name] = col;
     buffers.push(col.buffer);
@@ -13004,6 +13036,66 @@ function getFieldNamesFromMeta(meta) {
   }
   return [];
 }
+// LUCID local patch (narrow columns): the lazy store's columns in the narrowest
+// typed array that holds EVERY value exactly, instead of Float64Array for all.
+// On the 8-camera 05mice project the stores were 2,770 MB of Float64Array, 87%
+// of it `pred_points` (63.3M points x 5 columns), whose file holds x/y/score as
+// f32 and visible/complete as 0/1.
+//
+// Only the columns named here narrow, and only when every value survives the
+// trip (checked value by value; the first one that does not makes that column
+// Float64Array, as before). So every read returns the same number as before;
+// only the element type changes. Everything else stays Float64Array, above all
+// the columns LUCID WRITES INTO a loaded store: `track` (remapTracksFromIdentity,
+// -1/NaN for trackless), `from_predicted` (deleteInstanceRows, -1), and every
+// `frames` column (re-ranged on delete). `instance_id`/`frame_id` stay f64 too.
+// Never add a column the app writes: an integer array turns NaN into 0 and -1
+// into 255 without a word.
+//   1 = Uint8Array (0..255 integers), 2 = Float32Array, 3 = Uint32Array.
+// -0 counts as not fitting an integer type (it would come back +0 and a re-save
+// would change the file's bytes); a Float32Array keeps -0 and NaN.
+// Mirrored in H5_WORKER_CODE's `lucidNarrowKindW` (Python-written compound
+// tables): keep the two lists the same.
+var LUCID_NARROW_COLUMNS = {
+  x: 2, y: 2, score: 2, tracking_score: 2,
+  visible: 1, complete: 1, instance_type: 1, skeleton: 1,
+  point_id_start: 3, point_id_end: 3
+};
+function lucidNarrowKind(name) {
+  return Object.prototype.hasOwnProperty.call(LUCID_NARROW_COLUMNS, name) ? LUCID_NARROW_COLUMNS[name] : 0;
+}
+// Column `col` of the row-major `src` (`stride` values per row), narrowed when
+// its name allows and every value fits. `isBig`: `src` is a BigInt64/BigUint64
+// view, converted with Number() (exact for every id/index column).
+function lucidNarrowColumn(src, rowCount, stride, col, name, isBig) {
+  const kind = lucidNarrowKind(name);
+  if (kind === 2 && src instanceof Float32Array) {
+    const f32 = new Float32Array(rowCount);
+    for (let r2 = 0, p = col; r2 < rowCount; r2++, p += stride) f32[r2] = src[p];
+    return f32;
+  }
+  let out = null;
+  let r = 0;
+  if (kind !== 0) {
+    const isFloat = kind === 2;
+    out = kind === 1 ? new Uint8Array(rowCount) : isFloat ? new Float32Array(rowCount) : new Uint32Array(rowCount);
+    for (let p = col; r < rowCount; r++, p += stride) {
+      const v = isBig ? Number(src[p]) : src[p];
+      out[r] = v;
+      const w = out[r];
+      if (w === v) {
+        if (v === 0 && !isFloat && 1 / v < 0) break;
+      } else if (!(isFloat && v !== v)) {
+        break;
+      }
+    }
+    if (r === rowCount) return out;
+  }
+  const f64 = new Float64Array(rowCount);
+  if (r > 0) f64.set(out.subarray(0, r));
+  for (let p = col + r * stride; r < rowCount; r++, p += stride) f64[r] = isBig ? Number(src[p]) : src[p];
+  return f64;
+}
 function normalizeStructData(value, shape, fieldNames) {
   if (!value) return {};
   if (value && typeof value === "object" && !Array.isArray(value) && !ArrayBuffer.isView(value)) {
@@ -13052,25 +13144,22 @@ function normalizeStructData(value, shape, fieldNames) {
         //
         // f64 deliberately, not f32: `point_id_start/end` reach 21.7M on this
         // project and f32 is only exact to 2^24 = 16.7M — the same silent
-        // quantization as sleap-io.js#231.
-        const colData = new Float64Array(rowCount);
-        if (isBig) {
-          // A BigInt cannot be assigned into a Float64Array — it throws
-          // TypeError, and this whole function sits inside
-          // `readStructDatasetStreaming`'s catch-all, which would SWALLOW that
-          // and hand back `{}`: a silently EMPTY store rather than a visible
-          // failure. LUCID writes `frames` with dtype "<i8", so whether this
-          // branch is live depends purely on how h5wasm chooses to surface
-          // 64-bit ints. Convert explicitly instead of depending on that.
-          // Exact for every id/index column (well under 2^53).
-          for (let row = 0; row < rowCount; row++) {
-            colData[row] = Number(arr[row * colCount + col]);
-          }
-        } else {
-          for (let row = 0; row < rowCount; row++) {
-            colData[row] = arr[row * colCount + col];
-          }
-        }
+        // quantization as sleap-io.js#231. (The narrow-columns patch below
+        // stores them as Uint32Array, which is exact; never as f32.)
+        //
+        // A BigInt cannot be assigned into a typed number array — it throws
+        // TypeError, and this whole function sits inside
+        // `readStructDatasetStreaming`'s catch-all, which would SWALLOW that
+        // and hand back `{}`: a silently EMPTY store rather than a visible
+        // failure. LUCID writes `frames` with dtype "<i8", so whether this
+        // is live depends purely on how h5wasm chooses to surface 64-bit
+        // ints. `lucidNarrowColumn` converts explicitly (`isBig`). Exact for
+        // every id/index column (well under 2^53).
+        //
+        // LUCID local patch (narrow columns): the column is the narrowest
+        // typed array that holds every value exactly (`lucidNarrowColumn`),
+        // Float64Array otherwise; see LUCID_NARROW_COLUMNS.
+        const colData = lucidNarrowColumn(arr, rowCount, colCount, col, fieldNames[col], isBig);
         result[fieldNames[col]] = colData;
       }
       return result;
@@ -19654,22 +19743,19 @@ function normalizeStructDataset(dataset, module) {
       // `undefined` and are now zero-filled. Every consumer reads them as
       // `Number(col?.[i] ?? 0)`, which already mapped `undefined` to 0, so the
       // observable value is unchanged.
-      const cols = fieldNames.map(() => new Float64Array(rowCount));
       const fillCols = Math.min(fieldNames.length, colCount);
       // See the BigInt note in `normalizeStructData`: assigning a BigInt into a
-      // Float64Array throws, so convert explicitly when the source is a 64-bit
-      // int view. Hoisted out of the loops.
+      // typed number array throws, so convert explicitly when the source is a
+      // 64-bit int view. Hoisted out of the loops.
       const isBig = (typeof BigInt64Array !== 'undefined' && flat instanceof BigInt64Array) ||
         (typeof BigUint64Array !== 'undefined' && flat instanceof BigUint64Array);
-      for (let i = 0; i < rowCount; i += 1) {
-        const base = i * colCount;
-        for (let j = 0; j < fillCols; j += 1) {
-          cols[j][i] = isBig ? Number(flat[base + j]) : flat[base + j];
-        }
-      }
+      // LUCID local patch (narrow columns): same column types as
+      // `normalizeStructData` (`lucidNarrowColumn`).
       const data = {};
       for (let j = 0; j < fieldNames.length; j += 1) {
-        data[fieldNames[j]] = cols[j];
+        data[fieldNames[j]] = j < fillCols ?
+          lucidNarrowColumn(flat, rowCount, colCount, j, fieldNames[j], isBig) :
+          new Float64Array(rowCount);
       }
       return data;
     }
