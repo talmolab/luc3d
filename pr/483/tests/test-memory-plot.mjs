@@ -7,7 +7,8 @@
  */
 import {
     MemoryRing, isBucketizedHeap, readHeap, summarizeUaMemory, projectCounts, formatMB, plotGeometry,
-    MEMORY_GAP_MS, MEMORY_WINDOW_MS,
+    runName, formatDuration, runSpans, placeRunLabels,
+    MEMORY_GAP_MS, MEMORY_WINDOW_MS, MEMORY_SAMPLE_MS,
 } from '../ui/memory-plot.js';
 
 let passed = 0, failed = 0;
@@ -125,6 +126,84 @@ const J = JSON.stringify;
     check(!/NaN/.test(nanUsed.usedPath), 'unknown samples are skipped, never drawn as NaN');
     const empty = plotGeometry([], { width: 100, height: 100, now, limit: NaN });
     check(empty.usedPath === '' && empty.yMax === 1 && empty.peak === 0, 'no samples: empty paths, a usable scale');
+}
+
+// ---- §8 naming a run from the progress card ----
+{
+    check(runName(null) === null, 'no card → no run');
+    check(runName({ title: 'Track All', message: 'Assigning identities: 5/10 frames…' }) === 'Track All', 'the title names it');
+    check(runName({ title: '', message: 'Loading SLP files (3/8)...' }) === 'Loading SLP files', 'untitled: the message up to its count');
+    check(runName({ title: '', message: 'Assigning identities: 5/10 frames…' }) === 'Assigning identities', 'untitled: the message up to its colon');
+    check(runName({ title: '  ', message: '…' }) === 'Working', 'nothing to go by → "Working"');
+    check(runName({ title: 'x'.repeat(60), message: '' }).length === 40, 'a long name is cut to 40 characters');
+}
+
+// ---- §9 formatDuration ----
+{
+    check(formatDuration(45400) === '45 s' && formatDuration(125000) === '2 min 5 s' && formatDuration(120000) === '2 min',
+        'seconds, minutes and seconds');
+    check(formatDuration(3780000) === '1 h 3 min' && formatDuration(0) === '0 s', 'hours, and zero');
+}
+
+// ---- §10 runs as spans ----
+{
+    const MB = 1048576;
+    const now = 1000000;
+    const s = (dt, used, run) => ({ t: now - dt, used, ua: NaN, run: run || null });
+    const samples = [
+        s(MEMORY_WINDOW_MS + 2000, 1 * MB, 'Old'),       // before the window: left out
+        s(30000, 10 * MB), s(29000, 20 * MB, 'Load'), s(28000, 50 * MB, 'Load'), s(27000, 30 * MB, 'Load'),
+        s(26000, 40 * MB, 'Track All'), s(25000, 90 * MB, 'Track All'),
+        // a gap longer than MEMORY_GAP_MS inside one name: two spans
+        s(18000, 60 * MB, 'Track All'), s(17000, 70 * MB, 'Track All'),
+        s(16000, 5 * MB), s(0, 5 * MB, 'Save'),
+    ];
+    const sp = runSpans(samples, { width: 300, now, windowMs: MEMORY_WINDOW_MS });
+    const J2 = x => JSON.stringify(x);
+    check(J2(sp.map(r => r.name)) === J2(['Load', 'Track All', 'Track All', 'Save']),
+        `one span per stretch of a name, split by another name, none, or a gap (${J2(sp.map(r => r.name))})`);
+    check(sp[0].peak === 50 * MB && sp[1].peak === 90 * MB && sp[2].peak === 70 * MB, 'each span keeps its own peak');
+    check(sp[0].ms === 3 * MEMORY_SAMPLE_MS && sp[0].x1 > sp[0].x0, 'a span covers its samples plus one period');
+    const last = sp[3];
+    check(last.x1 <= 300 && last.x1 - last.x0 >= 1 && last.ms === 0, 'a run on the newest sample is a 1-unit band at the right edge, never past it');
+    check(sp.every((r, i) => i === 0 || r.x0 >= sp[i - 1].x1 - 1e-9), 'spans never overlap');
+    check(runSpans([], { width: 300, now }).length === 0, 'no samples → no spans');
+}
+
+// ---- §11 run names never overlap ----
+{
+    const span = (name, x0, x1, ms) => ({ name, x0, x1, ms: ms == null ? (x1 - x0) * 1000 : ms });
+    const W = 260, cw = 6;
+    const ends = (p) => p.align === 'left' ? [p.x, p.x + p.max] : [p.x - p.max, p.x];
+    const [a] = placeRunLabels([span('Track All', 20, 40)], W, cw);
+    check(a.align === 'left' && a.x === 20 && !a.hidden, 'room to the right: starts at its band');
+    const [b] = placeRunLabels([span('Track All', 240, 255)], W, cw);
+    check(b.align === 'right' && b.x === 255 && !b.hidden, 'at the right edge: ends at its band instead');
+    const two = placeRunLabels([span('Load', 100, 140), span('Track All', 142, 200)], W, cw);
+    check(two[0].align === 'left' && two[0].max <= 42 && two[1].align === 'left', 'two neighbours each fit');
+    const tight = placeRunLabels([span('Triangulate All', 100, 104), span('Save', 106, 110), span('Track All', 112, 116)], W, cw);
+    check(!tight[2].hidden && tight.filter(p => p.hidden).length >= 1,
+        'crowded: the newest name always shows, one with no room left is hidden (its band\'s tooltip still names it)');
+    const edge = placeRunLabels([span('Loading SLP files', 240, 243), span('Track All', 250, 253)], W, cw);
+    check(!edge[1].hidden && edge[1].align === 'right' && edge[1].x === 253 && edge[0].hidden,
+        'the run that just ended, at the right edge, keeps its name, ending at its band');
+    // Track All then Triangulate All, back to back at the right edge (05mice): one row holds one name, two rows both.
+    const seq = [span('Track All', 200, 222), span('Checking ID switches', 222, 223), span('Triangulate All', 228, 252)];
+    const one = placeRunLabels(seq, W, cw, 1), lanes2 = placeRunLabels(seq, W, cw, 2);
+    check(one[0].hidden && !one[2].hidden, 'in one row only the newest of three close runs is named');
+    check(!lanes2[2].hidden && lanes2[2].lane === 0 && !lanes2[0].hidden && lanes2[0].lane === 1 && lanes2[0].max >= 'Track All'.length * cw,
+        'two rows: the newest takes the first, the next one whole in the second');
+    const rows = [0, 1].map(k => lanes2.map((p, i) => (!p.hidden && p.lane === k) ? ends(p, seq[i]) : null).filter(Boolean));
+    check(rows.every(r => r.every((e, i) => i === 0 || e[0] >= r[i - 1][1] - 1e-9)), 'names in the same row never overlap');
+    for (const sps of [
+        [span('Load', 10, 30), span('Track All', 60, 90), span('Save', 250, 256)],
+        [span('Opening the demo', 10, 12), span('Track All', 30, 34), span('Triangulate All', 36, 120), span('Save', 200, 259)],
+        [span('Load', 0, 1), span('Track All', 2, 3), span('Save', 4, 5), span('Triangulate All', 255, 260)],
+    ]) {
+        const pl = placeRunLabels(sps, W, cw).map((p, i) => p.hidden ? null : ends(p, sps[i])).filter(Boolean);
+        check(pl.every((r, i) => i === 0 || r[0] >= pl[i - 1][1] - 1e-9) && pl.every(r => r[0] >= -1e-9 && r[1] <= W + 1e-9),
+            `the room each shown name may take never overlaps the next one's, and stays inside the plot (${sps.map(s => s.name).join(', ')})`);
+    }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -20,6 +20,11 @@
  *       Chrome 157 reads live) is flagged in the panel.
  *   §5  No `performance.memory` (Firefox, Safari): a "not available" line,
  *       no plot; the project rows still work.
+ *   §7  Runs are marked: while the progress card is up (ui/loading-overlay.js),
+ *       each reading notes its title (or, untitled, its message up to the
+ *       count), and the plot shades each run with its name along the top and
+ *       a tooltip with its length and peak; a run done with the panel closed
+ *       is marked too.
  *   §6  A cross-origin-isolated page with `measureUserAgentSpecificMemory`
  *       (stubbed here; LUCID sends no COOP/COEP) shows the whole page and its
  *       workers as rows and a second line, asking only while the panel is on
@@ -174,6 +179,51 @@ try {
         check(s.resident.startsWith(counts.resident.toLocaleString('en-US') + ' of ') &&
             s.groups === counts.groupFrames.toLocaleString('en-US'),
             `with the demo loaded it counts frames in memory and frames with groups (${s.resident}; ${s.groups})`, counts);
+        await context.close();
+    }
+
+    // ---- §7 runs are marked on the plot ----
+    {
+        const { context, page } = await openApp(precise);
+        const card = (msg, opts) => page.evaluate(async ([msg, opts]) => {
+            const lo = await import(new URL('ui/loading-overlay.js', document.baseURI).href);
+            if (msg === null) lo.hideLoading(); else lo.showLoading(msg, opts);
+        }, [msg, opts]);
+        // With the panel closed: an untitled card.
+        await card('Loading SLP files (3/8)...');
+        let n = (await panelState(page)).taken;
+        await waitTaken(page, n + 3);
+        await card(null);
+        n = (await panelState(page)).taken;
+        await waitTaken(page, n + 2);
+        await openPanel(page);
+        // With it open: a titled one, holding 64 MB.
+        await card('Assigning identities: 5/10 frames…', { title: 'Track All' });
+        n = (await panelState(page)).taken;
+        await waitTaken(page, n + 1);
+        await page.evaluate(() => { window.__runHold = new Float64Array(8 * 1048576).fill(1); });
+        await waitTaken(page, n + 3);
+        await card(null);
+        await page.evaluate(() => { window.__runHold = null; });
+        await waitTaken(page, n + 5);
+        const runs = await page.evaluate(() => ({
+            bands: [...document.querySelectorAll('#memoryRunBands rect')].map(r => ({ w: +r.getAttribute('width'), tip: r.textContent })),
+            labels: [...document.querySelectorAll('#memoryRunLabels .memory-run-label')].map(l => ({ text: l.textContent, tip: l.title, w: l.getBoundingClientRect().width })),
+            runs: window.__lucidMemoryPanel.samples().map(s => s.run),
+        }));
+        // The app's own start-up card ("Initializing…") is a run too, before these two.
+        const two = runs.bands.slice(-2);
+        check(two.length === 2 && /^Loading SLP files · \d+ s · peak [\d,]+ MB$/.test(two[0].tip) &&
+            /^Track All · \d+ s · peak [\d,]+ MB$/.test(two[1].tip) && two.every(b => b.w > 0),
+            'each run is a shaded band whose tooltip gives its name, length and peak (the one done closed too)', runs.bands);
+        const peakMB = +two[1].tip.match(/peak ([\d,]+) MB/)[1].replace(/,/g, '');
+        check(peakMB >= 64, `a run's peak is the largest reading inside it (${peakMB} MB with 64 MB held)`);
+        // Seconds apart at the plot's right edge, only the newest has room for its name.
+        const last = runs.labels[runs.labels.length - 1];
+        check(last && last.text === 'Track All' && last.w > 0 && /peak/.test(last.tip),
+            'the newest run\'s name runs along the top of the plot', runs.labels);
+        check(runs.runs.includes(null) && runs.runs.includes('Track All') && runs.runs.includes('Loading SLP files'),
+            'readings note what was running, and nothing when no card is up');
         await context.close();
     }
 

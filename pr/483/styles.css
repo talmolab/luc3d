@@ -3768,6 +3768,42 @@ button.tri-dropdown-item:disabled {
   overflow: visible;
 }
 
+/* The plot and the runs' names along its top (ui/memory-panel.js renderRuns). */
+.memory-plot-wrap {
+  position: relative;
+}
+
+.memory-plot-run {
+  fill: var(--text-muted);
+  fill-opacity: 0.16;
+}
+
+.memory-plot-run-alt {
+  fill-opacity: 0.28;
+}
+
+.memory-run-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.memory-run-label {
+  position: absolute;
+  top: 2px;
+  box-sizing: border-box;
+  padding: 0 3px;
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--text-secondary);
+  /* Readable where the line runs under it. */
+  text-shadow: 0 0 2px var(--bg-tertiary), 0 0 2px var(--bg-tertiary), 0 0 3px var(--bg-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+}
+
 .memory-plot-base {
   stroke: var(--border-light);
   stroke-width: 1;

@@ -31,21 +31,31 @@
  * to one of 100 sizes and refreshes it every 20 minutes; the panel says so
  * (`isBucketizedHeap`).
  *
+ * Each reading also notes what was running: the progress card's title (or
+ * its message), `loadingCardText` in ui/loading-overlay.js, the one place
+ * every long job (Track All, Triangulate All, loads, saves) reports. A run is
+ * a shaded band on the plot with its name along the top (`runSpans`,
+ * `placeRunLabels`), and the band's tooltip gives its length and peak.
+ *
  * The samples live in a ring in memory (`MemoryRing`): nothing goes to the
  * `.slp` or `localStorage`. Test hook: `window.__lucidMemoryPanel`.
  */
-import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=25827083184f';
-import { setInfoTip, ICON_INFO } from './info-tip.js?v=25827083184f';
-import { state } from './app-state.js?v=25827083184f';
+import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=aab8eb18c819';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=aab8eb18c819';
+import { state } from './app-state.js?v=aab8eb18c819';
+import { loadingCardText } from './loading-overlay.js?v=aab8eb18c819';
 import {
     MEMORY_SAMPLE_MS, MEMORY_WINDOW_MS, UA_MEMORY_EVERY_MS,
     MemoryRing, readHeap, summarizeUaMemory, projectCounts, formatMB, plotGeometry,
-} from './memory-plot.js?v=25827083184f';
+    runName, runSpans, placeRunLabels, formatDuration,
+} from './memory-plot.js?v=aab8eb18c819';
 
 const TAB = 'tabMemory';
 const PLOT_W = 260;
 const PLOT_H = 90;
 const SVG_NS = 'http://www.w3.org/2000/svg';
+/** Rows of run names along the top of the plot. */
+const RUN_LABEL_LANES = 2;
 
 export const MEMORY_INFO_TEXT =
     'Chrome\'s count of this page\'s memory: JavaScript objects plus typed arrays (most of a big project\'s keypoints), but the dashed limit caps the objects only, so the line can go well above it without trouble. ' +
@@ -95,6 +105,7 @@ function sample() {
         total: heap ? heap.total : NaN,
         limit: heap ? heap.limit : NaN,
         ua: ua,
+        run: runName(loadingCardText()),
     });
     _samplesTaken++;
     if (_onScreen) render(heap, now);
@@ -126,6 +137,7 @@ function render(heap, now) {
             e.limitLine.setAttribute('visibility', 'hidden');
         }
         setText(e.scale, formatMB(g.yMax));
+        renderRuns(e, now);
     }
     const uaShown = uaMemoryAvailable();
     e.uaRow.hidden = !uaShown;
@@ -142,6 +154,38 @@ function render(heap, now) {
         : '–');
     setText(e.groups, c.sessions ? c.groupFrames.toLocaleString('en-US') : '–');
     setText(e.sessions, c.sessions.toLocaleString('en-US'));
+}
+
+/** The runs' bands (SVG) and names (HTML over the plot, so the stretched SVG never distorts text). */
+function renderRuns(e, now) {
+    const spans = runSpans(ring.toArray(), { width: PLOT_W, now: now, windowMs: MEMORY_WINDOW_MS });
+    const places = placeRunLabels(spans, PLOT_W, 6, RUN_LABEL_LANES);
+    const key = spans.map(function (s) { return s.name + '@' + s.x0.toFixed(1) + '-' + s.x1.toFixed(1) + ':' + Math.round(s.peak / 1048576); }).join('|');
+    if (key === e.runsKey) return;
+    e.runsKey = key;
+    e.runBands.textContent = '';
+    e.runLabels.textContent = '';
+    const pct = function (v) { return (v / PLOT_W * 100).toFixed(2) + '%'; };
+    spans.forEach(function (s, i) {
+        const tip = s.name + ' · ' + formatDuration(s.ms) + ' · peak ' + formatMB(s.peak);
+        // Alternate shades, so two runs back to back read as two.
+        const r = svgEl('rect', { class: 'memory-plot-run' + (i % 2 ? ' memory-plot-run-alt' : ''), x: s.x0.toFixed(1), y: 0, width: (s.x1 - s.x0).toFixed(1), height: PLOT_H });
+        const t = svgEl('title', {});
+        t.textContent = tip;
+        r.appendChild(t);
+        e.runBands.appendChild(r);
+        const p = places[i];
+        if (p.hidden) return;
+        const l = document.createElement('span');
+        l.className = 'memory-run-label';
+        l.textContent = s.name;
+        l.title = tip;
+        if (p.align === 'left') l.style.left = pct(p.x);
+        else l.style.right = pct(PLOT_W - p.x);
+        l.style.maxWidth = pct(p.max);
+        l.style.top = (2 + p.lane * 13) + 'px';
+        e.runLabels.appendChild(l);
+    });
 }
 
 /** Draw (and ask for the whole page) only while the panel's body is on screen; it draws at once on opening. */
@@ -216,6 +260,8 @@ function build(pane) {
         id: 'memoryPlot', class: 'memory-plot', viewBox: '0 0 ' + PLOT_W + ' ' + PLOT_H,
         preserveAspectRatio: 'none', role: 'img', 'aria-label': 'JavaScript heap used over the last five minutes',
     });
+    const runBands = svgEl('g', { id: 'memoryRunBands' });
+    svg.appendChild(runBands);
     svg.appendChild(svgEl('line', { class: 'memory-plot-base', x1: 0, y1: PLOT_H, x2: PLOT_W, y2: PLOT_H }));
     const limitLine = svgEl('line', { class: 'memory-plot-limit', id: 'memoryLimitLine', x1: 0, x2: PLOT_W, y1: 0, y2: 0, visibility: 'hidden' });
     const uaPath = svgEl('path', { class: 'memory-plot-ua', id: 'memoryUaPath', d: '' });
@@ -223,7 +269,15 @@ function build(pane) {
     svg.appendChild(limitLine);
     svg.appendChild(uaPath);
     svg.appendChild(usedPath);
-    body.appendChild(svg);
+    // The plot and the runs' names over it (HTML: the SVG is stretched to the panel's width).
+    const plotWrap = document.createElement('div');
+    plotWrap.className = 'memory-plot-wrap';
+    plotWrap.appendChild(svg);
+    const runLabels = document.createElement('div');
+    runLabels.className = 'memory-run-labels';
+    runLabels.id = 'memoryRunLabels';
+    plotWrap.appendChild(runLabels);
+    body.appendChild(plotWrap);
 
     const axis = document.createElement('div');
     axis.className = 'memory-axis';
@@ -281,6 +335,7 @@ function build(pane) {
     return {
         unavailable: unavailable, heapBody: body, now: now, coarse: coarse,
         usedPath: usedPath, uaPath: uaPath, limitLine: limitLine, scale: scale, legendUa: legendUa,
+        runBands: runBands, runLabels: runLabels, runsKey: null,
         peak: peak.value, total: total.value, limit: limit.value,
         ua: ua.value, uaRow: ua.row, uaWorkers: uaWorkers.value, uaWorkersRow: uaWorkers.row,
         resident: resident.value, groups: groups.value, sessions: sessions.value,
