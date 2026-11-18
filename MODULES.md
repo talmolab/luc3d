@@ -5902,6 +5902,9 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
   `formatRemaining(ms)` and the clock hook `__setLoadingOverlayClock(fn)` are
   exported for tests; the raw estimate is `#loadingEta[data-ms]`.
 - `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`).
+- `loadingCardText()` — `{ title, message }` while the card is up, null while
+  hidden (two text reads). The Memory panel notes it with each heap reading to
+  mark runs on its plot.
 - `setLoadingCpu(source)` — a CPU line and last-minute graph under the detail
   line (`#loadingHardware` = `#loadingCpu` + `#loadingGraph`), sampled every
   `CPU_SAMPLE_MS` as busy thread-ms / cores via `createLoadMeter`; the tooltip
@@ -5946,7 +5949,7 @@ null-guarded (no `#loadingHardware` → `setLoadingCpu` does nothing), and with 
 **Imported by.** `import-export/save-load.js` (re-exports `showLoading`/
 `hideLoading`), `pose/tracker.js`, `pose/triangulation.js`, `ui/export-modals.js`,
 `ui/id-switch-modal.js`, `loading/session-loader.js` (Load Single Session
-Folder's three-step progress).
+Folder's three-step progress), `ui/memory-panel.js` (`loadingCardText`).
 
 **Notes / caveats.**
 - **The fill animates `transform: scaleX()`** under a 250 ms linear transition
@@ -13060,6 +13063,14 @@ above the ~4 GB cap.
   the panel shows the last five minutes (a run done with it closed included).
   A reading is `performance.memory` into the ring: ~6 µs, the same on the demo
   and on a 5.7 GB 8-camera project after Track All.
+- **Marks runs.** Each reading notes what was running
+  (`runName(loadingCardText())`: the progress card's title, or its message,
+  so Track All, Triangulate All, loads, saves, and the app's start-up card).
+  A run is a shaded band (`#memoryRunBands` rects, `<title>` = name, length,
+  peak) with its name along the top in HTML over the plot (`#memoryRunLabels`, two
+  rows; the SVG is stretched, so text never goes in it), placed by
+  `placeRunLabels`. Back-to-back bands alternate shades.
+  A run done with the panel closed is marked too.
 - **Draws ONLY while on screen** (`onPanelRailChange` → `isPanelOnScreen`;
   folded, closed, info panel hidden or Define Planes open, it is not): the SVG,
   the rows and the project counts (Map sizes, `projectCounts`), at once on
@@ -13111,6 +13122,18 @@ above the ~4 GB cap.
 `formatMB`, and `plotGeometry(samples, {width, height, now, windowMs, limit})`
 (SVG path data; y from 0 to max(limit, 1.1 x peak), so the limit line is
 always drawn; a step over `MEMORY_GAP_MS` breaks the line).
+Runs: `runName(card)` (the progress card's title, else its message up to the
+first count / colon / ellipsis, cut to 40 characters; null with no card),
+`formatDuration(ms)` ("45 s", "2 min 5 s", "1 h 3 min"),
+`runSpans(samples, {width, now, windowMs})` (one span per stretch of a `run`
+name, split by another name, none, or a gap; covers its samples plus one
+period, never past the right edge; keeps its peak), and
+`placeRunLabels(spans, width, charW, lanes)` (rows of names, never
+overlapping within a row; placed newest run first, then the longest, so the
+run that just ended keeps its name and a 1-second check between two long runs
+never takes their room; each name left-aligned at its band if it fits there,
+else right-aligned at its band's end, in the first row where it fits whole,
+else cut; hidden under three characters).
 
 **Key exports.** The above, plus `MEMORY_SAMPLE_MS` (1 s), `MEMORY_WINDOW_MS`
 (5 min), `MEMORY_RING_CAPACITY` (360), `MEMORY_GAP_MS`, `UA_MEMORY_EVERY_MS`.

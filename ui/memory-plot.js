@@ -21,8 +21,9 @@ export const UA_MEMORY_EVERY_MS = 10 * 1000;
 const MB = 1024 * 1024;
 
 /**
- * A fixed-size ring of `{ t, used, total, ua }` samples (`t` in ms, sizes in
- * bytes, NaN where unknown), oldest first when read.
+ * A fixed-size ring of `{ t, used, total, limit, ua, run }` samples (`t` in
+ * ms, sizes in bytes, NaN where unknown; `run` the name of what was running,
+ * `runName`, or null), oldest first when read.
  */
 export class MemoryRing {
     constructor(capacity) {
@@ -120,6 +121,139 @@ export function projectCounts(sessions) {
         } else {
             out.frames += resident;
         }
+    });
+    return out;
+}
+
+/**
+ * The name of what is running, from the progress card (ui/loading-overlay.js
+ * `loadingCardText`): its title ("Track All", "Save"), or, for a card without
+ * one, its message up to the first count or ellipsis ("Loading SLP files (3/8)…"
+ * → "Loading SLP files"). Null when no card is up.
+ */
+export function runName(card) {
+    if (!card) return null;
+    const title = (card.title || '').trim();
+    if (title) return title.length > 40 ? title.slice(0, 39) + '…' : title;
+    let m = (card.message || '').split(/:|\(|…|\.\.\./)[0].trim();
+    if (!m) return 'Working';
+    return m.length > 40 ? m.slice(0, 39) + '…' : m;
+}
+
+/** A duration for a run's tooltip: "45 s", "2 min 5 s", "1 h 3 min". */
+export function formatDuration(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + ' s';
+    if (s < 3600) return Math.floor(s / 60) + ' min' + (s % 60 ? ' ' + (s % 60) + ' s' : '');
+    const m = Math.floor(s / 60);
+    return Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
+}
+
+/**
+ * The runs inside the last `windowMs`, laid out across `width`: one span per
+ * stretch of consecutive samples with the same `run` name, ended by another
+ * name, none, or a gap longer than `MEMORY_GAP_MS`. A span covers its samples
+ * plus one sample period (a one-sample run is still a visible band), and
+ * carries the largest heap reading inside it.
+ *
+ * @returns {Array<{ name: string, t0: number, t1: number, ms: number, x0: number, x1: number, peak: number }>}
+ */
+export function runSpans(samples, opts) {
+    const width = opts.width;
+    const now = opts.now;
+    const windowMs = opts.windowMs || MEMORY_WINDOW_MS;
+    const start = now - windowMs;
+    const x = function (t) { return Math.max(0, Math.min(width, (t - start) / windowMs * width)); };
+    const out = [];
+    let cur = null;
+    let prevT = -Infinity;
+    const close = function () {
+        if (!cur) return;
+        const end = Math.min(now, cur.t1 + MEMORY_SAMPLE_MS);
+        cur.ms = end - cur.t0;
+        cur.x1 = Math.min(width, Math.max(x(cur.t0) + 1, x(end)));
+        cur.x0 = Math.min(x(cur.t0), cur.x1 - 1);
+        out.push(cur);
+        cur = null;
+    };
+    samples.forEach(function (s) {
+        if (!(s.t >= start && s.t <= now)) return;
+        const name = s.run || null;
+        if (cur && (name !== cur.name || s.t - prevT > MEMORY_GAP_MS)) close();
+        if (name) {
+            if (!cur) cur = { name: name, t0: s.t, t1: s.t, ms: 0, x0: 0, x1: 0, peak: 0 };
+            cur.t1 = s.t;
+            if (s.used > cur.peak) cur.peak = s.used;
+        }
+        prevT = s.t;
+    });
+    close();
+    return out;
+}
+
+/**
+ * Where each run's name goes along the top of the plot, in `lanes` rows, so
+ * no two names in a row overlap. Names are placed newest run first (the one
+ * most likely being looked at), then the longest runs: a 1-second check
+ * between two long runs never takes the room their names need. In each row in
+ * turn a name starts at its band and runs right when the room there holds it,
+ * else ends at its band's right edge (the usual case for the run that just
+ * ended, at the plot's right edge); the first row where it fits whole takes
+ * it. Where none does, it is cut to the most room it has, and hidden when
+ * under three characters fit (the band's tooltip still names it). `max` is
+ * the width the name may take (the panel's CSS `max-width`, ellipsized past
+ * it); widths are estimated at `charW` per character, on the generous side,
+ * so a name never runs into the next.
+ *
+ * @returns {Array<{ x: number, align: 'left'|'right', max: number, lane: number, hidden: boolean }>}
+ */
+export function placeRunLabels(spans, width, charW, lanes) {
+    const cw = charW || 6;
+    const nLanes = lanes || 1;
+    const PAD = 3;
+    const MIN = 3 * cw + 2 * PAD;
+    const taken = [];  // per row: the [start, end] of the names placed there
+    for (let k = 0; k < nLanes; k++) taken.push([]);
+    const inside = function (row, v) { return row.some(function (r) { return v > r[0] + 1e-9 && v < r[1] - 1e-9; }); };
+    // The room from `x` rightward / leftward before a placed name or the edge.
+    const roomRight = function (row, x) {
+        if (inside(row, x)) return -Infinity;
+        let end = width;
+        row.forEach(function (r) { if (r[0] >= x - 1e-9 && r[0] < end) end = r[0]; });
+        return end - x;
+    };
+    const roomLeft = function (row, x) {
+        if (inside(row, x)) return -Infinity;
+        let start = 0;
+        row.forEach(function (r) { if (r[1] <= x + 1e-9 && r[1] > start) start = r[1]; });
+        return x - start;
+    };
+    const order = spans.map(function (_, i) { return i; });
+    const last = spans.length - 1;
+    order.sort(function (a, b) {
+        if (a === last) return -1;
+        if (b === last) return 1;
+        return (spans[b].ms - spans[a].ms) || (b - a);
+    });
+    const out = new Array(spans.length);
+    order.forEach(function (i) {
+        const sp = spans[i];
+        const want = sp.name.length * cw + 2 * PAD;
+        let place = null, best = null;
+        for (let k = 0; k < nLanes && !place; k++) {
+            const right = roomRight(taken[k], sp.x0);
+            const left = roomLeft(taken[k], sp.x1);
+            if (want <= right) place = { x: sp.x0, align: 'left', max: want, lane: k };
+            else if (want <= left) place = { x: sp.x1, align: 'right', max: want, lane: k };
+            else {
+                const cut = right >= left ? { x: sp.x0, align: 'left', max: right, lane: k } : { x: sp.x1, align: 'right', max: left, lane: k };
+                if (!best || cut.max > best.max) best = cut;
+            }
+        }
+        if (!place) place = best;
+        place.hidden = !(place.max >= MIN);
+        if (!place.hidden) taken[place.lane].push(place.align === 'left' ? [place.x, place.x + place.max] : [place.x - place.max, place.x]);
+        out[i] = place;
     });
     return out;
 }
