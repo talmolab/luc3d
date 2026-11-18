@@ -30,14 +30,14 @@
 // constraint that keeps 3D Mesh Objects from being able to break a workflow
 // that predates them.
 
-import { planeModel, refreshPlanePanel, syncPlanes3D } from './plane-definition.js?v=083335f60fd9';
-import { originState } from './origin-definition.js?v=083335f60fd9';
-import { buildMeshObjectGeometry, connectivitySummary } from '../pose/mesh-object-geometry.js?v=083335f60fd9';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=083335f60fd9';
+import { planeModel, refreshPlanePanel, syncPlanes3D } from './plane-definition.js?v=a0fe8e5e17b4';
+import { originState } from './origin-definition.js?v=a0fe8e5e17b4';
+import { buildMeshObjectGeometry, connectivitySummary } from '../pose/mesh-object-geometry.js?v=a0fe8e5e17b4';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=a0fe8e5e17b4';
 import {
     meshObjectToSTL, meshObjectToGLB, isExportable, meshFilenameStem,
-} from '../import-export/mesh-export.js?v=083335f60fd9';
-import { downloadBytes } from '../import-export/file-io.js?v=083335f60fd9';
+} from '../import-export/mesh-export.js?v=a0fe8e5e17b4';
+import { downloadBytes } from '../import-export/file-io.js?v=a0fe8e5e17b4';
 
 /**
  * Panel-local selection. Not persisted — which row is open is transient editor

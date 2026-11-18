@@ -30,7 +30,7 @@
  * just the header row.
  */
 
-import { noteProgress } from './progress-delta.js?v=083335f60fd9';
+import { noteProgress } from './progress-delta.js?v=a0fe8e5e17b4';
 
 export class LoadingProgressModal {
     constructor(options = {}) {
