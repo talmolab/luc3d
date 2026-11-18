@@ -16,37 +16,37 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=fd8a4c07c8a1';
-import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=fd8a4c07c8a1';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=fd8a4c07c8a1';
+} from './triangulation.js?v=d0d06afe000b';
+import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=d0d06afe000b';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=d0d06afe000b';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=fd8a4c07c8a1';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=d0d06afe000b';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=fd8a4c07c8a1';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=fd8a4c07c8a1';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=fd8a4c07c8a1';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=fd8a4c07c8a1';
-import { startTrackerWorker } from './tracker-pool.js?v=fd8a4c07c8a1';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=fd8a4c07c8a1';
-import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=fd8a4c07c8a1';
-import { hasRealCalibration } from './placeholder-cameras.js?v=fd8a4c07c8a1';
-import { drawAllOverlays, holdOverlayDraws, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=fd8a4c07c8a1';
-import { updateInfoPanel } from '../ui/info-panel.js?v=fd8a4c07c8a1';
-import { setColorByIdentity } from '../ui/color-by.js?v=fd8a4c07c8a1';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=fd8a4c07c8a1';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=fd8a4c07c8a1';
-import { summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks } from '../ui/track-summary.js?v=fd8a4c07c8a1';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=fd8a4c07c8a1';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=fd8a4c07c8a1';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=fd8a4c07c8a1';
-import { noteTrackRun } from './run-state.js?v=fd8a4c07c8a1';
-import { resolveTailMarks, createTailBandCue, TAIL_BAND_READ } from './tail-mark.js?v=fd8a4c07c8a1';
-import { resolveIdentityCues } from './identity-cues.js?v=fd8a4c07c8a1';
-import { createTailMarkReader } from '../ui/tail-mark-reader.js?v=fd8a4c07c8a1';
+} from '../ui/settings.js?v=d0d06afe000b';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=d0d06afe000b';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=d0d06afe000b';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=d0d06afe000b';
+import { startTrackerWorker } from './tracker-pool.js?v=d0d06afe000b';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=d0d06afe000b';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=d0d06afe000b';
+import { hasRealCalibration } from './placeholder-cameras.js?v=d0d06afe000b';
+import { drawAllOverlays, holdOverlayDraws, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=d0d06afe000b';
+import { updateInfoPanel } from '../ui/info-panel.js?v=d0d06afe000b';
+import { setColorByIdentity } from '../ui/color-by.js?v=d0d06afe000b';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=d0d06afe000b';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=d0d06afe000b';
+import { summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks } from '../ui/track-summary.js?v=d0d06afe000b';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=d0d06afe000b';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=d0d06afe000b';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=d0d06afe000b';
+import { noteTrackRun } from './run-state.js?v=d0d06afe000b';
+import { resolveTailMarks, createTailBandCue, TAIL_BAND_READ } from './tail-mark.js?v=d0d06afe000b';
+import { resolveIdentityCues } from './identity-cues.js?v=d0d06afe000b';
+import { createTailMarkReader } from '../ui/tail-mark-reader.js?v=d0d06afe000b';
 
 /**
  * A frame index as the USER sees it: 1-based.

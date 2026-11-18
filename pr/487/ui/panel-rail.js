@@ -1,7 +1,7 @@
 /**
  * ui/panel-rail.js — the right-edge icon rail and the stack of collapsible
  * panel sections it drives (Instances, Visibility, ID Switches, Videos,
- * Cameras, Skeleton, Session). It replaced the horizontal tab bar.
+ * Cameras, Skeleton, Session, Memory). It replaced the horizontal tab bar.
  *
  * Modelled on sleap-app's sidebar (`AppShell.tsx` `Sidebar`, rules in
  * `appStore.ts` `togglePanelOpen` / `openPanel` / `closePanel` /
@@ -28,6 +28,10 @@
  * scrolls its header to the top, and never hides or folds anything — never
  * `.click()` a rail button for that, since clicking the expanded one folds it.
  *
+ * A panel that works only while it is seen (the Memory panel draws its plot
+ * only then) asks `isPanelOnScreen(tabId)` from an `onPanelRailChange`
+ * listener, called after every repaint of the rail.
+ *
  * Which panels are open / folded is display taste: remembered in
  * `localStorage` (best-effort), restored once at setup, never in the `.slp`.
  *
@@ -39,7 +43,7 @@
  * `setupPanelRail` (it lives in `ui/ui-wiring.js`, which would close a cycle
  * for `ui/id-switch-modal.js` and `ui/plane-definition.js`).
  */
-import { railIconSvg } from './panel-rail-icons.js?v=fd8a4c07c8a1';
+import { railIconSvg } from './panel-rail-icons.js?v=d0d06afe000b';
 
 /** Rail and stack order = the old tab bar's order. `tab` is the `.panel-tab-content` element id. */
 export const PANEL_RAIL_PANELS = [
@@ -50,6 +54,7 @@ export const PANEL_RAIL_PANELS = [
     { tab: 'tabCameras', label: 'Cameras', icon: 'camera' },
     { tab: 'tabSkeleton', label: 'Skeleton', icon: 'bone' },
     { tab: 'tabSession', label: 'Session', icon: 'folder-tree' },
+    { tab: 'tabMemory', label: 'Memory', icon: 'memory-stick' },
 ];
 
 /** localStorage key of `{ open: [tabId…], folded: [tabId…] }`. */
@@ -64,6 +69,8 @@ let _open = DEFAULT_OPEN.slice();
 /** Open panels whose body is folded to the header strip (a subset of `_open`). */
 let _folded = [];
 let _locked = false;
+/** `onPanelRailChange` listeners. */
+const _listeners = [];
 
 function isKnownTab(tabId) {
     return PANEL_RAIL_PANELS.some(function (p) { return p.tab === tabId; });
@@ -142,6 +149,31 @@ export function syncPanelRail() {
         t.setAttribute('aria-label', name);
         t.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     }
+    _listeners.slice().forEach(function (fn) {
+        try { fn(); } catch (e) { console.error('panel-rail listener:', e); }
+    });
+}
+
+/**
+ * Call `fn()` after every repaint of the rail: a panel opened, folded or
+ * closed, the info panel shown or hidden, Define Planes entered or left.
+ * Returns a function that removes it.
+ */
+export function onPanelRailChange(fn) {
+    _listeners.push(fn);
+    return function () {
+        const i = _listeners.indexOf(fn);
+        if (i !== -1) _listeners.splice(i, 1);
+    };
+}
+
+/**
+ * Is `tabId`'s body on screen: open, not folded, the info panel shown, and
+ * Define Planes not holding the panel? (Scrolled out of the info panel still
+ * counts.)
+ */
+export function isPanelOnScreen(tabId) {
+    return !!_rail && !_locked && !isInfoPanelCollapsed() && isExpanded(tabId);
 }
 
 /**
