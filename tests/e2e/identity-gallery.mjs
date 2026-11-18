@@ -96,16 +96,19 @@ try {
                 });
                 s.addFrameGroup(fg);
             }
+            const draw = (camName, f) => {
+                const cv = new OffscreenCanvas(640, 480), ctx = cv.getContext('2d'), t = truth.get(camName);
+                ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480);
+                [['#ff0000', 0], ['#00ff00', 1]].forEach(([col, ai]) => {
+                    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(t[f * 4 + 2 * ai], t[f * 4 + 2 * ai + 1], 45, 0, 2 * Math.PI); ctx.fill();
+                });
+                return cv.transferToImageBitmap();
+            };
+            // getFrame = the decoder's own (cached) frame; peekFrame = a caller-owned copy (loading/video.js)
             const decoder = (camName) => ({
                 samples: { length: FRAMES },
-                getFrame: async (f) => {
-                    const cv = new OffscreenCanvas(640, 480), ctx = cv.getContext('2d'), t = truth.get(camName);
-                    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 640, 480);
-                    [['#ff0000', 0], ['#00ff00', 1]].forEach(([col, ai]) => {
-                        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(t[f * 4 + 2 * ai], t[f * 4 + 2 * ai + 1], 45, 0, 2 * Math.PI); ctx.fill();
-                    });
-                    return cv.transferToImageBitmap();
-                },
+                getFrame: async (f) => draw(camName, f),
+                peekFrame: async (f) => draw(camName, f),
             });
             AS.state.sessions = [s]; AS.state.activeSessionIdx = 0; AS.state.session = s;
             AS.state.totalFrames = FRAMES; AS.state.currentFrame = 0; AS.state.fps = 30;
@@ -305,10 +308,10 @@ try {
         const G = await import('/ui/identity-gallery.js'), AS = await import('/ui/app-state.js');
         let inFlight = 0, maxAll = 0, calls = 0;
         const per = new Map(), maxPer = new Map();
-        const saved = AS.state.views.map(v => v.decoder.getFrame);
+        const saved = AS.state.views.map(v => v.decoder.peekFrame);
         AS.state.views.forEach(v => {
-            const orig = v.decoder.getFrame;
-            v.decoder.getFrame = async (f) => {
+            const orig = v.decoder.peekFrame;
+            v.decoder.peekFrame = async (f) => {
                 calls++; inFlight++; maxAll = Math.max(maxAll, inFlight);
                 per.set(v.name, (per.get(v.name) || 0) + 1);
                 maxPer.set(v.name, Math.max(maxPer.get(v.name) || 0, per.get(v.name)));
@@ -323,7 +326,7 @@ try {
         const ms = Math.round(performance.now() - t0);
         const tiles = host.querySelectorAll('.identity-gallery-tile').length;
         const filled = host.querySelectorAll('.identity-gallery-tile canvas.identity-gallery-img').length;
-        AS.state.views.forEach((v, i) => { v.decoder.getFrame = saved[i]; });
+        AS.state.views.forEach((v, i) => { v.decoder.peekFrame = saved[i]; });
         host.remove();
         return { maxAll, maxPerCam: Math.max(...maxPer.values()), cams: maxPer.size, calls, tiles, filled, ms };
     });
@@ -357,6 +360,51 @@ try {
         `5c. the rows come at once (${late.now.rows}) and the maps once the tracks are read (${late.now.maps} -> ${late.after.maps})`);
     check(late.before2 === 2 && late.gone && late.empty === 1,
         `5c. an identity with 3D but no track: the section shows two rows, then removes itself and calls onEmpty (${JSON.stringify(late)})`);
+
+    // ---- 5d. a caller-owned copy per image, closed once drawn; getFrame left alone --------------
+    // getFrame keeps a jump's frame in the view's cache and warms the frames before it
+    // (loading/video.js): 25 samples left ~1.1 GB of decoded video in the GPU process.
+    const own = await page.evaluate(async () => {
+        const G = await import('/ui/identity-gallery.js'), AS = await import('/ui/app-state.js');
+        let gets = 0, peeks = 0, closed = 0;
+        const saved = AS.state.views.map(v => [v.decoder.getFrame, v.decoder.peekFrame]);
+        AS.state.views.forEach(v => {
+            const g = v.decoder.getFrame, p = v.decoder.peekFrame;
+            v.decoder.getFrame = async (f) => { gets++; return g(f); };
+            v.decoder.peekFrame = async (f) => {
+                peeks++;
+                const b = await p(f), close = b.close.bind(b);
+                b.close = () => { closed++; close(); };
+                return b;
+            };
+        });
+        const run = async () => {
+            const host = document.createElement('div'); document.body.appendChild(host);
+            await G.renderIdentityGallery(host, AS.state.session, {}).done;
+            const tiles = host.querySelectorAll('.identity-gallery-tile').length;
+            const filled = host.querySelectorAll('.identity-gallery-tile canvas.identity-gallery-img').length;
+            const maps = host.querySelectorAll('.identity-gallery-map-canvas').length;
+            host.remove();
+            return { tiles, filled, maps };
+        };
+        const withPeek = await run();
+        const counts = { gets, peeks, closed };
+        // a decoder without peekFrame (the fallback): its own frames, drawn and never closed
+        AS.state.views.forEach(v => { delete v.decoder.peekFrame; });
+        gets = 0; peeks = 0; closed = 0;
+        const without = await run();
+        const fallback = { gets, peeks, closed };
+        AS.state.views.forEach((v, i) => { v.decoder.getFrame = saved[i][0]; v.decoder.peekFrame = saved[i][1]; });
+        return { withPeek, counts, without, fallback };
+    });
+    check(own.counts.gets === 0 && own.counts.peeks > 0,
+        `5d. with peekFrame the gallery never calls getFrame (getFrame ${own.counts.gets}, peekFrame ${own.counts.peeks})`);
+    check(own.counts.closed === own.counts.peeks,
+        `5d. every copy is closed once drawn (${own.counts.closed} of ${own.counts.peeks}, the map's background included)`);
+    check(own.withPeek.tiles > 0 && own.withPeek.filled === own.withPeek.tiles && own.withPeek.maps > 0,
+        `5d. and every tile and map still draws (${own.withPeek.filled} of ${own.withPeek.tiles} tiles, ${own.withPeek.maps} maps)`);
+    check(own.fallback.gets > 0 && own.fallback.closed === 0 && own.without.filled === own.without.tiles,
+        `5d. without peekFrame: getFrame's frames, never closed (${own.fallback.gets} fetches, ${own.without.filled} of ${own.without.tiles} tiles)`);
 
     // ---- 6. no videos ---------------------------------------------------------------------
     await page.evaluate(async () => { await window.__build('noVideo', { noVideo: true }); await (await import('/pose/tracker.js')).trackAll(); });

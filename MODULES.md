@@ -41,8 +41,11 @@ helpers used by every load path. Calls `init()` at module-load.
 
 **Key exports.**
 - `hideWelcomeOverlay()` — hides the dock empty-state overlay.
-- `loadDemoSession()` — File menu "Load Demo Session" handler. Loads
-  `sample_session/*.mp4` and synthetic data from `demo-data.js`.
+- `loadDemoSession()` — loads `sample_session/*.mp4` and synthetic data from
+  `demo-data.js`. No menu item calls it; e2e tests use it for a quick project.
+  (File ▸ Open Demo is the real-data `loading/demo-project.js`.)
+- `init()` ends with `setupDemoEntry()` (`ui/demo-entry.js`), so a `?demo`
+  URL starts loading the demo once the app is set up.
 - `addNewInstanceSmart()` — adds a new user instance to the focused view.
   Pose source priority: cached `lastUserPoints` → user instance on the current
   frame → user instance on the nearest **prior** frame (so ctrl+i inherits a
@@ -4351,6 +4354,49 @@ run is a no-op, Track Frame leaves it) and `tests/e2e/track-all-switches-to-id.m
 (real toolbar: button highlight, 3D recolor, switching back).
 
 ---
+
+### ui/page-title.js
+
+**Purpose.** The browser tab's title: `LUC3D` with nothing open,
+`<project> - LUC3D` once a project is, with a leading `• ` while there are
+unsaved changes. The project's name is the file it was opened from or last
+saved to (`.slp` or project `.json`), else the folder it was loaded from (a
+multi-session load: the parent folder). Only loaders that START a project name
+it; adding a session to an open project keeps its name. Import-free.
+
+**Key exports.** `APP_TITLE`; `formatPageTitle(name, isDirty)` (pure);
+`setPageProject(name)` (null/blank: none); `pageProjectName()`;
+`setPageDirty(isDirty)`. The setters write `document.title` when there is one.
+
+**Imports from project modules.** None.
+
+**Imported by.** `import-export/save-load.js` (`markDirty`/`clearDirty`,
+`newProject`, `handleLoadProject`'s `.json` path, `quickSave`),
+`import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
+(`handleLoadProjectSlpLazy`, which takes `opts.projectName`; the single-SLP,
+per-camera and multi-session folder loaders), `ui/sessions-panes.js` (closing
+the last session).
+
+**Coverage.** `tests/test-page-title.mjs`.
+
+### ui/demo-entry.js
+
+**Purpose.** The ways into the demo (`loading/demo-project.js`) other than File
+▸ Open Demo (wired in `ui/ui-wiring.js`): the "No data? Open the demo" button
+on the empty video dock (`#dockDemoBtn`), shown only while nothing is loaded (a
+`MutationObserver` on `#videoDockEmpty`'s class re-checks, so closing a
+project's last panel does not offer it), and `?demo` in the page URL
+(`luc3d.sleap.ai/?demo` opens straight into it).
+
+**Key exports.** `demoRequested(search)`; `setupDemoEntry()` (called last in
+`pose/initialization.js`'s `init`).
+
+**Imports from project modules.** `ui/app-state.js`,
+`loading/demo-project.js`.
+
+**Imported by.** `pose/initialization.js`.
+
+**Tests.** `tests/e2e/demo-project.mjs`.
 
 ### ui/version-label.js
 
@@ -11283,9 +11329,15 @@ pause every `TRACKS_SLICE_MS`, 20 ms): opening the summary on the 8-camera,
 108,000-frame project went from one 89 ms task to 25 ms, the tracks following in
 slices under 25 ms. A row whose identity then has no track is removed; with fewer
 than two left the section removes itself and calls `onEmpty` (the summary drops
-`has-gallery`). Then it fills them: the maps first,
-then the images, one decoded frame per sample (`view.decoder.getFrame`, drawn
-immediately — a decoder's cached frame may be closed by the next decode). Every
+`has-gallery`). Then it fills them: the maps first, then the images, one decoded
+frame per sample, drawn immediately. **Each frame, and the map's background, is a
+caller-owned copy** (`galleryFrame`: `view.decoder.peekFrame`, closed once drawn;
+`getFrame` only for a decoder without `peekFrame`, whose frames are never closed
+here). Not `getFrame`: a jump through it keeps the frame in the view's frame cache
+and warms the 24 frames before it in the background (`_scheduleBackWarm`,
+`loading/video.js`), and the summary's samples left ~28 frames per camera cached
+for good on the 8-camera 1280x1024 project: Chrome's GPU process ended a Track All
++ Triangulate All at ~1.6 GB, ~0.47 GB with copies (VM, two runs each). Every
 row's samples are planned first (`planRow`: frame, camera, crop), then fetched one
 queue per decoder (`fetchSamples`): a decoder is asked for one frame at a time, in
 frame order, while the cameras' queues run side by side. And the samples land on
@@ -11298,7 +11350,7 @@ gap's worth. campy's cameras share keyframes; one that did not would only decode
 slower. 26 samples on an 8-camera project (keyframe every 250 frames): 2.3 s one
 after another, 1.3 s per camera side by side, 0.37 s on keyframes (local disk). Tiles
 fill in as their camera's frames arrive, not row by row. It stops as soon as the
-box is closed (test: e2e `identity-gallery` §5b). Without a video a sample says "no video" and the maps draw on a dark
+box is closed (test: e2e `identity-gallery` §5b; the copies, §5c). Without a video a sample says "no video" and the maps draw on a dark
 ground. The map is a darkened still of the chosen camera with the path coloured
 by TIME on a one-hue sequential ramp and a 0:00 → end key; hovering shows the
 nearest point's time, a click goes there. The chosen view is kept on
@@ -11324,7 +11376,7 @@ time captioned. Changing the map's camera hides a stale preview. The preview
 reads the element's `_zoom` (`{kind, w, h, draw, color, label, frame}`): one box
 serves both kinds.
 
-**Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
+**Key exports.** `renderIdentityGallery`, `galleryFrame`, `identityTracks`, `identityGroupAt`,
 `groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
 `memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
 `GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
@@ -11618,7 +11670,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   shared project skeleton — the user then adds video via File ▸ Load Videos);
   the **"−"** button (`btnRemoveSession`) calls `removeSession`. Folder-based
   session loading stays on the File menu (`menuLoadSessionFolder` →
-  `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`).
+  `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`), as does File ▸
+  Open Demo (`menuOpenDemo` → `loadDemoProject`, `loading/demo-project.js`).
 - Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
   Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
   `showGroupContextMenu`, `hideGroupContextMenu`. The context menu's **Delete
@@ -11795,7 +11848,7 @@ header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
-`file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
+`file-io.js`, `session-loader.js`, `demo-project.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js` (the track/identity helpers,
 Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
 `swapTracks`), `export-modals.js`,
@@ -13065,7 +13118,9 @@ bridged into the test runner as `window.__PerCamSlpChoice`.
 
 **Purpose.** Where a `showDirectoryPicker` opens. `startIn` = a file handle opens
 in that file's folder; the project's `.slp` handle is `state.slpFileHandle` (Load
-Project, Load SLP and Save As keep it; it is what File ▸ Save writes). Without
+Project, Load SLP and Save As keep it; it is what File ▸ Save writes). A loader
+adopts it only once it replaces the open project, and New Project or closing the
+last session clears it (`tests/e2e/save-target-handle.mjs`). Without
 `startIn` or `id`, Chromium opens wherever ANY picker of the origin last picked
 (Load Project, Save As, an export…), else Documents — so a picker with neither
 lands somewhere that depends on the browser's history, not the project. An `id`
@@ -13152,6 +13207,36 @@ has no recording folder: Save writes that file, Save As opens beside it.
 Imports nothing.
 
 **Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`.
+
+### loading/demo-project.js
+
+**Purpose.** File ▸ Open Demo: a 15 s, 8-camera clip of SLAP-2M (two mice,
+proofread 2D in six cameras, the session's calibration) in the `demo/` folder
+of the Hugging Face dataset `talmolab/slap-2m`, whose README says where it was
+cut from. It is read from ONE commit (`DEMO_REVISION`): an upload to the
+dataset changes nothing until the pin moves, and moving it means updating
+`DEMO_FILES`' sizes too. Every file is fetched whole (24 MB), wrapped as a File
+with `webkitRelativePath` = `SLAP-2M demo/<path>`, and handed to
+`handleLoadSessionFolderPerCamera` as a picked folder would be, so nothing about
+the demo is special once loaded. Hugging Face answers cross-origin requests, so
+it works on every channel; it is not in the offline bundle, so offline it fails
+with a status message.
+
+**Key exports.** `DEMO_REVISION`, `DEMO_BASE_URL` (trailing slash),
+`DEMO_PROJECT_NAME` (the tab title), `DEMO_FILES` (`[path, bytes]`: the
+progress bar's total before any response);
+`fetchDemoFiles(baseUrl, onBytes, fetchFn?)` → Files (4 at a time, counting
+bytes as they stream); `loadDemoProject({baseUrl}?)` → true once loaded. It asks
+before replacing an open project (`confirm`), then `newProject(true)`, shows the
+download on the progress card (MB), loads the folder and names the project.
+
+**Imports from project modules.** `ui/app-state.js`,
+`loading/session-loader.js`, `import-export/save-load.js`,
+`ui/loading-overlay.js`, `ui/page-title.js`.
+
+**Imported by.** `ui/demo-entry.js`, `ui/ui-wiring.js` (File ▸ Open Demo).
+
+**Tests.** `tests/e2e/demo-project.mjs`.
 
 ### loading/campy-session.js
 
@@ -13585,7 +13670,9 @@ Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
 `import-export/save-load.js` via `shouldUseLazySlp`, and by
 `handleLoadSessionFolderSingleSlp` for a large root `.slp`, which passes
 `{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
-instead of prompting). **It shows the progress
+instead of prompting). `opts.fileHandle` (the picked `.slp`'s handle, from Load
+Project) becomes `state.slpFileHandle` when the old project is freed; without it
+the handle is cleared. **It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
@@ -15701,9 +15788,19 @@ loading-overlay/status-text UI helpers.
   suggested name is the session's name when there is one session. Save Compact
   Copy's picker gets the same `startIn` (else the project file's folder). Covered by
   `tests/e2e/save-opens-in-recording-folder.mjs`.
+- Tab title (`ui/page-title.js`): `markDirty` / `clearDirty` call
+  `setPageDirty`; `newProject` clears the project's name, `handleLoadProject`
+  sets a `.json`'s, and a save sets the name of the file it wrote.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
-  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
-  `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
+  is used by the 3D-import reset and File ▸ Open Demo; it clears
+  `state.slpFileHandle`, so Save never writes the new project over the old
+  one's file, and the session LIST (`state.sessions`, every session's lazy
+  loader closed, the session strip repainted) and the dirty flag: a session
+  left in the list stayed on the strip and the next folder loaded joined it —
+  `tests/e2e/demo-project.mjs` §5), `markDirty`, `clearDirty`,
+  `quickSave`, `saveAs`, `saveProjectSlp`, `saveProject`,
+  `handleLoadProject(file, fileHandle)` (hands `fileHandle`, an `.slp`'s own, to
+  the loader; a `.json` leaves none; routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
   eager parse, freeing any previously loaded project first). A `.json` loaded
@@ -15942,7 +16039,10 @@ path uses `resolveImportTrackIdx`, and the grouped-reconstruction path keeps
 first track.
 
 **Key exports.**
-- `handleLoadSlpFile(slpFile)` — replace-current-state load. Pre-allocates all
+- `handleLoadSlpFile(slpFile, fileHandle)` — replace-current-state load. Sets
+  `state.slpFileHandle` (File ▸ Save's target) to `fileHandle` or null at the
+  point it clears the old project, never before, so a load cancelled at its
+  first prompt leaves the open project's file alone. Pre-allocates all
   N session groups in the LoadingProgressModal before the per-session loop so
   the header reads the true "Session n of N"; re-engages `showLoading` after the
   non-embedded folder picker so the overlay stays up during video decode. Calls

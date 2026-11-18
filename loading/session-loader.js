@@ -89,6 +89,7 @@ import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-
 import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
 import { noteUnplayableVideos } from '../ui/video-codec-notice.js';
 import { refreshReadoutTotals } from '../ui/frame-readout.js';
+import { setPageProject } from '../ui/page-title.js';
 import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
@@ -1680,6 +1681,9 @@ export async function handleLoadMultiSession() {
 
         showLoading('Loading ' + sessionDirs.length + ' sessions...');
         console.log('[multi-session] Found sessions:', sessionDirs.map(function (d) { return d.name; }));
+        // Starting a project: the tab takes the parent folder's name. Added to
+        // an open project, the sessions keep that project's name.
+        if (state.sessions.length === 0) setPageProject(parentHandle.name);
 
         // Load each session — first gets full video init, rest defer decoders
         for (var si = 0; si < sessionDirs.length; si++) {
@@ -2233,7 +2237,8 @@ export async function handleLoadSessionFolderSingleSlp() {
         // in it, e.g. one folder per camera — so nobody picks the same folder twice.
         if (!campyRec && shouldUseLazySlp(slpFile)) {
             hideLoading();
-            await handleLoadProjectSlpLazy(slpFile, { folderFiles: allFiles });
+            var lazyFolder = allFiles[0].webkitRelativePath ? allFiles[0].webkitRelativePath.split('/')[0] : '';
+            await handleLoadProjectSlpLazy(slpFile, { folderFiles: allFiles, projectName: lazyFolder });
             return;
         }
         var campyVideoCam = new Map();
@@ -2417,6 +2422,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             && slpData.sessions[0].metadata.lucid) || {};
         var startsProject = state.sessions.length === 0;
         if (startsProject) resetPlaneState();
+        if (startsProject) setPageProject(folderName);
         readVisibilityMetadata(session, sessLucid);
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
@@ -2931,9 +2937,12 @@ export function createOpenProgress(fileName) {
 
 /**
  * @param {File} slpFile
- * @param {{folderFiles?: File[]}} [opts]  `folderFiles`: the files of a folder the user
- *   already picked (the session-folder loader); the videos are matched from them instead
- *   of asking for a folder again.
+ * @param {{folderFiles?: File[], projectName?: string, fileHandle?: FileSystemFileHandle}} [opts]
+ *   `folderFiles`: the files of a folder the user already picked (the session-folder
+ *   loader); the videos are matched from them instead of asking for a folder again.
+ *   `projectName`: the tab's name for the project (that folder's), else the file's name.
+ *   `fileHandle`: the `.slp`'s own handle, File ▸ Save's target from then on (none: Save
+ *   asks where to write).
  */
 export async function handleLoadProjectSlpLazy(slpFile, opts) {
     try {
@@ -2975,9 +2984,14 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         }
         state._decoderPoolCold = [];
         state.sessions = [];
+        // Save writes back to THIS file (when opened with its handle), never
+        // the replaced project's.
+        state.slpFileHandle = (opts && opts.fileHandle) || null;
         state.session = null;
         state.views = [];
         state.videoFiles = [];
+        // The tab: the folder it was picked from (opts.projectName), else the file.
+        setPageProject((opts && opts.projectName) || slpFile.name);
         state.triangulationResults = new Map();
         // Plane state is project-scoped and lives on a module singleton, so
         // it does NOT go away with `state.sessions`. `readPlaneMetadata`
@@ -3247,6 +3261,11 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             if (firstParts.length > 1) {
                 folderName = firstParts[0];
             }
+        }
+        // A folder that starts a project names the tab; the multi-session
+        // loader (preloadedFiles) names it after the parent folder instead.
+        if (!preloadedFiles && !previousSession && state.sessions.length === 0 && folderName) {
+            setPageProject(folderName);
         }
 
         // Categorize files into per-camera directories
