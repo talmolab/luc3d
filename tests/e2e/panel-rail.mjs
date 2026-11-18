@@ -47,17 +47,18 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 
 const EXPECTED = [
     ['tabInstances', 'Instances'], ['tabVisibility', 'Visibility'], ['tabIdSwitches', 'ID Switches'],
-    ['tabVideos', 'Videos'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
+    ['tabVideos', 'Videos'], ['tabSuggestions', 'Suggestions'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
     ['tabMemory', 'Memory'],
 ];
 // First path of the Lucide glyph each panel must show. Instances/Visibility/
-// Videos/Skeleton are sleap-app's Users/Eye/Film/Bone; ID Switches is the
+// Videos/Suggestions/Skeleton are sleap-app's Users/Eye/Film/Lightbulb/Bone; ID Switches is the
 // two-opposing-arrows ArrowLeftRight.
 const FIRST_PATH = {
     tabInstances: 'M16 21v-2a4 4 0 0 0-4-4H6',
     tabVisibility: 'M2.062 12.348',
     tabIdSwitches: 'M8 3 4 7l4 4',
     tabVideos: null, // rect first
+    tabSuggestions: 'M15 14c.2-1 .7-1.7 1.5-2.5', // lightbulb
     tabCameras: 'M13.997 4a2 2 0 0 1',
     tabSkeleton: 'M17 10c.7-.7 1.69 0 2.5 0',
     tabSession: 'M20 10a1 1 0 0 0 1-1V6',
@@ -145,7 +146,7 @@ try {
     check(inv.allSvg, 'every icon is an inline <svg>');
     check(Object.entries(FIRST_PATH).every(([t, d]) => d === null
         ? inv.firstPath[t] === 'rect' : String(inv.firstPath[t]).startsWith(d)),
-        'each icon is the expected Lucide glyph (Users, Eye, ArrowLeftRight, Film, Camera, Bone, FolderTree)');
+        'each icon is the expected Lucide glyph (Users, Eye, ArrowLeftRight, Film, Lightbulb, Camera, Bone, FolderTree)');
     check(inv.controls, 'each icon aria-controls an existing panel');
     check(inv.rightEdge && inv.width === 44, `rail is 44px on the window's right edge (width ${inv.width})`);
     check(inv.userSelect === 'none', 'rail is user-select: none');
@@ -330,6 +331,7 @@ try {
     }));
     check(kb.focused === 'tabSkeleton' && kb.w === 132, `Tab moves between icons and keyboard focus widens the rail (${kb.focused}, ${kb.w})`);
     await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Shift+Tab');      // past Cameras and Suggestions
     await page.keyboard.press('Shift+Tab');
     await page.keyboard.press('Enter');          // Videos: not open → opens + expands
     s = await railState();

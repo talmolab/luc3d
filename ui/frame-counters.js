@@ -138,6 +138,34 @@ function storeFrameUserCount(session, cam, frameIdx, nRows, rowType, memberType)
     return labeled ? users : -1;
 }
 
+/**
+ * One frame of one camera, wherever it lives: the resident FrameGroup when
+ * there is one, else the lazy store (resolved as hydration would, see
+ * `storeFrameUserCount`). For the Suggestions panel's "Labeled" column, which
+ * asks this for a handful of (camera, frame) pairs, so it walks only that
+ * frame's rows.
+ *
+ * @param {Object} session
+ * @param {string} cam
+ * @param {number} frameIdx
+ * @returns {number} `residentFrameUserCount`'s encoding (-1 = not labeled;
+ *   > 0 = that many user instances).
+ */
+export function frameUserCountInView(session, cam, frameIdx) {
+    var fg = session.frameGroups.get(frameIdx);
+    if (fg) return residentFrameUserCount(fg, cam);
+    var loader = session.lazyLoader;
+    if (!loader || typeof loader.forEachInstanceRow !== 'function') return -1;
+    var rowType = [], memberType = [], nRows = 0;
+    loader.forEachInstanceRow(function (camName, f, trackIdx, info) {
+        if (camName !== cam || f !== frameIdx) return;
+        var off = info ? info.offsetInFrame : nRows;
+        rowType[off] = info ? info.type : 'user';
+        if (off >= nRows) nRows = off + 1;
+    }, { camera: cam, start: frameIdx, end: frameIdx + 1 });
+    return nRows ? storeFrameUserCount(session, cam, frameIdx, nRows, rowType, memberType) : -1;
+}
+
 /** A copy of `arr` long enough to index `f` (at least doubled), new slots set to `fill`. */
 function growFrameArray(arr, f, Type, fill) {
     var grown = new Type(Math.max(f + 1, arr.length * 2));

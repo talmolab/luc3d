@@ -21,7 +21,7 @@ import { rebuildVideoController } from '../loading/session-loader.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { resetPlaneState } from '../import-export/plane-metadata.js';
 import { createDemoSession } from '../demo-data.js';
-import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel } from '../ui/ui-wiring.js';
+import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel, setSoloView } from '../ui/ui-wiring.js';
 import { setupPanelRail } from '../ui/panel-rail.js';
 import { setupMemoryPanel } from '../ui/memory-panel.js';
 import { setupDemoEntry } from '../ui/demo-entry.js';
@@ -36,7 +36,8 @@ import {
 } from '../ui/plane-definition.js';
 import { setupSplitHandles } from '../ui/layout-controls.js';
 import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js';
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
+import { populateViewStrip, populateSessionStrip, activatePanelForView } from '../ui/sessions-panes.js';
+import { setupSuggestionsPanel } from '../ui/suggestions-panel.js';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
     editGroupState, cancelEditGroup, finishEditGroup, updateEditGroupToast,
@@ -74,6 +75,7 @@ async function init() {
         setupUI();
         setupPanelRail({ toggleInfoPanel });
         setupMemoryPanel();
+        setupSuggestionsPanel({ seekToFrame: navigateToFrame, focusView: focusSuggestionView });
         setupSkeletonEditing();
         setupVideosTab();
         setupRecordingInfo();
@@ -1027,6 +1029,17 @@ export function update3DViewport(frameIdx) {
         }
     }
     viewport3d.setFrame(groups);
+}
+
+/**
+ * Make `viewName` the focused view for the Suggestions panel: the solo view in
+ * single-view mode, else its pane is activated (which sets
+ * `lastInteractedView`); a view with no pane is just made the focused one.
+ */
+function focusSuggestionView(viewName) {
+    if (setSoloView(viewName)) return;
+    if (activatePanelForView(viewName)) return;
+    if (interactionManager) interactionManager.lastInteractedView = viewName;
 }
 
 /**

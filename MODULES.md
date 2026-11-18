@@ -113,6 +113,13 @@ helpers used by every load path. Calls `init()` at module-load.
 - `../ui/memory-panel.js` — `setupMemoryPanel`, right after `setupPanelRail`
   (builds `#tabMemory`, starts its once-a-second heap reading, and follows the
   rail to draw only while it is seen).
+- `../ui/suggestions-panel.js` — `setupSuggestionsPanel({ seekToFrame,
+  focusView })`, right after `setupMemoryPanel` (builds `#tabSuggestions`;
+  `seekToFrame` is `navigateToFrame`, `focusView` is the private
+  `focusSuggestionView(viewName)`: `setSoloView` in single-view mode, else
+  `activatePanelForView`, else it just sets `interactionManager.lastInteractedView`).
+  `setSoloView` (`ui/ui-wiring.js`) and `activatePanelForView`
+  (`ui/sessions-panes.js`) are imported for it.
 - `../ui/info-panel.js` — `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel` returns early with no session),
@@ -1470,6 +1477,11 @@ every revisit and would refill it, so its scores stay in the store (below).
 **Purpose.** Pure data-model classes — no DOM, no I/O. The single source of
 truth for skeletons, cameras, instances, frame groups, identities, and the
 session graph that holds them.
+
+`Session.suggestions` (`[{camera, frameIdx, group}]`, empty by default) holds
+the frames suggested for labelling by the Suggestions panel
+(`pose/suggestions.js`); `import-export/suggestions-io.js` maps it to and from
+the `.slp`'s `suggestions_json`.
 
 **Key exports.**
 - `Skeleton` — node names + edge list. Methods: `addNode`, `removeNode`,
@@ -4238,6 +4250,32 @@ checked by projecting through the real `Camera` and rotating the way CSS does)
 and `tests/e2e/align-views-to-references.mjs` (the dialog in the real app).
 Real-data check: `tests/e2e/_diag-real-align-views.mjs`.
 
+### pose/suggestions.js
+
+**Purpose.** The DOM-free half of the Suggestions panel: generating, editing
+and ordering a session's suggested frames. A suggestion is one (camera view,
+frame) pair, `{camera, frameIdx, group}` (the shape of `Session.suggestions`);
+SLEAP stores it per video, and in LUCID each camera view is one video.
+Ported from sleap-app (`suggestionStrategies.ts`, `suggestionEdits.ts`,
+`seededRng.ts`). Methods: Stride, Random, Frame chunk. Every list function
+returns a new array and never mutates its input.
+
+**Key exports.** `SUGGESTION_METHODS`, `DEFAULT_PER_VIDEO` (20),
+`mulberry32(seed)`, `suggestionKey`, `sampleFrames(nFrames, perVideo, sampling,
+range, existing, rng)`, `frameChunkFrames(nFrames, from, to)`,
+`generateSuggestions(views, params, existing)`, `suggestionExists`,
+`mergeSuggestions`, `shuffleSuggestions`, `removeUnlabeledSuggestions`,
+`removeSuggestion`, `labeledSummary(list, isLabeled)` (`{labeled, total, pct}`),
+`groupSuggestionsByView(list, cameraOrder, current)` (focused view first, then
+the session's order, then views it no longer has), `stepSuggestion(rows,
+selected, here, delta)` (Prev / Next, wraps).
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/suggestions-panel.js`.
+
+**User-facing features.** Suggestions panel. Tests: `tests/test-suggestions.mjs`.
+
 ---
 
 ## ui/
@@ -4737,9 +4775,16 @@ change), and each is rebuilt when its view is next active.
   differ here saw a change to non-resident frames (a bulk operation), which
   `updateFrameCounters` takes as its cue to drop the other views' halves.
 
+**`frameUserCountInView(session, cam, frameIdx)`** (exported) — one frame of
+one camera, resident `FrameGroup` first, else the lazy store walked for that
+frame's rows only (`forEachInstanceRow` with a one-frame range, resolved as
+hydration would via `storeFrameUserCount`); returns `residentFrameUserCount`'s
+encoding (-1 not labeled, > 0 user instances). The Suggestions panel's
+"Labeled" column.
+
 **Imports from project modules.** None.
 
-**Imported by.** `ui/rendering.js`; bridged as `window.__FrameCounters` by
+**Imported by.** `ui/rendering.js`, `ui/suggestions-panel.js`; bridged as `window.__FrameCounters` by
 `tests/test-runner.html`.
 
 **Tests.** `tests/test-frame-counters.mjs` (lazy counts equal a fully-hydrated
@@ -7117,6 +7162,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `reprojectStoredPoints3d`, `storeReprojectedInstances`.
 - `../pose/lazy-residency.js` — `dropDerivedReprojections`.
+- `./suggestions-panel.js` — `refreshSuggestionsPanel`, after each overlay
+  redraw (a no-op while the panel is off screen).
 - `../pose/pose-data.js` — `points3dNodeCount`, `isPoints3dFromFile`, `isPoints3dSmoothed`.
 - `./overlays.js` — `drawFrameOverlays`.
 - `./view-legend.js` — `syncViewLegends`.
@@ -7201,7 +7248,8 @@ A **LEAF module**: it imports nothing.
 **Imported by** `ui/plane-definition.js` (which also re-exports it, so the name
 stays reachable at its original path) and `ui/plane-nodes-panel.js`;
 `ui/plane-angle.js` and `ui/origin-definition.js` reach it through the
-`ui/plane-definition.js` re-export.
+`ui/plane-definition.js` re-export; `ui/suggestions-panel.js` (Clear all's
+confirmation).
 
 ### ui/reproj-threshold-field.js
 
@@ -9054,6 +9102,8 @@ multi-video docking layout.
   module), hoist-safe because the only read is inside the view strip's click
   handler, which cannot run during module evaluation.
 - `./info-panel.js` — `updateInfoPanel`, `populateTimelineVisibility`.
+- `./suggestions-panel.js` — `refreshSuggestionsPanel`, when the focused pane
+  changes (the panel's "current video" follows it).
 - `./loading-progress-modal.js` — `getLoadingProgressModal` (`switchSession`'s
   "Loading videos" progress).
 - `./frame-readout.js` — `clearReadout` (session removed),
@@ -10161,6 +10211,9 @@ survive reloads. The catalog is the single source of truth for the Settings ▸
 Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 
 **Catalog entries.** `{ id, label, category, binding, editable, dispatched }`.
+Two Navigation entries serve the Suggestions panel: `nextSuggestion` (`.`) and
+`prevSuggestion` (`,`), editable and dispatched (handlers wired in
+`ui/ui-wiring.js`; sleap-app's Space / Shift+Space is Play / Pause here).
 `binding` is a "+"-joined accelerator (modifier tokens: `Mod` = Ctrl-or-Cmd,
 `Ctrl`, `Cmd`/`Meta`, `Shift`, `Alt`/`Option`/`Opt`; last token is the key) for
 dispatched entries, or a free-form display string (e.g. `← / →`, `1 – 9`) for
@@ -11850,7 +11903,8 @@ chip (styles.css). Removed on every path that hides the chip, or the legend
 would sit low in grid mode.
 
 **Imports from project modules.** Nearly every other module — see file
-header for the full list. Notable ones: `app-state.js`,
+header for the full list (`setHandler('nextSuggestion' / 'prevSuggestion')`
+call `stepSuggestionNav` from `suggestions-panel.js`). Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
@@ -12961,8 +13015,8 @@ actually stops the corresponding rendering / data work.
 ### ui/panel-rail.js
 
 **Purpose.** The right-edge icon rail and the stack of collapsible panel
-sections it drives (Instances, Visibility, ID Switches, Videos, Cameras,
-Skeleton, Session, Memory); it also shows/hides the info panel. It replaced the
+sections it drives (Instances, Visibility, ID Switches, Videos, Suggestions,
+Cameras, Skeleton, Session, Memory); it also shows/hides the info panel. It replaced the
 horizontal tab bar. Modelled on sleap-app's sidebar
 (`src/components/layout/AppShell.tsx` `Sidebar`; rules in `appStore.ts`
 `togglePanelOpen` / `openPanel` / `closePanel` / `toggleSectionCollapsed`) in
@@ -13035,7 +13089,8 @@ cycle.
 **Imported by.** `pose/initialization.js` (`setupPanelRail`),
 `ui/id-switch-modal.js` (`showPanelTab` in `openIdSwitchPanel`),
 `ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`),
-`ui/memory-panel.js` (`onPanelRailChange`, `isPanelOnScreen`).
+`ui/memory-panel.js` (`onPanelRailChange`, `isPanelOnScreen`),
+`ui/suggestions-panel.js` (`onPanelRailChange`, `isPanelOnScreen`).
 
 **User-facing features.** The icon rail on the window's right edge and the
 collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
@@ -13046,7 +13101,7 @@ collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
 release sleap-app uses through `lucide-react`; ISC, notice in the file header
 and `lib/LICENSES.txt`). sleap-app's glyph wherever the panel matches:
 Instances = Users, Visibility = Eye (sleap-app's View panel), Videos = Film,
-Skeleton = Bone. Others: ID Switches = ArrowLeftRight (two opposing arrows),
+Skeleton = Bone, Suggestions = Lightbulb (sleap-app's glyph). Others: ID Switches = ArrowLeftRight (two opposing arrows),
 Cameras = Camera, Session = FolderTree, Memory = MemoryStick, plus PanelRightClose / PanelRightOpen
 and the section headers' ChevronDown / ChevronRight / X (sleap-app's).
 Inline strings: no fetch, so offline mode and the version stamp are unaffected.
@@ -13137,6 +13192,46 @@ above the ~4 GB cap.
 
 **User-facing features.** Memory panel. Tests: `tests/e2e/memory-panel.mjs`,
 `tests/test-memory-plot.mjs`, `tests/e2e/isolated-server.mjs`.
+
+### ui/suggestions-panel.js
+
+**Purpose.** The Suggestions panel (`#tabSuggestions`, right-edge rail, after
+Videos): frames suggested for labelling, per camera view. A port of sleap-app's
+Suggestions panel (count pill, method, Per video, On Generate Add / Replace,
+Target, Add labeled frames / Shuffle / Remove unlabeled, Limit to frame range,
+Generate, a table, Add current frame / Remove / Clear all, Prev / Next with
+"x/N labeled (%)"), changed for multi-camera sessions: Target is "All videos in
+session" or "Current video <camera>" (the focused view,
+`interactionManager.lastInteractedView`), and the table is grouped by view in
+collapsible groups (header: camera, labeled count and bar), the focused view's
+group first, tagged "current" and opened by itself; Prev / Next walk the groups
+in that order and open the one they land in. Table columns include a Labeled
+mark (`frameUserCountInView`) and a Score (mean score of the predicted
+instances in that view-frame, resident or `SioLazyLoader.instanceScore`).
+Frame numbers are 1-based. The list is the active session's
+`Session.suggestions`; every edit calls `markDirty()`; Clear all confirms
+through `showPlaneDialog`.
+
+It works only while on screen (`isPanelOnScreen`); the info panel is its one
+scroller. Seeking and focusing a view are handed in by `setupSuggestionsPanel`.
+
+**Key exports.** `setupSuggestionsPanel({ seekToFrame, focusView })`,
+`refreshSuggestionsPanel(opts)` (repaint; no-op off screen), `stepSuggestionNav(delta)`
+(the `nextSuggestion` / `prevSuggestion` hot keys, `.` / `,`), `currentViewName()`.
+
+**Imports from project modules.** `ui/app-state.js` (`state`,
+`interactionManager`), `ui/panel-rail.js` (`isPanelOnScreen`,
+`onPanelRailChange`), `import-export/save-load.js` (`setStatus`, `markDirty`),
+`ui/frame-readout.js` (`formatFrameNumber`), `ui/frame-counters.js`
+(`frameUserCountInView`), `ui/plane-dialog.js` (`showPlaneDialog`),
+`pose/suggestions.js` (generation, edit, grouping and step helpers).
+
+**Imported by.** `pose/initialization.js` (`setupSuggestionsPanel`),
+`ui/rendering.js` and `ui/sessions-panes.js` (`refreshSuggestionsPanel`),
+`ui/ui-wiring.js` (`stepSuggestionNav`).
+
+**User-facing features.** Suggestions panel and the Next / Previous suggestion
+shortcuts. Tests: `tests/e2e/suggestions-panel.mjs`, `tests/test-suggestions.mjs`.
 
 ### ui/memory-plot.js
 
@@ -13905,7 +14000,10 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `../import-export/frame-identity-metadata.js` (`readFrameIdentityMetadata`,
   called by `handleLoadProjectSlpLazy` after the groups are rebuilt) and
   `../import-export/plane-metadata.js` (`readPlaneMetadata`, `resetPlaneState`,
-  `planeMetadataConflict`), `../import-export/slp-provenance.js`
+  `planeMetadataConflict`), `../import-export/suggestions-io.js` (`readSuggestions`,
+  `suggestionEntriesFromLabels` — `handleLoadProjectSlpLazy` and
+  `handleLoadSessionFolderSingleSlp` set `session.suggestions`, next to
+  `readPlaneMetadata`), `../import-export/slp-provenance.js`
   (`fileSessionProvenance`, `fileSessionNames` — the single-SLP folder and lazy
   project loaders keep the file's provenance on the session).
 
@@ -14142,7 +14240,11 @@ bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 `import-export/save-load.js` (`reopenSessionLazyLoader`). `describeStoreFrame` is
 called duck-typed from `pose/lazy-residency.js`, `predictedPointScore` from
 `Session.predictedNodeScore` and `predictedPointScorer` from
-`Session.predictedNodeScorer` (`pose/pose-data.js`).
+`Session.predictedNodeScorer` (`pose/pose-data.js`). `instanceScore(camName,
+instanceRow)` returns the model's score for one predicted store row (the
+`instanceRow` `forEachInstanceRow` hands out; NaN for a user row or one with no
+score), called by `ui/suggestions-panel.js` for the Score column of a frame that
+is not resident.
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
 `.slp` files — and a large saved project `.slp` (Load Project) — load and render
@@ -15327,6 +15429,33 @@ end-of-load status, warning when the file is a compact copy).
 
 **Tests.** `tests/test-compact-save.mjs`, `tests/e2e/compact-save-copy.mjs`.
 
+### import-export/suggestions-io.js
+
+**Purpose.** A session's suggested frames (`Session.suggestions`) in and out of
+the `.slp`. SLEAP keeps them in `suggestions_json`, one `{video, frame_idx,
+group}` per entry (sleap-io.js writes them from `Labels.suggestions`); in LUCID
+each camera view is one video of the `.slp`, so a suggestion's camera name is
+mapped to that session's video for the camera (`RecordingSession.getVideo`) on
+save and back on load. Nothing is written for a session with none, so a
+project without suggestions keeps its bytes (`save-golden-digest.mjs` does not
+move).
+
+**Key exports.** `sioSuggestionsForSession(SIO, session, sioSession)` (the
+`SIO.SuggestionFrame`s; a camera with no video is skipped),
+`suggestionEntriesFromLabels(labels)` (`[{videoIdx, frameIdx, group}]`),
+`readSuggestions(session, entries, cameraForVideoIdx)` (sets
+`session.suggestions`; entries for videos not the session's are skipped,
+duplicates dropped, order kept; returns the count).
+
+**Imports from project modules.** None.
+
+**Imported by.** `import-export/save-load.js`, `import-export/slp-streaming-write.js`,
+`import-export/file-io.js`, `import-export/slp-import.js`,
+`loading/session-loader.js`.
+
+**User-facing features.** Suggestions panel persistence. Tests:
+`tests/test-suggestions.mjs` (§6), `tests/e2e/suggestions-panel.mjs`.
+
 ### import-export/slp-provenance.js
 
 **Purpose.** Keeps a loaded `.slp`'s `provenance` dict through LUC3D's project
@@ -15632,7 +15761,9 @@ session's resident/total) rather than truncate silently. Covered by
   `parseSlpViaSleapIO` fallback, and for the per-camera session-folder load,
   which passes `{ columnar: true }` to receive the poses as flat transferred
   typed arrays (`data.columnar`) instead of nested `data.frames`.
-- SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` —
+- SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` (its `slpData`
+  also carries `suggestions`, the file's `suggestions_json` by video index, via
+  `suggestionEntriesFromLabels`) —
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` and adapts
   the typed `Labels` into the `slpData` shape via the private
   `_typedInstanceToSlpData` pose transform (columnar `_xy`/`_visible` →
@@ -15692,6 +15823,7 @@ session's resident/total) rather than truncate silently. Covered by
 - `./plane-metadata.js` — `writePlaneMetadata`.
 - `./smoothing-metadata.js` — `writeSmoothingMetadata`, and `smoothingSourceFor`
   (each smoothed group's source rides on its `Instance3D` as `lucidUnsmoothed`).
+- `./suggestions-io.js` — `suggestionEntriesFromLabels`.
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `import-export/slp-streaming-write.js`
@@ -15799,8 +15931,11 @@ each holding only one session's data at a time:
     called (and awaited) as `onProgress('refs', done, total)` once before the
     synchronous pruning / overlay / row-map work, then at those yield points
     and at the end, over the session's grouped frames.
-- **`openProjectWriter(ctx, allSioSessions, provenance)`** — the single
+- **`openProjectWriter(ctx, allSioSessions, provenance, lucidSessions)`** — the single
   `SIO.openSlpWriter(...)` call, made once every session's ref graph is final.
+  `lucidSessions[i]` is the session `allSioSessions[i]` was built from; each
+  one's `suggestions` go on its own videos (`sioSuggestionsForSession`) and into
+  the writer's `suggestions`.
 - **`streamSessionIntoWriter(writer, session, refGraphResult, onProgress)`** —
   **`async`** (callers must `await`). PASS 2, per
   session: `appendFrames(overlayLfs)` + `appendStore(store, {videoIndexOffset,
@@ -15887,7 +16022,7 @@ lockstep with the eager writer in `file-io.js`, which is why both call the one
 helper); `writeFrameIdentityMetadata` (`import-export/frame-identity-metadata.js`,
 same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason);
 `writeSmoothingMetadata` + `smoothingSourceFor` (`import-export/smoothing-metadata.js`,
-same reason).
+same reason); `sioSuggestionsForSession` (`import-export/suggestions-io.js`).
 **Imported by.** `import-export/save-load.js`
 (`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
 `finalizeMultiSessionSave`).
@@ -16110,7 +16245,10 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `./smoothing-metadata.js` (Temporal Smoothing: `unsmoothedPoints3d` per group
   and the session-level key in the project JSON, same reason),
   `./slp-provenance.js` (`buildSaveProvenance` — every `.slp` project save keeps
-  the loaded files' provenance).
+  the loaded files' provenance), `./suggestions-io.js`
+  (`sioSuggestionsForSession` — the eager save passes each session's
+  suggestions into `SIO.Labels`; the streaming multi-session save hands its
+  sessions to `openProjectWriter`).
 - `../lib/sleap-io/index.browser.js` — dynamic `import()` in the private
   `ensureSleapIO()`, a fallback taken only when the `window.SleapIO` bridge in
   `index.html` is missing. The specifier resolves against THIS module, hence
@@ -16366,7 +16504,9 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
   (`readVisibilityMetadata`), `./frame-identity-metadata.js`
   (`stampFrameIdentitiesFromGroups`, `readFrameIdentityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
-  `resetPlaneState`), `./smoothing-metadata.js` (`readSmoothingMetadata`, and
+  `resetPlaneState`), `./suggestions-io.js` (`readSuggestions` — `handleLoadSlpFile`
+  puts the file's suggestions on the session through the video-index → camera
+  map, next to `readPlaneMetadata`), `./smoothing-metadata.js` (`readSmoothingMetadata`, and
   `adoptSmoothingSource` in both typed group rebuilders), `./import-track-resolve.js`
   (`remapGlobalTrackToSession`, `nulledNodesFromOcclusion`),
   `./slp-provenance.js` (`fileSessionProvenance`, `fileSessionNames` — each

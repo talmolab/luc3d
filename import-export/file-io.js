@@ -22,6 +22,7 @@ import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
+import { suggestionEntriesFromLabels } from './suggestions-io.js';
 
 // ============================================
 // Generic file picker
@@ -4092,6 +4093,8 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // The file's whole provenance dict (slp-provenance.js picks each
         // session's part).
         provenance: labels.provenance || null,
+        // `suggestions_json`, keyed by video index (suggestions-io.js).
+        suggestions: suggestionEntriesFromLabels(labels),
     };
 }
 

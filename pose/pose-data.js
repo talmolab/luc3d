@@ -1888,6 +1888,13 @@ export class Session {
          * @type {Object|null}
          */
         this.fileProvenance = null;
+        /**
+         * Frames suggested for labelling (Suggestions panel, `pose/suggestions.js`):
+         * one entry per (camera view, frame), saved as SLEAP's `suggestions_json`
+         * (`import-export/suggestions-io.js`). Empty unless the user makes some.
+         * @type {Array<{camera: string, frameIdx: number, group: number}>}
+         */
+        this.suggestions = [];
     }
 
     addIdentity(name, color) {

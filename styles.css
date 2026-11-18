@@ -3728,6 +3728,274 @@ button.tri-dropdown-item:disabled {
   top: var(--panel-section-header-height);
 }
 
+/* ---- Suggestions panel (ui/suggestions-panel.js) ----
+   sleap-app's Suggestions panel; the table is grouped by camera view. */
+#tabSuggestions [hidden] {
+  display: none;
+}
+
+.sugg-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sugg-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sugg-label {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sugg-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.sugg-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.sugg-select,
+.sugg-num {
+  height: 26px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0 6px;
+}
+
+.sugg-num {
+  width: 64px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sugg-toggle {
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.sugg-toggle.on {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.sugg-target {
+  align-items: flex-start;
+}
+
+.sugg-target > .sugg-label {
+  padding-top: 2px;
+}
+
+.sugg-radios {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.sugg-radios label,
+.sugg-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.sugg-radios input,
+.sugg-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.sugg-cam {
+  color: var(--accent-hover);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sugg-btns .panel-btn {
+  min-width: 0;
+  padding: 4px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sugg-generate {
+  height: 30px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.sugg-generate:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.sugg-generate:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sugg-group-tools {
+  margin-bottom: 6px;
+}
+
+.sugg-group-tools .sugg-hint {
+  flex: 1;
+  min-width: 0;
+}
+
+.sugg-mini {
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.sugg-table {
+  table-layout: fixed;
+}
+
+.sugg-table td.sugg-r,
+.sugg-table th.sugg-r {
+  text-align: right;
+}
+
+.sugg-table td.sugg-c,
+.sugg-table th.sugg-c {
+  text-align: center;
+}
+
+.sugg-table td.sugg-dim {
+  color: var(--text-muted);
+}
+
+.sugg-table tr.sugg-group td {
+  max-width: none;
+  padding: 5px 6px 4px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border-color);
+}
+
+.sugg-table tr.sugg-group.sugg-current td {
+  background: var(--accent-dim);
+}
+
+.sugg-caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-secondary);
+}
+
+.sugg-camname {
+  font-weight: 600;
+}
+
+.sugg-tag {
+  margin-left: 6px;
+  padding: 0 4px;
+  font-size: 9.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+}
+
+.sugg-group-count {
+  float: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.sugg-bar {
+  height: 3px;
+  margin-top: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--bg-button);
+}
+
+.sugg-bar i {
+  display: block;
+  height: 100%;
+  background: var(--success-color);
+}
+
+.sugg-table tr.sugg-item td:first-child {
+  border-left: 2px solid transparent;
+}
+
+.sugg-table tr.sugg-here td:first-child {
+  border-left-color: var(--accent);
+}
+
+.sugg-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success-color);
+}
+
+.sugg-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sugg-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sugg-nav-btn {
+  flex: none;
+}
+
+.sugg-status {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---- Memory panel (ui/memory-panel.js) ---- */
 /* Its rows are .session-info-row (display: flex), which would beat [hidden]. */
 #tabMemory [hidden] {
