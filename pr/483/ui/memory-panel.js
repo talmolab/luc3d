@@ -3,18 +3,23 @@
  * page's JavaScript heap over the last five minutes, the heap limit as a
  * reference line, and what the project holds.
  *
- * It samples once a second ONLY while its body is on screen
- * (`isPanelOnScreen`, ui/panel-rail.js): folded, closed, the info panel
- * hidden or Define Planes open, the timer is cleared and nothing runs. A
- * sample reads `performance.memory` (Chrome/Edge) and a few Map sizes
- * (`projectCounts`), then redraws one small SVG — never a walk over frames, so
- * it cannot freeze playback, Track All or Triangulate All.
+ * It reads the heap once a second from the moment the app starts, panel open
+ * or not, so opening it shows the last five minutes, a run done with it
+ * closed included. A reading is `performance.memory` (Chrome/Edge) into the
+ * ring: ~6 µs, the same on the demo and on a 5.7 GB 8-camera project.
+ * Everything else happens ONLY while its body is on screen (`isPanelOnScreen`,
+ * ui/panel-rail.js; folded, closed, the info panel hidden or Define Planes
+ * open, it is not): the redraw of one small SVG and the project counts (a few
+ * Map sizes, `projectCounts`) — never a walk over frames, so it cannot freeze
+ * playback, Track All or Triangulate All.
  *
  * Where the page is cross-origin isolated it also asks
  * `performance.measureUserAgentSpecificMemory()` (the whole page, workers
- * included) every 10 s, one call at a time; a refused call hides its rows for
- * good. The deployed site sends no COOP/COEP headers, so this stays off there;
- * `python3 server.py --isolated` sends them.
+ * included) every 10 s while on screen, one call at a time; a refused call
+ * hides its rows for good. Never while closed: Chrome forces a full garbage
+ * collection to answer when none comes within ~20 s (~140 ms on a big
+ * project). The deployed site sends no COOP/COEP headers, so this stays off
+ * there; `python3 server.py --isolated` sends them.
  *
  * Chrome 157 reports the heap live on an ordinary page. Older Chrome
  * (Playwright's Chromium 153) without `--enable-precise-memory-info` rounds it
@@ -24,13 +29,13 @@
  * The samples live in a ring in memory (`MemoryRing`): nothing goes to the
  * `.slp` or `localStorage`. Test hook: `window.__lucidMemoryPanel`.
  */
-import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=96cbc970dac4';
-import { setInfoTip, ICON_INFO } from './info-tip.js?v=96cbc970dac4';
-import { state } from './app-state.js?v=96cbc970dac4';
+import { onPanelRailChange, isPanelOnScreen } from './panel-rail.js?v=4c5ac4ca71b8';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=4c5ac4ca71b8';
+import { state } from './app-state.js?v=4c5ac4ca71b8';
 import {
     MEMORY_SAMPLE_MS, MEMORY_WINDOW_MS, UA_MEMORY_EVERY_MS,
     MemoryRing, readHeap, summarizeUaMemory, projectCounts, formatMB, plotGeometry,
-} from './memory-plot.js?v=96cbc970dac4';
+} from './memory-plot.js?v=4c5ac4ca71b8';
 
 const TAB = 'tabMemory';
 const PLOT_W = 260;
@@ -43,6 +48,8 @@ export const MEMORY_INFO_TEXT =
 
 const ring = new MemoryRing();
 let _timer = null;
+/** The panel's body is on screen: draw, and ask for the whole page. */
+let _onScreen = false;
 let _uaBusy = false;
 let _uaLastAt = -Infinity;
 let _ua = null; // { bytes, workers, t }
@@ -74,7 +81,7 @@ function maybeMeasureUa(now) {
 function sample() {
     const now = performance.now();
     const heap = readHeap(performance);
-    maybeMeasureUa(now);
+    if (_onScreen) maybeMeasureUa(now);
     // A whole-page reading older than 30 s is not drawn as current.
     const ua = _ua && now - _ua.t < 30000 ? _ua.bytes : NaN;
     ring.push({
@@ -85,7 +92,7 @@ function sample() {
         ua: ua,
     });
     _samplesTaken++;
-    render(heap, now);
+    if (_onScreen) render(heap, now);
 }
 
 function setText(el, text) {
@@ -132,22 +139,11 @@ function render(heap, now) {
     setText(e.sessions, c.sessions.toLocaleString('en-US'));
 }
 
-function start() {
-    if (_timer) return;
-    sample();
-    _timer = setInterval(sample, MEMORY_SAMPLE_MS);
-}
-
-function stop() {
-    if (!_timer) return;
-    clearInterval(_timer);
-    _timer = null;
-}
-
-/** Start or stop sampling to match whether the panel's body is on screen. */
+/** Draw (and ask for the whole page) only while the panel's body is on screen; it draws at once on opening. */
 export function syncMemorySampling() {
-    if (isPanelOnScreen(TAB)) start();
-    else stop();
+    const was = _onScreen;
+    _onScreen = isPanelOnScreen(TAB);
+    if (_onScreen && !was) render(readHeap(performance), performance.now());
 }
 
 function svgEl(tag, attrs) {
@@ -291,11 +287,16 @@ export function setupMemoryPanel() {
     const pane = document.getElementById(TAB);
     if (!pane) return;
     _els = build(pane);
+    if (!_timer) {
+        sample();
+        _timer = setInterval(sample, MEMORY_SAMPLE_MS);
+    }
     onPanelRailChange(syncMemorySampling);
     syncMemorySampling();
     if (typeof window !== 'undefined') {
         window.__lucidMemoryPanel = {
             isSampling: function () { return !!_timer; },
+            isDrawing: function () { return _onScreen; },
             samplesTaken: function () { return _samplesTaken; },
             samples: function () { return ring.toArray(); },
         };

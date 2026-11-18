@@ -28,9 +28,9 @@
  * scrolls its header to the top, and never hides or folds anything — never
  * `.click()` a rail button for that, since clicking the expanded one folds it.
  *
- * A panel that works only while it is seen (the Memory panel samples once a
- * second) asks `isPanelOnScreen(tabId)` from an `onPanelRailChange` listener,
- * called after every repaint of the rail.
+ * A panel that works only while it is seen (the Memory panel draws its plot
+ * only then) asks `isPanelOnScreen(tabId)` from an `onPanelRailChange`
+ * listener, called after every repaint of the rail.
  *
  * Which panels are open / folded is display taste: remembered in
  * `localStorage` (best-effort), restored once at setup, never in the `.slp`.
@@ -43,7 +43,7 @@
  * `setupPanelRail` (it lives in `ui/ui-wiring.js`, which would close a cycle
  * for `ui/id-switch-modal.js` and `ui/plane-definition.js`).
  */
-import { railIconSvg } from './panel-rail-icons.js?v=96cbc970dac4';
+import { railIconSvg } from './panel-rail-icons.js?v=4c5ac4ca71b8';
 
 /** Rail and stack order = the old tab bar's order. `tab` is the `.panel-tab-content` element id. */
 export const PANEL_RAIL_PANELS = [
