@@ -185,7 +185,10 @@ export function createWorkerJobs(container, props) {
         busyJobId = job.jobId; render();
         try {
             if (S().selectedWorkerId !== p.workerId) await S().connectToWorker(p.workerId);
-            await loadJobPredictions({ workerId: p.workerId, jobId: job.jobId, mine: job.project ? job.project.id === myProjectId() : false });
+            await loadJobPredictions({
+                workerId: p.workerId, jobId: job.jobId, mine: job.project ? job.project.id === myProjectId() : false,
+                jobs: jobs, closeWindow: p.onCloseWindow,
+            });
         } catch (err) {
             notify.error('Fetch & Load failed', { description: errMsg(err) });
         } finally {

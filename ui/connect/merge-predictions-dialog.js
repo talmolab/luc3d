@@ -11,14 +11,27 @@
  *    by name and offers only Download .slp;
  *  - an untagged job asks "Merge into view" (the view its paths name is preselected, else none and Merge
  *    waits), skeleton-checked first, Replace mode, then marked fetched;
- *  - no Open predictions; Download .slp goes through `downloadBytes`; Esc waits while merging.
+ *  - "Open predictions" is "Open as new project" and opens the job's whole RUN (one track job per camera)
+ *    as one session, one camera per video (naming: `pose/connect/open-predictions-plan.js`); it is offered
+ *    with or without a project open (not on the other-session route: that project already has the
+ *    session), shows which cameras open and which jobs of the run are left out (still running, failed…),
+ *    fetches the other jobs here (closing the dialog cancels, nothing changed), asks before closing an
+ *    open project (unsaved changes named), then resets, drops the old project's file handle (so Save
+ *    never overwrites it), loads through `handleLoadSlpFile(file, {slpData})` (its video-folder prompt,
+ *    so the Connect window closes first), leaves the project dirty (new, unsaved) and marks the jobs
+ *    fetched. With no project open sleap-app opens straight away; here the dialog stays, since the
+ *    open asks for a video folder and the cameras have no calibration;
+ *  - Download .slp goes through `downloadBytes`; Esc waits while merging (while Open fetches the run it cancels).
  */
 import { useConnectStore } from '../../pose/connect/store.js';
 import { lucidProjectTag } from '../../pose/connect/project-tag.js';
+import { runJobsToOpen, combinePredictions } from '../../pose/connect/open-predictions-plan.js';
 import { state } from '../app-state.js';
-import { parseSlpForImport } from '../../import-export/slp-import.js';
+import { parseSlpForImport, handleLoadSlpFile } from '../../import-export/slp-import.js';
 import { validateSkeletonCompatibility } from '../../import-export/slp-merge.js';
 import { downloadBytes } from '../../import-export/file-io.js';
+import { newProject, markDirty } from '../../import-export/save-load.js';
+import { askConfirm } from '../ask.js';
 import { mergeViewPredictions } from '../inference-merge.js';
 import { fetchAndLoadJobs, fetchJobPredictions, openProjectInfo } from './remote-inference.js';
 import { notify } from './notify.js';
@@ -35,6 +48,12 @@ function sessionViews() {
     return s && s.cameras ? s.cameras.map(function (c) { return c.name; }) : [];
 }
 
+/**
+ * Something would be lost by a reset: a session or views (what File ▸ New Project asks about), or 3D points
+ * imported without a session (`handleLoadSlpFile` would ask about those, but the reset comes first).
+ */
+function projectOpen() { return !!state.session || (state.views && state.views.length > 0) || !!state.has3dImportWithoutSession; }
+
 /** sleap-app `shouldAutoMerge`, in LUCID's terms: this project's job for a view of the open session. */
 function planFetchRoute(tracked, mine, session) {
     if (!tracked || tracked.camera === undefined || tracked.sessionId === undefined) return { kind: 'ask' };
@@ -47,16 +66,29 @@ function planFetchRoute(tracked, mine, session) {
     return { kind: 'auto' };
 }
 
+function trackedJob(workerId, jobId) {
+    return useConnectStore.getState().trackedJobs.find(function (j) { return j.jobId === jobId && j.workerId === workerId; });
+}
+
+/** How a job of the run is named in the dialog: the view it was submitted for, else its video's name. */
+function jobName(workerId, job) {
+    const t = trackedJob(workerId, job.jobId);
+    if (t && t.camera) return t.camera;
+    const p = String(job.labelsPath || '').split(/[\\/]/).pop();
+    return p || job.jobId.slice(0, 8);
+}
+
 /**
- * Fetch & Load a completed track job. Resolves when the job is merged, the dialog closed, or it failed
- * (an error is toasted or shown in the dialog).
+ * Fetch & Load a completed track job. Resolves when the job is merged or opened, the dialog closed, or it
+ * failed (an error is toasted or shown in the dialog).
  *
- * @param {{workerId: string, jobId: string, mine: boolean}} o
+ * @param {{workerId: string, jobId: string, mine: boolean, jobs?: any[], closeWindow?: () => void}} o
+ *   `jobs`: the worker's job list (the run's other jobs open with it); `closeWindow`: closes the Connect
+ *   window before a new project opens.
  * @returns {Promise<void>}
  */
 export async function loadJobPredictions(o) {
-    const st = useConnectStore.getState();
-    const tracked = st.trackedJobs.find(function (j) { return j.jobId === o.jobId && j.workerId === o.workerId; });
+    const tracked = trackedJob(o.workerId, o.jobId);
     const route = planFetchRoute(tracked, o.mine, state.session);
     if (route.kind === 'auto') {
         const lines = [];
@@ -68,12 +100,14 @@ export async function loadJobPredictions(o) {
         else if (!r.cancelled) notify.error('Fetch & Load failed', { description: (lines[lines.length - 1] || '').replace(/^✗ /, '') });
         return;
     }
-    await openMergePredictionsDialog({ workerId: o.workerId, jobId: o.jobId, tracked: tracked, route: route });
+    await openMergePredictionsDialog({
+        workerId: o.workerId, jobId: o.jobId, tracked: tracked, route: route, jobs: o.jobs, closeWindow: o.closeWindow,
+    });
 }
 
 /**
  * The dialog. Resolves when it is closed.
- * @param {{workerId: string, jobId: string, tracked?: any, route?: {kind: string, sessionId?: string}}} o
+ * @param {{workerId: string, jobId: string, tracked?: any, route?: {kind: string, sessionId?: string}, jobs?: any[], closeWindow?: () => void}} o
  * @returns {Promise<void>}
  */
 function openMergePredictionsDialog(o) {
@@ -100,7 +134,12 @@ function openMergePredictionsDialog(o) {
         card.append(head, body);
         scrim.appendChild(card);
 
-        let file = null, slpData = null, jobLabelsPath = null, skeleton = null, viewSelect = null, chosenView = null;
+        let file = null, slpData = null, detail = null, jobLabelsPath = null, skeleton = null, viewSelect = null, chosenView = null;
+        const otherSession = !!(o.route && o.route.kind === 'other-session');
+        // The run this job belongs to: the jobs that open with it and those left out. Without the worker's
+        // list (a caller that has none) it is this job alone.
+        const run = runJobsToOpen(o.jobs && o.jobs.some(function (j) { return j.jobId === o.jobId; }) ? o.jobs
+            : [{ jobId: o.jobId, kind: 'track', state: 'completed' }], o.jobId);
 
         function spinner(text) {
             const r = el('div', 'cj-merge-wait');
@@ -117,7 +156,7 @@ function openMergePredictionsDialog(o) {
                 desc.append('From inference on ');
                 desc.appendChild(el('span', 'cj-mono', jobLabelsPath || 'this job'));
             }
-            if (stage.kind === 'loading' || stage.kind === 'merging') { body.appendChild(spinner(stage.text)); return; }
+            if (stage.kind === 'loading' || stage.kind === 'merging' || stage.kind === 'opening') { body.appendChild(spinner(stage.text)); return; }
             if (stage.kind === 'error') { body.appendChild(el('p', 'cj-merge-error', stage.message)); return; }
 
             const session = state.session;
@@ -125,7 +164,7 @@ function openMergePredictionsDialog(o) {
             const box = el('div', 'cj-merge-box');
             const proj = openProjectInfo();
             box.appendChild(el('span', null, session ? 'Open project: ' + (proj.fileName || 'untitled.slp') : 'No project open'));
-            if (o.route && o.route.kind === 'other-session') {
+            if (otherSession) {
                 box.appendChild(el('span', null, '! These results are for session ' + o.route.sessionId + '. Switch to it to merge them.'));
             } else if (session) {
                 const ok = !skeleton || !skeleton.error;
@@ -138,9 +177,23 @@ function openMergePredictionsDialog(o) {
                 const nf = slpData.frames ? slpData.frames.length : 0;
                 box.appendChild(el('span', 'cj-merge-preds', 'Predictions: ' + (names.length ? names.join(', ') : 'no video name') + ' \u00b7 ' + nf.toLocaleString('en-US') + (nf === 1 ? ' frame' : ' frames')));
             }
+            if (!otherSession) {
+                const n = run.open.length;
+                const runLine = el('span', 'cj-merge-run');
+                runLine.id = 'cjOpenRun';
+                runLine.textContent = n > 1
+                    ? 'This run: ' + n.toLocaleString('en-US') + ' cameras (' + run.open.map(function (j) { return jobName(o.workerId, j); }).join(', ') + ')'
+                    : 'This run: 1 camera';
+                box.appendChild(runLine);
+                run.leftOut.forEach(function (l) {
+                    const line = el('span', 'cj-merge-line cj-merge-leftout');
+                    line.append(el('span', 'cj-warn', '!'), jobName(o.workerId, l.job) + ' is left out: ' + l.reason);
+                    box.appendChild(line);
+                });
+            }
             body.appendChild(box);
 
-            const canMerge = !!session && views.length > 0 && !(o.route && o.route.kind === 'other-session') && !(skeleton && skeleton.error);
+            const canMerge = !!session && views.length > 0 && !otherSession && !(skeleton && skeleton.error);
             const row = el('div', 'cj-merge-actions');
             if (canMerge) {
                 const lab = el('label', 'cj-merge-pick', 'Merge into view ');
@@ -163,8 +216,14 @@ function openMergePredictionsDialog(o) {
                 viewSelect.addEventListener('change', function () { mergeBtn.disabled = !viewSelect.value; });
                 mergeBtn.addEventListener('click', function () { if (viewSelect.value) void doMerge(viewSelect.value); });
                 row.appendChild(mergeBtn);
-            } else if (!session) {
-                row.appendChild(el('span', 'cj-muted', 'Open a project to merge these predictions, or download them.'));
+            }
+            if (!otherSession) {
+                const openBtn = button('connect-btn ' + (session ? 'connect-btn-outline' : 'connect-btn-primary'), 'Open as new project');
+                openBtn.id = 'cjOpenProject';
+                openBtn.title = 'Open ' + (run.open.length > 1 ? 'this run\u2019s ' + run.open.length + ' cameras' : 'these predictions') +
+                    ' as a new, unsaved project (you pick the videos; no calibration)';
+                openBtn.addEventListener('click', function () { void doOpen(); });
+                row.appendChild(openBtn);
             }
             const dl = button('connect-btn connect-btn-outline', 'Download .slp');
             dl.id = 'cjMergeDownload';
@@ -207,6 +266,97 @@ function openMergePredictionsDialog(o) {
             }
         }
 
+        /** Fetch (and parse) every job of the run that opens: this one is already here. */
+        async function fetchRun() {
+            const parts = [], failed = [];
+            for (let i = 0; i < run.open.length; i++) {
+                if (closed) return null;
+                const j = run.open[i];
+                const name = jobName(o.workerId, j);
+                const t = trackedJob(o.workerId, j.jobId);
+                const step = run.open.length > 1 ? ' (' + (i + 1) + '/' + run.open.length + ')' : '';
+                try {
+                    let f = file, d = slpData, det = detail;
+                    if (j.jobId !== o.jobId) {
+                        stage = { kind: 'opening', text: 'Fetching ' + name + step + '…' };
+                        render();
+                        const got = await fetchJobPredictions(o.workerId, j.jobId, {
+                            name: j.jobId,
+                            onProgress: function (done, total) {
+                                if (closed) throw new Error('Cancelled');
+                                stage = { kind: 'opening', text: 'Fetching ' + name + step + '… ' + mb(done) + ' / ' + mb(total) + ' MB' };
+                                render();
+                            },
+                        });
+                        if (closed) return null;
+                        f = got.file; det = got.detail;
+                        d = await parseSlpForImport(f, function () {});
+                    }
+                    const spec = (det && det.spec) || {};
+                    parts.push({
+                        jobId: j.jobId, file: f, slpData: d,
+                        camera: t && t.camera, sessionId: t && t.sessionId,
+                        outputPath: spec.output_path, dataPath: spec.data_path || (det && det.labelsPath) || j.labelsPath,
+                    });
+                } catch (err) {
+                    if (closed) return null;
+                    failed.push({ name: name, message: errMsg(err) });
+                }
+            }
+            return { parts: parts, failed: failed };
+        }
+
+        async function doOpen() {
+            if (!file || stage.kind !== 'ready') return;
+            stage = { kind: 'opening', text: 'Opening predictions…' };
+            render();
+            const back = function () { if (!closed) { stage = { kind: 'ready' }; render(); } };
+            const got = await fetchRun();
+            if (!got || closed) return;
+            let combined;
+            try {
+                if (!got.parts.length) throw new Error(got.failed.map(function (f) { return f.name + ': ' + f.message; }).join('; ') || 'nothing to open');
+                combined = combinePredictions(got.parts);
+            } catch (err) {
+                notify.error('Could not open these predictions', { description: errMsg(err) });
+                back();
+                return;
+            }
+            const camNames = combined.cameras.map(function (c) { return c.name; });
+            const missing = run.leftOut.map(function (l) { return jobName(o.workerId, l.job) + ' (' + l.reason + ')'; })
+                .concat(got.failed.map(function (f) { return f.name + ' (could not be fetched: ' + f.message + ')'; }));
+            if (projectOpen() || got.failed.length) {
+                stage = { kind: 'opening', text: 'Opening session ' + combined.sessionName + '\u2026' };
+                render();
+                const msg = (projectOpen() ? (state.isDirty ? 'Unsaved changes to the open project will be lost. ' : 'This closes the open project. ') : '') +
+                    'Open session ' + combined.sessionName + ' (' + camNames.join(', ') + ') as a new project?' +
+                    (missing.length ? ' Left out: ' + missing.join(', ') + '.' : '');
+                const ok = await askConfirm(msg, { title: 'Open as new project', okLabel: 'Open', cancelLabel: 'Cancel' });
+                if (closed) return;
+                if (!ok) { back(); return; }
+            }
+
+            // Past this point the open project is replaced. The Connect window and this dialog close first:
+            // the load asks for the videos' folder.
+            close();
+            if (o.closeWindow) { try { o.closeWindow(); } catch (e) { /* closing anyway */ } }
+            await newProject(true);
+            // The old project's file must not receive this one on Save (resetProject keeps the handle).
+            state.slpFileHandle = null;
+            const loadFile = got.parts.length === 1 ? got.parts[0].file
+                : new File([], combined.sessionName.replace(/[^A-Za-z0-9._-]+/g, '_') + '.predictions.slp');
+            const loaded = await handleLoadSlpFile(loadFile, { slpData: combined.slpData });
+            if (loaded !== true || !state.session) {
+                notify.error('Could not open these predictions', { description: (document.getElementById('statusText') || {}).textContent || '' });
+                return;
+            }
+            markDirty();
+            got.parts.forEach(function (p) { useConnectStore.getState().markJobFetched(p.jobId); });
+            notify.success('Opened ' + (camNames.length === 1 ? camNames[0] : camNames.length + ' cameras') + ' as a new, unsaved project (session ' +
+                combined.sessionName + ').', { description: 'No calibration: use Load Calibration to triangulate.' +
+                (missing.length ? ' Left out: ' + missing.join(', ') + '.' : '') });
+        }
+
         async function doDownload() {
             if (!file) return;
             try {
@@ -215,6 +365,8 @@ function openMergePredictionsDialog(o) {
                 notify.error('Download failed', { description: errMsg(err) });
             }
         }
+
+        function mb(b) { return Math.round(b / 1048576 * 10) / 10; }
 
         function close() {
             if (closed) return;
@@ -226,7 +378,7 @@ function openMergePredictionsDialog(o) {
         }
         x.addEventListener('click', close);
         scrim.addEventListener('mousedown', function (e) { if (e.target === scrim) close(); });
-        // Esc waits while a merge runs.
+        // Esc waits while a merge runs; while the run is being fetched for Open it cancels (nothing changed yet).
         const trap = trapModal(scrim, card, { onEscape: function () { if (stage.kind !== 'merging') close(); } });
         document.body.appendChild(scrim);
         render();
@@ -234,7 +386,6 @@ function openMergePredictionsDialog(o) {
 
         (async function load() {
             try {
-                const mb = function (b) { return Math.round(b / 1048576 * 10) / 10; };
                 const got = await fetchJobPredictions(o.workerId, o.jobId, {
                     name: o.jobId,
                     onProgress: function (done, total) {
@@ -245,9 +396,11 @@ function openMergePredictionsDialog(o) {
                 });
                 if (closed) return;
                 file = got.file;
+                detail = got.detail;
                 jobLabelsPath = got.detail && got.detail.labelsPath ? got.detail.labelsPath : null;
-                if (state.session && !(o.route && o.route.kind === 'other-session')) {
-                    slpData = await parseSlpForImport(file, function () {});
+                // The other-session route offers only Download: nothing to read.
+                if (!otherSession) slpData = await parseSlpForImport(file, function () {});
+                if (state.session && !otherSession) {
                     const incoming = slpData.skeleton || { nodes: [] };
                     skeleton = validateSkeletonCompatibility(state.session.skeleton, { nodes: incoming.nodes || [] });
                     if (skeleton.error) skeleton = { error: 'Skeleton mismatch: ' + skeleton.error };

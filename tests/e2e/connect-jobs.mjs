@@ -20,7 +20,8 @@
  *     history replayed, live lines, Errors only, Wrap, Copy, an inference job has logs only, Stop Early /
  *     Cancel only while running and `canStop`, failure detail, the loss plot draws, Esc / X close, and
  *     the stream resumes after the worker reconnects.
- *  E. Fetch & Load: with no project open the dialog offers only Download .slp; a job this page
+ *  E. Fetch & Load: with no project open the dialog offers Open as new project and Download .slp, no
+ *     Merge (the open itself: `connect-open-predictions.mjs`); a job this page
  *     submitted for a view of the open session merges straight into it (Replace, 20 predictions, the
  *     user label kept, marked fetched); one for another session is refused with its name; a job with no
  *     LUCID tag asks for the view (skeleton check, merges into the picked view) or downloads the .slp.
@@ -557,8 +558,8 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     await btn('Fetch & Load').click();
     await page.waitForSelector('.cj-merge');
     await page.waitForFunction(() => document.querySelector('#cjMergeDownload'), null, { timeout: 30000 });
-    const nopro = await page.evaluate(() => ({ text: document.querySelector('.cj-merge').textContent, merge: !!document.getElementById('cjMergeGo'), title: document.querySelector('.cj-merge .cj-card-title-text').textContent }));
-    check(nopro.title === 'Load predictions' && /No project open/.test(nopro.text) && !nopro.merge, 'no project open: "Load predictions" says so and offers only Download .slp', nopro);
+    const nopro = await page.evaluate(() => ({ text: document.querySelector('.cj-merge').textContent, merge: !!document.getElementById('cjMergeGo'), open: !!document.getElementById('cjOpenProject'), title: document.querySelector('.cj-merge .cj-card-title-text').textContent }));
+    check(nopro.title === 'Load predictions' && /No project open/.test(nopro.text) && !nopro.merge && nopro.open, 'no project open: "Load predictions" says so and offers Open as new project and Download .slp, no Merge', nopro);
     const dl = page.waitForEvent('download');
     await page.click('#cjMergeDownload');
     const dlf = await dl;
@@ -684,8 +685,8 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     await page.waitForFunction(() => document.querySelector('#jobsHost .cj-job button[data-act="fetch"]'), null, { timeout: 10000 });
     await btn('Fetch & Load').click();
     await page.waitForSelector('.cj-merge #cjMergeDownload', { timeout: 30000 });
-    const os = await page.evaluate(() => ({ text: document.querySelector('.cj-merge').textContent, merge: !!document.getElementById('cjMergeGo') }));
-    check(/These results are for session some_other_session/.test(os.text) && !os.merge, 'refused with the session name; only Download .slp', os);
+    const os = await page.evaluate(() => ({ text: document.querySelector('.cj-merge').textContent, merge: !!document.getElementById('cjMergeGo'), open: !!document.getElementById('cjOpenProject') }));
+    check(/These results are for session some_other_session/.test(os.text) && !os.merge && !os.open, 'refused with the session name; only Download .slp', os);
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.cj-merge'));
     check(!(await counts())['cam2:predicted'], 'nothing was merged');
