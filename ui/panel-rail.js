@@ -28,9 +28,9 @@
  * scrolls its header to the top, and never hides or folds anything — never
  * `.click()` a rail button for that, since clicking the expanded one folds it.
  *
- * A panel that works only while it is seen (the Memory panel samples once a
- * second) asks `isPanelOnScreen(tabId)` from an `onPanelRailChange` listener,
- * called after every repaint of the rail.
+ * A panel that works only while it is seen (the Memory panel draws its plot
+ * only then) asks `isPanelOnScreen(tabId)` from an `onPanelRailChange`
+ * listener, called after every repaint of the rail.
  *
  * Which panels are open / folded is display taste: remembered in
  * `localStorage` (best-effort), restored once at setup, never in the `.slp`.

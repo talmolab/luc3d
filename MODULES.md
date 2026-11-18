@@ -111,7 +111,8 @@ helpers used by every load path. Calls `init()` at module-load.
   right-edge icon rail and wraps each panel in its collapsible section; `toggleInfoPanel` from `../ui/ui-wiring.js` is handed
   in so the rail stays free of that import).
 - `../ui/memory-panel.js` — `setupMemoryPanel`, right after `setupPanelRail`
-  (builds `#tabMemory` and follows the rail to sample only while it is seen).
+  (builds `#tabMemory`, starts its once-a-second heap reading, and follows the
+  rail to draw only while it is seen).
 - `../ui/info-panel.js` — `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel` returns early with no session),
@@ -12991,8 +12992,8 @@ its default multi-panel (accordion) mode.
   covers the panel's right edge until the pointer leaves it.
 - The rail is a sibling AFTER `#infoPanelWrapper` in `.main-content`, so a
   collapsed wrapper still measures 0 wide and `isInfoPanelVisible` is unchanged.
-- **Panels that work only while seen** (the Memory panel samples once a
-  second) register `onPanelRailChange(fn)`; `syncPanelRail` calls every
+- **Panels that work only while seen** (the Memory panel draws its plot only
+  then) register `onPanelRailChange(fn)`; `syncPanelRail` calls every
   listener after each repaint (open, fold, close, info panel shown/hidden,
   Define Planes lock), and the listener asks `isPanelOnScreen(tabId)`
   (expanded, info panel shown, not locked; scrolled out of view still counts).
@@ -13052,12 +13053,16 @@ memory of the project's frames, `(lazy)` when lazy; frames with instance
 groups, the size of the frame-keyed `instanceGroups`; sessions). An ⓘ says what the number leaves out (workers, video decoding,
 Chrome's GPU and other processes) and that typed arrays count, so it can read
 above the ~4 GB cap.
-- **Samples once a second ONLY while on screen** (`onPanelRailChange` →
-  `isPanelOnScreen`): folded, closed, info panel hidden or Define Planes open,
-  the interval is cleared. A sample reads `performance.memory` and Map sizes
-  (`projectCounts`) and rewrites a few attributes: never a walk over frames,
-  so it cannot stall playback, Track All or Triangulate All. A gap in sampling
-  is a gap in the line.
+- **Reads the heap once a second from app start, open or not**, so opening
+  the panel shows the last five minutes (a run done with it closed included).
+  A reading is `performance.memory` into the ring: ~6 µs, the same on the demo
+  and on a 5.7 GB 8-camera project after Track All.
+- **Draws ONLY while on screen** (`onPanelRailChange` → `isPanelOnScreen`;
+  folded, closed, info panel hidden or Define Planes open, it is not): the SVG,
+  the rows and the project counts (Map sizes, `projectCounts`), at once on
+  opening and then with each reading. Never a walk over frames, so it cannot
+  stall playback, Track All or Triangulate All. A gap in the readings (a
+  throttled background tab) is a gap in the line.
 - **Chrome 157 reports `performance.memory` live** on an ordinary page (checked
   in a real, non-automated window and on luc3d.sleap.ai), no flag needed.
   Older Chrome (Playwright's Chromium 153), and `about:blank` in any, rounds it
@@ -13067,7 +13072,9 @@ above the ~4 GB cap.
 - **Firefox / Safari** (no `performance.memory`): "Not available in this
   browser" instead of the plot; the project rows still update.
 - **`measureUserAgentSpecificMemory()`** (whole page, workers included) only
-  where `crossOriginIsolated`: at most every 10 s, one call in flight, shown as
+  where `crossOriginIsolated` and only while on screen (Chrome forces a full GC
+  to answer when none comes within ~20 s: ~140 ms on a big project, so never
+  in the background): at most every 10 s, one call in flight, shown as
   two rows and an orange line (named in the legend only while it is shown).
   The deployed site sends no COOP/COEP headers,
   so it is off there; `python3 server.py --isolated` sends them. A refused call
@@ -13080,7 +13087,7 @@ above the ~4 GB cap.
 
 **Key exports.** `setupMemoryPanel()` (once, after `setupPanelRail`),
 `syncMemorySampling()`, `MEMORY_INFO_TEXT`. Test hook
-`window.__lucidMemoryPanel` (`isSampling`, `samplesTaken`, `samples`).
+`window.__lucidMemoryPanel` (`isSampling`, `isDrawing`, `samplesTaken`, `samples`).
 
 **Imports from project modules.** `ui/panel-rail.js` (`onPanelRailChange`,
 `isPanelOnScreen`), `ui/info-tip.js` (`setInfoTip`, `ICON_INFO`),

@@ -3,15 +3,16 @@
  * page's JavaScript heap over time, reached from the right-edge panel rail.
  *
  * What this pins:
- *   §1  Nothing samples until the panel is on screen. Opened from the rail it
- *       samples once a second: the plot gets a line, the reading is a
- *       `[\d,]+ MB` number, the heap limit is a reference line, and with
+ *   §1  The heap is read once a second from app start, but nothing is drawn
+ *       until the panel is on screen. Opened from the rail it draws the
+ *       readings it already has at once: the plot gets a line, the reading is
+ *       a `[\d,]+ MB` number, the heap limit is a reference line, and with
  *       `--enable-precise-memory-info` the reading follows allocations. The ⓘ
  *       says what the number leaves out (workers, GPU process).
- *   §2  Sampling STOPS when the panel is folded, when the info panel is hidden
- *       (`I`), and when the panel is closed (✕), and starts again when it
- *       comes back. The samples stay in memory only: nothing in localStorage
- *       but the rail's own open/folded list.
+ *   §2  Folded, with the info panel hidden (`I`), or closed (✕), the panel
+ *       stops DRAWING but keeps reading: shown again, the line has no gap.
+ *       The samples stay in memory only: nothing in localStorage but the
+ *       rail's own open/folded list.
  *   §3  The project rows count frames in memory and frames with groups (demo).
  *   §4  A rounded reading (older Chrome without the flag; stubbed, since
  *       Chrome 157 reads live) is flagged in the panel.
@@ -19,8 +20,9 @@
  *       no plot; the project rows still work.
  *   §6  A cross-origin-isolated page with `measureUserAgentSpecificMemory`
  *       (stubbed here; LUCID sends no COOP/COEP) shows the whole page and its
- *       workers as rows and a second line; where the browser refuses the call
- *       (Playwright's Chromium does), the rows go away.
+ *       workers as rows and a second line, asking only while the panel is on
+ *       screen; where the browser refuses the call (Playwright's Chromium
+ *       does), the rows go away.
  *
  * Run: node memory-panel.mjs   (serves the app itself)
  */
@@ -56,6 +58,7 @@ const panelState = page => page.evaluate(() => {
     const vis = id => { const el = document.getElementById(id); return !!el && el.getClientRects().length > 0; };
     return {
         sampling: m.isSampling(),
+        drawing: m.isDrawing(),
         taken: m.samplesTaken(),
         used: m.samples().map(s => s.used),
         now: document.getElementById('memoryNow').textContent,
@@ -78,11 +81,14 @@ const panelState = page => page.evaluate(() => {
 
 const openPanel = page => page.click('#panelRail .panel-rail-btn[data-tab="tabMemory"]');
 const waitTaken = (page, n) => page.waitForFunction(k => window.__lucidMemoryPanel.samplesTaken() >= k, n, { timeout: 15000 });
-/** Wait 2.5 sample periods and report how many samples arrived meanwhile. */
-const takenOver = async (page) => {
-    const a = (await panelState(page)).taken;
+/** How many separate pieces a path has. */
+const moves = p => (p.match(/M/g) || []).length;
+/** Wait 2.5 sample periods: how many readings arrived, and did the plot or the reading change? */
+const whileHidden = async (page) => {
+    const a = await panelState(page);
     await page.waitForTimeout(2500);
-    return (await panelState(page)).taken - a;
+    const b = await panelState(page);
+    return { taken: b.taken - a.taken, redrawn: a.path !== b.path || a.now !== b.now, drawing: b.drawing };
 };
 const MB_RE = /^[\d,]+ MB$/;
 
@@ -93,13 +99,15 @@ try {
     // ---- §1 sampling while on screen ----
     {
         const { context, page } = await openApp(precise);
-        let s = await panelState(page);
-        check(!s.sampling && s.taken === 0, 'nothing samples before the panel is opened');
-        await openPanel(page);
         await waitTaken(page, 3);
+        let s = await panelState(page);
+        check(s.sampling && !s.drawing && s.path === '' && s.now === '–',
+            `the heap is read from app start (${s.taken} readings), but nothing is drawn before the panel is opened`, s);
+        await openPanel(page);
         s = await panelState(page);
-        check(s.sampling && s.plot && MB_RE.test(s.now) && /^M[\d.]+ [\d.]+(L[\d.]+ [\d.]+)+$/.test(s.path),
-            `opened from the rail it samples once a second and draws a line (${s.now})`, s);
+        check(s.drawing && s.plot && MB_RE.test(s.now) && /^M[\d.]+ [\d.]+(L[\d.]+ [\d.]+){2,}$/.test(s.path),
+            `opened from the rail it draws the readings it already has at once (${s.now})`, s);
+        await waitTaken(page, s.taken + 1);
         check(s.limitShown && MB_RE.test(s.limit), `the heap limit is a reference line (${s.limit})`);
         check(!s.coarse && !s.unavailable && s.ua === null && !s.uaLegend,
             'a live reading: no rounding note, no "not available", no whole-page rows on a non-isolated page');
@@ -115,28 +123,30 @@ try {
         const grew = s.used[s.used.length - 1] - firstUsed;
         check(grew > 48 * 1048576, `with --enable-precise-memory-info it follows allocations, typed arrays included (+${Math.round(grew / 1048576)} MB for 64 MB)`);
 
-        // ---- §2 sampling stops when the panel is not seen ----
+        // ---- §2 not seen: it stops drawing, keeps reading ----
+        await page.click('.panel-section[data-tab="tabMemory"] .panel-section-toggle');
+        let h = await whileHidden(page);
+        check(!h.drawing && !h.redrawn && h.taken >= 2, `folded, it stops drawing and keeps reading (${h.taken} readings)`, h);
         await page.click('.panel-section[data-tab="tabMemory"] .panel-section-toggle');
         s = await panelState(page);
-        check(!s.sampling, 'folding the panel stops the timer');
-        check(await takenOver(page) === 0, 'and no sample arrives while it is folded');
-        await page.click('.panel-section[data-tab="tabMemory"] .panel-section-toggle');
-        s = await panelState(page);
-        check(s.sampling && await takenOver(page) >= 1, 'unfolding starts it again');
+        check(s.drawing, 'unfolded, it draws again');
 
         await page.mouse.move(400, 400);
         await page.keyboard.press('i');
-        s = await panelState(page);
-        check(!s.sampling && await takenOver(page) === 0, 'hiding the info panel (I) stops it');
+        h = await whileHidden(page);
+        check(!h.drawing && !h.redrawn && h.taken >= 2, `with the info panel hidden (I), the same (${h.taken} readings)`, h);
         await page.keyboard.press('i');
         s = await panelState(page);
-        check(s.sampling && await takenOver(page) >= 1, 'showing it again starts it again');
-        const path = (await panelState(page)).path;
-        check((path.match(/M/g) || []).length >= 2, 'the time it was not sampled is a gap in the line');
+        check(s.drawing, 'shown again, it draws again');
+        check(moves(s.path) === 1, 'and the line has no gap where the panel was not seen', s.path.slice(0, 200));
 
         await page.click('.panel-section[data-tab="tabMemory"] .panel-section-close');
+        h = await whileHidden(page);
+        check(!h.drawing && !h.redrawn && h.taken >= 2, `closed (✕), the same (${h.taken} readings)`, h);
+        await openPanel(page);
         s = await panelState(page);
-        check(!s.sampling && await takenOver(page) === 0, 'closing the panel (✕) stops it');
+        check(s.drawing && moves(s.path) === 1, 'reopened, its line runs through the time it was closed');
+        await page.click('.panel-section[data-tab="tabMemory"] .panel-section-close');
 
         const stored = await page.evaluate(() => Object.keys(localStorage));
         check(stored.every(k => !/memory/i.test(k)) && stored.includes('lucidPanelRailSections'),
@@ -187,6 +197,9 @@ try {
                 });
             };
         });
+        await waitTaken(page, 3);
+        check(await page.evaluate(() => window.__uaCalls) === 0,
+            'closed, it never asks for the whole page (Chrome would force a full GC to answer)');
         await openPanel(page);
         await page.waitForFunction(() => document.getElementById('memoryUa').textContent === '700 MB', null, { timeout: 15000 });
         await waitTaken(page, 4);
