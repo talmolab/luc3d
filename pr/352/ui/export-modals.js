@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=4b182c33ee75';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=4b182c33ee75';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=4b182c33ee75';
+import { noteProgress } from './progress-delta.js?v=4c9824448b95';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=4c9824448b95';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=4c9824448b95';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,38 +26,41 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=4b182c33ee75';
-import { Viewport3D } from './viewport3d.js?v=4b182c33ee75';
-import { getTrackColor, getGroupColor } from './overlays.js?v=4b182c33ee75';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=4b182c33ee75';
-import { updateInfoPanel } from './info-panel.js?v=4b182c33ee75';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=4b182c33ee75';
-import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=4b182c33ee75';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=4b182c33ee75';
+} from '../pose/triangulation.js?v=4c9824448b95';
+import { Viewport3D } from './viewport3d.js?v=4c9824448b95';
+import { getTrackColor, getGroupColor } from './overlays.js?v=4c9824448b95';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=4c9824448b95';
+import { updateInfoPanel } from './info-panel.js?v=4c9824448b95';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=4c9824448b95';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=4c9824448b95';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=4c9824448b95';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     exportCamerasSlpStreaming,
+    exportCamerasInWorkers,
+    cameraExportUsesEagerBuild,
     cameraExportUsesSweep,
+    cameraExportUsesLazyRewrite,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=4b182c33ee75';
+} from '../import-export/file-io.js?v=4c9824448b95';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=4b182c33ee75';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=4b182c33ee75';
-import { fileSystemAccessHint } from './browser-hints.js?v=4b182c33ee75';
-import { pickExportFolder } from '../loading/folder-picker-start.js?v=4b182c33ee75';
-import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=4b182c33ee75';
-import { noteTriangulateRun } from '../pose/run-state.js?v=4b182c33ee75';
+import { update3DViewport } from '../pose/initialization.js?v=4c9824448b95';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=4c9824448b95';
+import { fileSystemAccessHint } from './browser-hints.js?v=4c9824448b95';
+import { pickExportFolder } from '../loading/folder-picker-start.js?v=4c9824448b95';
+import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=4c9824448b95';
+import { noteTriangulateRunMarked, markTriangulatedGroups } from '../pose/run-state.js?v=4c9824448b95';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=4b182c33ee75';
+} from './overlay-export-layout.js?v=4c9824448b95';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -287,6 +290,21 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
 }
 
 /**
+ * `onFrame`, then `afterFrame(frameIdx)` on every path out of it (each early
+ * return included), for per-frame bookkeeping that must see every visited
+ * frame: here, marking the frame's 3D for the Triangulate button as the run
+ * goes (`markTriangulatedGroups`, pose/run-state.js) instead of in one walk
+ * over every group at the end.
+ */
+function withAfterFrame(onFrame, afterFrame) {
+    return function (frameIdx, fg) {
+        var r = onFrame(frameIdx, fg);
+        afterFrame(frameIdx);
+        return r;
+    };
+}
+
+/**
  * Bulk-group by identity, then triangulate every group.
  *
  * @param {'ba'|'dlt'} [explicitMethod] - the method the user explicitly asked
@@ -365,7 +383,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
     var processedFrames;
     try {
-    processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
+    processedFrames = await sweepTriangulationFrames(session, withAfterFrame(function (frameIdx, fg) {
         // `fg` is undefined for a frame that has 3D grouping but no resident 2D
         // (the sweep's contract — see `sweepLazyFrameWindows`). Without this guard
         // the very next line throws a TypeError, which aborts the whole operation
@@ -531,7 +549,10 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         }
         return gSolver.throttle();
 
-    }, {
+    }, function (frameIdx) {
+        // After the frame's solves land (results apply in submission order).
+        gSolver.mark(function () { markTriangulatedGroups(session.instanceGroups.get(frameIdx)); });
+    }), {
         onLoadProgress: function (done, total) {
             showLoadingProgress('Loading frames', done, total, { step: 1, steps: gSteps });
         },
@@ -544,7 +565,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         },
     });
     await gSolver.finish();
-    noteTriangulateRun(session, null);   // Triangulate turns blue (ui/run-buttons.js)
+    noteTriangulateRunMarked(session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they landed
     } catch (e) {
         gSolver.cancel();
         throw e;
@@ -635,7 +656,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions);
     // also fixes the prior silent-drop (only resident frames were grouped before).
-    await sweepTriangulationFrames(session, function (frameIdx, fg) {
+    await sweepTriangulationFrames(session, withAfterFrame(function (frameIdx, fg) {
         // `fg` is undefined for a frame that has 3D grouping but no 2D (the
         // sweep's contract — see `sweepLazyFrameWindows`). Without this guard the
         // first `fg.instances` below throws, which aborts the whole operation
@@ -801,7 +822,10 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         if (solvedHere) solvedFrames++;
         if (priorGroups.length > 0 || session.instanceGroups.has(frameIdx)) regroupedFrames.push(frameIdx);
 
-    }, {
+    }, function (frameIdx) {
+        // Solved inline above: the frame's 3D is final.
+        markTriangulatedGroups(session.instanceGroups.get(frameIdx));
+    }), {
         onProgress: function (done, total) {
             showLoadingProgress('Grouping & triangulating', done, total, {
                 detail: triangulationMethodLabel(prefMethodT) + ' · ' +
@@ -811,7 +835,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     });
 
     // Post-triangulation updates — hide loading first so user sees results
-    noteTriangulateRun(session, null);   // Triangulate turns blue (ui/run-buttons.js)
+    noteTriangulateRunMarked(session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they went
     hideLoading();
     setReprojErrorVisible(true, { checkBoxes: false });
     var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
@@ -1525,7 +1549,8 @@ export function showSlpExportByCamModal() {
         + 'as one SLEAP file into a folder you choose (it opens in the project\'s folder). A camera with '
         + 'its own folder there gets its file in that folder, named after the camera\'s source '
         + '<code>.slp</code> plus <code>_proofread</code> (an earlier one is replaced); any other camera is '
-        + 'written as <code>&lt;camera&gt;.slp</code> in the folder itself.</div>' +
+        + 'written as <code>&lt;camera&gt;.slp</code> in the folder itself. Tracks are written as the '
+        + 'identities, if any are assigned, so a track is the same animal in every camera.</div>' +
         emptyNote +
         '<div class="slp-bycam-body">' +
         '<div class="slp-bycam-scroll slp-bycam-sess-scroll">' + sessHtml + '</div>' +
@@ -1863,6 +1888,21 @@ export function showSlpExportByCamModal() {
             g.cams.push(cn);
             g.sels.push(sels[0]);
         });
+        // Cameras of a folder-loaded project (each rewritten from its own store)
+        // and fully loaded cameras (each built from memory): built one after
+        // another here while workers compress them side by side
+        // (`exportCamerasInWorkers`), as one step before the per-camera steps.
+        // A single such camera stays in the per-camera loop.
+        var rewrite = { cams: [], sels: [] };
+        cols.forEach(function (cn) {
+            var sels = buildColumnSelections(cn);
+            if (sels.length !== 1 || cameraExportUsesSweep(sels[0], reprojAsUser, instanceFilter) ||
+                !(cameraExportUsesLazyRewrite(sels[0], reprojAsUser, instanceFilter) ||
+                  cameraExportUsesEagerBuild(sels[0], reprojAsUser, instanceFilter))) return;
+            rewrite.cams.push(cn);
+            rewrite.sels.push(sels[0]);
+        });
+        if (rewrite.cams.length < 2) rewrite = { cams: [], sels: [] };
 
         // Progress: the app's card (ui/loading-overlay.js). The shared sweep is
         // a step of its own, its frames on the bar; then one step per camera: a
@@ -1874,7 +1914,7 @@ export function showSlpExportByCamModal() {
         // for the run and comes back on cancel or failure.
         var SAVES_IN_FLIGHT = 4;
         var title = 'Export SLEAP by Camera';
-        var sweepSteps = sweepGroups.length;
+        var sweepSteps = sweepGroups.length + (rewrite.cams.length ? 1 : 0);
         var steps = sweepSteps + cols.length;
         function cardOpts(step, extra) {
             return Object.assign({ title: title, step: step, steps: steps, detail: 'Esc cancels' }, extra || {});
@@ -1893,6 +1933,17 @@ export function showSlpExportByCamModal() {
         var saving = [];   // saves in flight, oldest first
         var succeeded = false;
         var failure = null;
+        // While files save, the card's bar counts the files saved (written AND
+        // closed) out of all the export's files, and moves as each one lands.
+        // Files, not bytes: over a share Chrome's close() reads the whole file
+        // back (most of a save's time) and reports nothing, so a byte count
+        // would race to the end of write() and then stall.
+        var savingStep = 0;   // the step the saving bar shows (0 = something else is on the card)
+        function showSaving(step) {
+            savingStep = step;
+            showLoadingProgress('Saving files in ' + dirHandle.name, exported, cols.length,
+                cardOpts(step, { unit: cols.length === 1 ? 'file' : 'files' }));
+        }
         async function saveFile(target, blob) {
             var fh = await target.dir.getFileHandle(target.name, { create: true });
             var writable = await fh.createWritable();
@@ -1900,6 +1951,7 @@ export function showSlpExportByCamModal() {
             await writable.close();
             exported++;
             if (target.inCameraFolder) inCameraFolders++;
+            if (savingStep && !cancelled) showSaving(savingStep);
         }
         try {
             for (var g = 0; g < sweepGroups.length && !cancelled; g++) {
@@ -1912,13 +1964,27 @@ export function showSlpExportByCamModal() {
                     reprojAsUser, instanceFilter, { onProgress: onSweepProgress(g + 1, label) });
                 grp.cams.forEach(function (cn, k) { prebuilt[cn] = sweptBytes[k]; });
             }
+            if (rewrite.cams.length && !cancelled) {
+                var rwStep = sweepGroups.length + 1;
+                var rwLabel = 'Writing ' + rewrite.cams.length + ' cameras';
+                showLoading(rwLabel + '…', cardOpts(rwStep));
+                await yieldToPaint();
+                var rewritten = await exportCamerasInWorkers(rewrite.sels, reprojAsUser, instanceFilter, {
+                    onProgress: function (done, total) {
+                        if (cancelled) throw new ExportCancelled();
+                        showLoadingProgress(rwLabel, done, total, cardOpts(rwStep, { unit: 'cameras' }));
+                    },
+                });
+                rewrite.cams.forEach(function (cn, k) { if (rewritten[k]) prebuilt[cn] = rewritten[k]; });
+            }
             for (var i = 0; i < cols.length; i++) {
                 if (cancelled) break;
                 var camName = cols[i];
                 var step = sweepSteps + i + 1;
                 var target;
                 if (useDirectory) {
-                    showLoading('Finding ' + camName + '\'s folder…', cardOpts(step));
+                    // Saves in flight keep their bar; a quick lookup needs no card of its own.
+                    if (!savingStep) showLoading('Finding ' + camName + '\'s folder…', cardOpts(step));
                     target = await cameraTarget(dirHandle, camName);
                 } else {
                     // Downloads land flat; still named after the source when the load recorded it.
@@ -1932,6 +1998,7 @@ export function showSlpExportByCamModal() {
                     blob = new Blob([prebuilt[camName]], { type: 'application/x-hdf5' });
                     prebuilt[camName] = null;
                 } else {
+                    savingStep = 0;
                     showLoading('Writing ' + target.path + '…', cardOpts(step));
                     await yieldToPaint();   // paint before a one-step camera holds the thread
                     if (cancelled) break;
@@ -1944,20 +2011,17 @@ export function showSlpExportByCamModal() {
                     exported++;
                     continue;
                 }
-                if (saving.length >= SAVES_IN_FLIGHT) {
-                    showLoading('Saving files in ' + dirHandle.name + '…', cardOpts(step));
-                    await saving.shift();
-                }
-                showLoading('Saving ' + target.path + ' in ' + dirHandle.name + '…', cardOpts(step));
+                showSaving(step);
+                if (saving.length >= SAVES_IN_FLIGHT) await saving.shift();
                 var pending = saveFile(target, blob);
                 pending.catch(function () { /* awaited below; this only keeps it from being "unhandled" */ });
                 saving.push(pending);
             }
             if (saving.length) {
-                showLoading('Saving ' + saving.length + ' file' + (saving.length === 1 ? '' : 's') + ' in ' + dirHandle.name + '…',
-                    cardOpts(steps));
+                showSaving(steps);
                 while (saving.length) await saving.shift();
             }
+            savingStep = 0;
             if (cancelled) {
                 setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
             } else {
@@ -1974,6 +2038,7 @@ export function showSlpExportByCamModal() {
                 succeeded = true;
             }
         } catch (err) {
+            savingStep = 0;   // the files still landing must not repaint the bar over the outcome
             // Let the files already handed over finish (or fail) before reporting.
             await Promise.allSettled(saving);
             saving = [];
@@ -2114,7 +2179,8 @@ export function showSlpExportPerSessionModal() {
     modal.innerHTML =
         '<h3>Export SLEAP File Per Session</h3>' +
         '<div class="slp-export-note">Writes one 2D SLEAP file per camera in <b>' + sessName + '</b> '
-        + 'into each camera\'s associated directory inside a folder you choose.</div>' +
+        + 'into each camera\'s associated directory inside a folder you choose. Tracks are written '
+        + 'as the identities, if any are assigned, so a track is the same animal in every camera.</div>' +
         '<div class="slp-export-table-container">' +
         '<table class="data-table slp-export-table">' +
         '<thead><tr><th class="slp-ps-dl-cell">Download</th><th>Camera</th><th>Directory</th><th>Output Filename</th></tr></thead>' +
@@ -2917,13 +2983,17 @@ export async function exportLabels() {
             nFrames++;
         }, {
             onProgress: function (done, tot) {
-                showLoading('Exporting labels... ' + done.toLocaleString('en-US') + '/' + tot.toLocaleString('en-US') + ' frames');
+                showLoadingProgress('Exporting labels', done, tot, { unit: 'frames' });
             },
         });
 
         await emit('\n  }\n}\n');
 
         if (writer) {
+            // close() gives no progress (Chrome moves its swap file into place,
+            // reading it back on a network share): a spinner, painted first.
+            showLoading('Closing the file…');
+            await yieldToPaint();
             await writer.close();
         } else {
             var blob = new Blob(parts, { type: 'application/json' });

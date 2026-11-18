@@ -30,9 +30,9 @@
 // fingerprinting protection on, a note under it explains that the core count is
 // a random one and how to stop that (ui/browser-hints.js).
 
-import { noteProgress } from './progress-delta.js?v=4b182c33ee75';
-import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=4b182c33ee75';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=4b182c33ee75';
+import { noteProgress } from './progress-delta.js?v=4c9824448b95';
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=4c9824448b95';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=4c9824448b95';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
@@ -190,6 +190,21 @@ export function hideLoading() {
     _setBarVisible(false);
     _setFill(0, false);
     setLoadingCpu(null);
+}
+
+/**
+ * What the card shows, for a caller that only watches (the Memory panel marks
+ * runs on its plot with it, `runName` in ui/memory-plot.js): `{ title,
+ * message }` while the card is up, null while it is hidden. Two text reads.
+ */
+export function loadingCardText() {
+    var overlay = _el('loadingOverlay');
+    if (!overlay || overlay.classList.contains('hidden')) return null;
+    var title = _el('loadingTitle'), status = _el('loadingStatus');
+    return {
+        title: title && !title.classList.contains('hidden') ? title.textContent : '',
+        message: status ? status.textContent : '',
+    };
 }
 
 /** How often the overlay's CPU line and graph refresh (ms). */

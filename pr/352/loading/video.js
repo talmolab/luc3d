@@ -8,9 +8,9 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=4b182c33ee75';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=4b182c33ee75';
-import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=4b182c33ee75';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=4c9824448b95';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=4c9824448b95';
+import { readBlobRange, guardedRangeSource } from './cold-read-guard.js?v=4c9824448b95';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -818,7 +818,7 @@ export class OnDemandVideoDecoder {
         this._lastStepFrame = frameIndex;
         var back = prev != null && prev - frameIndex >= 1 && prev - frameIndex <= 3;   // a step BACK
         // anything but a step back makes the background chunk moot: stop it (frees its decoder)
-        if (!back && this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        if (!back) this._cancelBackPrefetch();
         if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
         var hit = be.cache.get(frameIndex);
         if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); if (back) this._prefetchBack(frameIndex); return hit; }
@@ -925,7 +925,10 @@ export class OnDemandVideoDecoder {
         var times = be._frameTimes;
         var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : 0;
         var out = null;
-        for await (var sample of be.sink.samples(times[start], times[end] + half)) {
+        if (job && job.cancelled) return null;
+        var it = be.sink.samples(times[start], times[end] + half)[Symbol.asyncIterator]();
+        if (job) job.it = it;   // so a cancel can close it at once (`_cancelBackPrefetch`)
+        for await (var sample of { [Symbol.asyncIterator]: function () { return it; } }) {
             if (this._mbBackend !== be || (job && job.cancelled)) { sample.close(); break; }   // closed / switched / moved on
             var i = frameNearTime(times, sample.timestamp);
             if (i < start || i > end || be.cache.has(i)) { sample.close(); continue; }
@@ -999,8 +1002,27 @@ export class OnDemandVideoDecoder {
      */
     releaseStepCursor() {
         if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
-        if (this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        this._cancelBackPrefetch();
         this._closeStepStream();
+    }
+
+    /**
+     * Stop the background back-step prefetch NOW. Setting `cancelled` alone is not
+     * enough: mediabunny's `samples(start, end)` decodes from the keyframe but yields
+     * nothing before `start`, so the prefetch loop — which checks `cancelled` per
+     * yielded frame — kept the decoder busy through the whole run (up to ~250 frames
+     * per camera on the field recordings) and the next jump decoded alongside it.
+     * Closing the stream stops mediabunny feeding packets and closes its decoder.
+     */
+    _cancelBackPrefetch() {
+        var job = this._backPrefetch;
+        this._backPrefetch = null;
+        if (!job) return;
+        job.cancelled = true;
+        try {
+            var closing = job.it && job.it.return ? job.it.return() : null;
+            if (closing && closing.catch) closing.catch(function () { /* ignore */ });
+        } catch (_) { /* ignore */ }
     }
 
     /**
@@ -2534,6 +2556,7 @@ export class VideoController {
      *   callbacks.log: (msg, level) => void
      *   callbacks.isViewShown: (view) => boolean
      *   callbacks.onZoomChange: () => void
+     *   callbacks.onViewTransform: (view) => void — after every applyZoom
      */
     constructor(state, callbacks) {
         this.state = state;
@@ -3667,6 +3690,16 @@ export class VideoController {
                 view.overlayCanvas.style.transformOrigin = "0 0";
             }
         }
+        // A rotated view at 1:1 is drawn with nearest-neighbour sampling.
+        // Unrotated, 1:1 is an integer translation, which Chrome's compositor
+        // draws unfiltered. Rotated, it filters bilinearly, and once the
+        // picture is clipped by its cell (panned past the cell's edge) the
+        // texture coordinates of the clipped quad land off the texel centres:
+        // every row came out a blend of two even with the scale and every
+        // corner exactly on the device grid. Nearest sampling at 1:1 picks
+        // the one texel under each device pixel. The video canvas only (the
+        // property inherits, and the pose overlay must stay smooth).
+        if (view.canvas) view.canvas.style.imageRendering = (z.native && rot !== 0) ? 'pixelated' : '';
 
         var cell = view.canvas ? view.canvas.closest('.video-cell') : null;
         if (cell) {
@@ -3703,6 +3736,11 @@ export class VideoController {
             var bh = wrapper.offsetHeight;
             if (bw > 0 && bh > 0) { z.baseW = bw; z.baseH = bh; }
         }
+
+        // The overlay canvas covers only the visible part of a zoomed-in view
+        // (`ui/overlay-window.js`); a pan or zoom out past its margin needs a
+        // redraw, which nothing else would trigger (a pan never redraws).
+        if (this.callbacks && this.callbacks.onViewTransform) this.callbacks.onViewTransform(view);
     }
 
     // -----------------------------------------------------------------------
@@ -3813,6 +3851,36 @@ export class VideoController {
         this._panToDraw(view, u[0], u[1], sx, sy, qx, qy, fr);
         z.scale = sx;
         z.scaleY = sy;
+    }
+
+    /**
+     * The part of `view`'s canvas box its cell shows, as `{x0, y0, x1, y1}` in
+     * box CSS px (before the zoom transform; may extend past the box when the
+     * video does not fill the cell), or null while the view has no zoom state
+     * or is not laid out. The inverse of the whole `applyZoom` transform applied to the
+     * cell's four corners (`_boxPointAt`), so rotation and per-axis scale are
+     * included; under rotation it is the bounding box of those corners. What
+     * `ui/rendering.js` sizes the overlay window to (`ui/overlay-window.js`).
+     */
+    visibleBoxRect(view) {
+        var z = view && view.zoom;
+        if (!z || !view.canvas || !view.canvas.closest) return null;
+        var cell = view.canvas.closest('.video-cell');
+        if (!cell) return null;
+        var cw = cell.clientWidth, ch = cell.clientHeight;
+        if (!(cw > 0) || !(ch > 0) || !(z.scale > 0)) return null;
+        var fr = this._zoomFrame(view);
+        if (!(fr.cX > 0) || !(fr.cY > 0)) return null;
+        var corners = [[0, 0], [cw, 0], [0, ch], [cw, ch]];
+        var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (var i = 0; i < 4; i++) {
+            var u = this._boxPointAt(view, corners[i][0], corners[i][1], fr);
+            if (u[0] < x0) x0 = u[0];
+            if (u[0] > x1) x1 = u[0];
+            if (u[1] < y0) y0 = u[1];
+            if (u[1] > y1) y1 = u[1];
+        }
+        return { x0: x0, y0: y0, x1: x1, y1: y1 };
     }
 
     /** Container-centre point of `view`'s cell, in cell CSS px. */

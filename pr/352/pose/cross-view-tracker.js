@@ -143,7 +143,9 @@
  * `_adjacency3d` measures point-to-ray distance in mm. `reprojectPoint`,
  * `backProjectToRays`, `pointsToRayDistances` and `epipolarErrorMatrix` are all
  * invariant to a rigid change of world frame (the fundamental matrix is the
- * relative pose, invariant to 1e-19 under a re-base). So `points3d` is the ONLY
+ * relative pose, invariant to 1e-19 under a re-base; the rays only since they
+ * are cast from M⁻¹ — through the pseudo-inverse they were NaN for a camera at
+ * the world origin, and the 3D term skipped it). So `points3d` is the ONLY
  * frame-dependent input — and `_retriangulate` builds it with plain DLT, which
  * until the fix in `triangulatePointDLT` was NOT invariant: minimizing an
  * algebraic error under `‖x‖ = 1` on a homogeneous 4-vector weights direction
@@ -188,8 +190,8 @@ import {
     hungarianAlgorithm,
     computeFundamentalMatrix,
     epipolarErrorMatrix,
-} from './triangulation-core.js?v=4b182c33ee75';
-import { points3dNodeCount, readPoint3d } from './pose-data.js?v=4b182c33ee75';
+} from './triangulation-core.js?v=4c9824448b95';
+import { points3dNodeCount, readPoint3d } from './pose-data.js?v=4c9824448b95';
 
 // ---------------------------------------------------------------------------
 // Normalized-coordinate helpers

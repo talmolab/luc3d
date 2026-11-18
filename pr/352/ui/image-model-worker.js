@@ -9,9 +9,10 @@
  * ("worker not ready"). Several of these run side by side, one model each,
  * because without cross-origin isolation WebAssembly gets ONE thread.
  *
- *   IN  {type: 'load', model: {id, input, pkg}}  ->  {type: 'loaded'} | {type: 'error', message, cannotRun}
- *       (`id`: the transformers.js repo id; `pkg`: ui/image-model-package.js `modelPackageTransfer`,
- *       null for the built-in model)
+ *   IN  {type: 'load', model: {id, revision, input, pkg}}  ->  {type: 'loaded'} | {type: 'error', message, cannotRun}
+ *       (`id`: the transformers.js repo id; `revision`: the commit to load, null for a package — the
+ *       built-in model's id always loads IMAGE_MODEL_REVISION; `pkg`: ui/image-model-package.js
+ *       `modelPackageTransfer`, null for the built-in model)
  *       (`cannotRun`: a failed download, `message` then being image-embedder.js's
  *       MODEL_OFFLINE_REASON — classified here, where the error is still a real one)
  *       (while downloading: {type: 'progress', loaded, total})
@@ -20,8 +21,8 @@
  * `cls` is each crop's CLS token, exactly as the main thread's `clsVectors` reads it.
  */
 
-import { importTransformers, asModelDownloadFailure, IMAGE_MODEL_ID, BUILTIN_INPUT } from './image-embedder.js?v=4b182c33ee75';
-import { installModelPackageFetch, serveModelPackage, withTransferCachePolicy } from './image-model-package.js?v=4b182c33ee75';
+import { importTransformers, asModelDownloadFailure, pretrainedOptions, IMAGE_MODEL_ID, IMAGE_MODEL_REVISION, BUILTIN_INPUT } from './image-embedder.js?v=4c9824448b95';
+import { installModelPackageFetch, serveModelPackage, withTransferCachePolicy } from './image-model-package.js?v=4c9824448b95';
 
 let T = null, model = null, input = BUILTIN_INPUT;
 
@@ -32,16 +33,18 @@ self.onmessage = async function (e) {
             T = await importTransformers();
             const want = m.model || { id: IMAGE_MODEL_ID, input: BUILTIN_INPUT, pkg: null };
             input = want.input;
+            // the built-in model is always its pinned commit, whatever the message says
+            const pin = want.id === IMAGE_MODEL_ID ? { revision: IMAGE_MODEL_REVISION } : { revision: want.revision || null };
             installModelPackageFetch(T);
             if (want.pkg) serveModelPackage(want.pkg.repo, want.pkg.source);
             // fp32: identical to the WebGPU fp32 model (cosine 1.00000), which matched the calibration;
             // the CPU runtime's default int8 model is what drifted from it
-            model = await withTransferCachePolicy(T, want.pkg, function () { return T.AutoModel.from_pretrained(want.id, {
+            model = await withTransferCachePolicy(T, want.pkg, function () { return T.AutoModel.from_pretrained(want.id, pretrainedOptions(pin, {
                 device: 'wasm', dtype: 'fp32',
                 progress_callback: function (p) {
                     if (p && p.status === 'progress' && p.total) self.postMessage({ type: 'progress', loaded: p.loaded, total: p.total });
                 },
-            }); });
+            })); });
             self.postMessage({ type: 'loaded' });
         } else if (m.type === 'run') {
             const res = await model({ pixel_values: new T.Tensor('float32', m.data, [m.n, 3, input, input]) });

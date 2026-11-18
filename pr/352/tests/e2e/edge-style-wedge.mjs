@@ -18,27 +18,24 @@
  *
  * Run: PORT=<free port> node tests/e2e/edge-style-wedge.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8197);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
 
 const ROWS = ['visUserPreLineStyle', 'visUserPostLineStyle', 'visPredPreLineStyle',
     'visPredPostLineStyle', 'visReprojLineStyle'];
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     const errs = [];
     page.on('pageerror', e => errs.push(String(e)));
@@ -70,7 +67,7 @@ try {
     }), ROWS);
     check(restored.every(r => r[0] === 'wedge' && r[1] === 'wedge'), 'a reload restores all five, with the button lit');
     const fit = await page.evaluate((rows) => {
-        document.querySelector('.panel-tab[data-tab="tabVisibility"]').click();
+        document.querySelector('.panel-rail-btn[data-tab="tabVisibility"]').click();
         const tab = document.getElementById('tabVisibility');
         const right = tab.getBoundingClientRect().right;
         return {

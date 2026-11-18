@@ -24,22 +24,19 @@
  *
  * Run: node tests/e2e/checkbox-focus-hotkeys.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8256);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 try {
-    const browser = await chromium.launch();
+    const browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -137,8 +134,11 @@ try {
     // Tab to the checkbox rather than calling .focus(): only a real keyboard
     // focus sets :focus-visible, which is what the blur rule keys on.
     await reset();
+    // The Track, Triangulate and Smooth menus' items are Tab stops too (16 of
+    // them before #visUser), so allow plenty: Space below must not land on
+    // one of their Settings… buttons, whose overlay would cover the page.
     await page.evaluate(() => { document.getElementById('tbTrackAll').focus(); });
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 40; i++) {
         await page.keyboard.press('Tab');
         const id = await page.evaluate(() => document.activeElement.id);
         if (id === 'visUser') break;
@@ -173,7 +173,7 @@ try {
     // ---- 4. A real text field still swallows everything ---------------------
     // The per-camera rotation row lives in the Visibility tab, which has to be
     // showing before anything in it can take focus.
-    await page.click('.panel-tab[data-tab="tabVisibility"]');
+    await page.click('.panel-rail-btn[data-tab="tabVisibility"]');
     await reset();
     const typed = await page.evaluate(() => {
         const el = document.querySelector('#visVideoRotationTable input[type=number]');

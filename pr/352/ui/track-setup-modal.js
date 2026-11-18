@@ -11,7 +11,8 @@
  * every user passes through before tracking a session is this question, so the
  * weights are laid out under it, editable, with the values the run will use.
  *
- * A LEAF on purpose: it imports nothing, takes the current values in and hands
+ * A LEAF on purpose: it imports only another leaf (the band-count rows of
+ * `ui/identity-marks-modal.js`), takes the current values in and hands
  * the answer back, and commits nothing itself. `pose/tracker.js` writes the
  * count (`setTrackerNumAnimals`) and the weights (`setNodeWeights`) — the same
  * two writers as the toolbar's Animals field and the Tracking Wizard — so there
@@ -29,6 +30,9 @@
  * Range collects the count in its own dialog and never reaches this one.
  */
 
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=4c9824448b95';
+import { buildBandCountFields } from './identity-marks-modal.js?v=4c9824448b95';
+
 /**
  * Show the dialog. Resolves with the answer on Continue / Enter, or `null` on
  * Cancel / Esc / a backdrop click, which must leave everything as it was.
@@ -38,7 +42,7 @@
  *
  * @param {{title?: string, animals?: ?number,
  *          nodes?: Array<{name: string, weight: number}>,
- *          imageCheck?: Array<Object>, tailMarks?: {value: ?string}}} opts
+ *          imageCheck?: Array<Object>, tailMarks?: {value: ?string, bands: ?Object<string, number>}}} opts
  *   `title` names the run ("Track All" / "Track Frame"); `animals` pre-fills
  *   the count (null/undefined = blank, auto-detect); `nodes` are the session's
  *   skeleton nodes in order, each with its CURRENT effective weight;
@@ -47,7 +51,7 @@
  *   when given, offers the tail-mark choice, starting at `value`.
  * @returns {Promise<?{animals: ?number, nodeWeights: Object<string, number>,
  *                     thresholds: Object<string, number>,
- *                     tailMarkedIdentity: ?string}>}
+ *                     tailMarkedIdentity: ?string, identityMarks: ?Object}>}
  *   `animals` null = auto-detect; `nodeWeights` maps EVERY node shown to its
  *   weight in [0, 1], edited or not; `thresholds` maps every image-check
  *   setting shown to its value ({} when none were).
@@ -99,7 +103,10 @@ export function showTrackSetupModal(opts) {
         if (imageCheck.element) modal.appendChild(imageCheck.element);
 
         // --- Tail marks (Track All only) ---------------------------------------
-        var tailMarks = buildTailMarkField(opts.tailMarks);
+        var tailMarks = buildTailMarkField(opts.tailMarks, function () {
+            var n = Number(animalsInput.value);
+            return Number.isInteger(n) && n >= 2 ? n : 2;
+        });
         if (tailMarks) modal.appendChild(tailMarks.element);
 
         var note = document.createElement('p');
@@ -143,6 +150,8 @@ export function showTrackSetupModal(opts) {
             if (w.error) return { error: w.error };
             var t = imageCheck.read();
             if (t.error) return { error: t.error };
+            var tm = tailMarks ? tailMarks.read() : null;
+            if (tm && tm.error) return { error: tm.error };
             return { animals: n, nodeWeights: w.nodeWeights, thresholds: t.thresholds, error: null };
         }
 
@@ -152,6 +161,7 @@ export function showTrackSetupModal(opts) {
             continueBtn.disabled = !!f.error;
             weights.refresh();
             imageCheck.refresh();
+            if (tailMarks) tailMarks.refresh();
         }
 
         var done = false;
@@ -166,8 +176,10 @@ export function showTrackSetupModal(opts) {
         function proceed() {
             var f = readForm();
             if (f.error) { refresh(); return; }
+            var tmAnswer = tailMarks ? tailMarks.read() : null;
             finish({ animals: f.animals, nodeWeights: f.nodeWeights, thresholds: f.thresholds,
-                tailMarkedIdentity: tailMarks ? tailMarks.read() : null });
+                tailMarkedIdentity: tmAnswer ? tmAnswer.marked : null,
+                identityMarks: tmAnswer && tmAnswer.counts ? { tailBands: tmAnswer.counts } : null });
         }
 
         // Capture phase, and the keys are consumed: Esc and Enter belong to the
@@ -202,7 +214,7 @@ export function showTrackSetupModal(opts) {
  * @param {?{value: ?string}} opts
  * @returns {?{element: HTMLElement, read: () => ?string}}  null when not offered
  */
-function buildTailMarkField(opts) {
+function buildTailMarkField(opts, animalCount) {
     if (!opts) return null;
     var element = document.createElement('div');
     element.className = 'track-tail-mark-block';
@@ -212,8 +224,9 @@ function buildTailMarkField(opts) {
     element.appendChild(title);
     var hint = document.createElement('p');
     hint.className = 'track-setup-note';
-    hint.textContent = 'For two animals, one with dark marks on its tail: Track All reads the marks in every camera ' +
-        'and keeps the marked animal on this identity from start to end. Needs the videos loaded.';
+    hint.textContent = 'Track All reads dark marks on the tails in every camera and keeps each animal on its identity ' +
+        'from start to end: for two animals, the one with marks on the identity chosen; for more, each identity\'s ' +
+        'number of bands. Needs the videos loaded.';
     element.appendChild(hint);
     var row = document.createElement('label');
     row.className = 'track-setup-animals';
@@ -221,17 +234,43 @@ function buildTailMarkField(opts) {
     label.textContent = 'The animal with marks is';
     var select = document.createElement('select');
     select.id = 'trackSetupTailMarks';
-    [['', 'Off'], ['id_0', 'id_0'], ['id_1', 'id_1']].forEach(function (o) {
+    [['', 'Off'], ['id_0', 'id_0'], ['id_1', 'id_1'], ['bands', 'Bands per id']].forEach(function (o) {
         var opt = document.createElement('option');
         opt.value = o[0];
         opt.textContent = o[1];
         select.appendChild(opt);
     });
-    select.value = opts.value || '';
+    select.value = opts.bands ? 'bands' : (opts.value || '');
     row.appendChild(label);
     row.appendChild(select);
     element.appendChild(row);
-    return { element: element, read: function () { return select.value || null; } };
+    // one row per identity while "Bands per id" is chosen, rebuilt when the animal count changes
+    var holder = document.createElement('div');
+    element.appendChild(holder);
+    var fields = null, shownFor = null;
+    function refresh() {
+        var want = select.value === 'bands' ? animalCount() : 0;
+        if (want === shownFor) return;
+        var prev = fields ? fields.read().counts : opts.bands;
+        holder.textContent = '';
+        fields = null;
+        shownFor = want;
+        if (!want) return;
+        var names = [];
+        for (var i = 0; i < want; i++) names.push('id_' + i);
+        fields = buildBandCountFields(names, prev || null);
+        holder.appendChild(fields.element);
+    }
+    refresh();
+    return {
+        element: element,
+        refresh: refresh,
+        read: function () {
+            if (select.value !== 'bands') return { marked: select.value || null };
+            var r = fields ? fields.read() : { error: 'Set the number of animals first.' };
+            return r.error ? { error: r.error } : { counts: r.counts };
+        },
+    };
 }
 
 /**
@@ -335,7 +374,7 @@ export function buildNodeWeightFields(nodes) {
  * Track All, in the order the dialog shows them: the on/off switch first.
  */
 export const IMAGE_CHECK_IDS = [
-    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
 ];
 
 /**
@@ -412,16 +451,31 @@ export function buildImageCheckFields(defs, after) {
         if (def.kind === 'toggle') {
             var row = document.createElement('div');
             row.className = 'settings-node-weight-row';
+            row.dataset.row = def.id;
             row.appendChild(toggle(def, shortLabel(def)));
             options.appendChild(row);
             return;
         }
         var r = document.createElement('div');
         r.className = 'settings-node-weight-row';
+        r.dataset.row = def.id;   // styles.css places the GPU / CPU caps on one row, WebNN on the next
         var label = document.createElement('div');
         label.className = 'settings-kbd-label';
         label.textContent = shortLabel(def);
         label.title = def.desc || '';
+        var head = label;
+        if (def.tip) {           // a short ⓘ (ui/info-tip.js) instead of the label's long native tooltip
+            head = document.createElement('div');
+            head.className = 'track-setup-option-head';
+            head.appendChild(label);
+            label.removeAttribute('title');
+            var info = document.createElement('button');
+            info.type = 'button';
+            info.className = 'info-tip-btn';
+            info.innerHTML = ICON_INFO;
+            setInfoTip(info, def.tip);
+            head.appendChild(info);
+        }
         var input = document.createElement('input');
         input.type = 'number';
         input.className = 'settings-num-input';
@@ -431,7 +485,7 @@ export function buildImageCheckFields(defs, after) {
         input.value = String(def.value);
         input.dataset.setting = def.id;
         input.setAttribute('aria-label', def.label);
-        r.appendChild(label);
+        r.appendChild(head);
         r.appendChild(input);
         options.appendChild(r);
         fields.push({ def: def, input: input });

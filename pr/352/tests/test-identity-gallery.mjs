@@ -104,6 +104,23 @@ console.log('3. pickSampleFrames');
     ok(three.some(f => f < 50) && three.some(f => f >= 9000 && f < 9050) && three.some(f => f >= 17950), 'and all three are shown');
     eq(G.pickSampleFrames(alone, stretches([100, 106]), 0, 5).length, 5, 'one more frame than samples: five');
     eq(G.pickSampleFrames(alone, { frames: new Int32Array(0), xyz: new Float64Array(0) }, 0, 5), [], 'no frames: none');
+
+    // keyframes: a slot's candidates are its tracked keyframes when it has any
+    const kf = (every, upTo) => Int32Array.from({ length: Math.ceil(upTo / every) }, (_, i) => i * every);
+    const onKf = G.pickSampleFrames(alone, ta.get(0), 0, 5, { maxCandidates: 1000, keyframes: kf(25, 1000) });
+    eq(onKf, [100, 300, 500, 700, 900], 'alone, a keyframe every 25: the keyframe nearest each slot\'s middle');
+    // the huddle at each slot's middle (frames 100, 300, ...) is on a keyframe too: the nearest ISOLATED keyframe wins
+    const offHuddle = G.pickSampleFrames(s, t.get(0), 0, 5, { keyframes: kf(50, 1000) });
+    ok(offHuddle.length === 5 && offHuddle.every(f => f % 50 === 0 && f % 200 !== 100),
+        `with a keyframe every 50, each sample is an isolated keyframe, not the huddle: ${offHuddle}`);
+    ok(offHuddle.every((f, i) => f >= 200 * i && f < 200 * (i + 1)), '…still one per fifth of the span');
+    // keyframes the identity was never tracked on, in some slots: those slots pick among their frames as before
+    const holes = stretches([0, 450], [460, 1000]);                    // keyframe 450 untracked
+    const mixed = G.pickSampleFrames(alone, holes, 0, 5, { maxCandidates: 1000, keyframes: Int32Array.from([450, 700]) });
+    const plain = G.pickSampleFrames(alone, holes, 0, 5, { maxCandidates: 1000 });
+    ok(mixed.includes(700) && mixed.filter(f => f !== 700).every(f => plain.includes(f)),
+        `a slot with a tracked keyframe takes it (700); the others, with none, pick as without keyframes: ${mixed} vs ${plain}`);
+    eq(G.pickSampleFrames(alone, ta.get(0), 0, 5, { maxCandidates: 1000, keyframes: new Int32Array(0) }), mids, 'no keyframes given: as before');
 }
 
 console.log('4. pickCamera');
