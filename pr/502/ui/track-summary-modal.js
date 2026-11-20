@@ -28,9 +28,9 @@
 // Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel,
 // refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary), ui/identity-gallery.js.
 
-import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=dd1424f475d6';
-import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=dd1424f475d6';
-import { renderIdentityGallery } from './identity-gallery.js?v=dd1424f475d6';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=bd4a55557cd2';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=bd4a55557cd2';
+import { renderIdentityGallery } from './identity-gallery.js?v=bd4a55557cd2';
 
 // The viewer's frame navigation, registered once by ui-wiring (as the ID Switches tab's is):
 // the tracker that opens this box cannot import pose/initialization.js.
@@ -90,7 +90,6 @@ export function showTrackSummaryModal(summary, checks, opts) {
 
     var overlay = el('div', 'multi-frame-modal-overlay');
     overlay.id = 'trackSummaryOverlay';
-    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
     var modal = el('div', 'multi-frame-modal track-summary-modal');
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-labelledby', 'trackSummaryTitle');
@@ -140,6 +139,7 @@ export function showTrackSummaryModal(summary, checks, opts) {
     // ---- what each identity looks like, and where it went (filled in after the box opens) ----
     var gallery = opts && opts.session ? renderIdentityGallery(modal, opts.session, {
         onPick: function (frame) { close(); if (_navigate) _navigate(frame); },
+        onEmpty: function () { modal.classList.remove('has-gallery'); },
     }) : null;
     if (gallery) modal.classList.add('has-gallery');
     plan.notes.forEach(function (t) { modal.appendChild(el('p', 'track-summary-note', t)); });

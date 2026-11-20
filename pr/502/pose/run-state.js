@@ -3,7 +3,9 @@
  * result still stand? Drives the toolbar's blue Track and Triangulate buttons
  * (`ui/run-buttons.js`), the way smoothing's own state drives Smooth's.
  *
- * A run is noted when it finishes (`noteTrackRun`, `noteTriangulateRun`). Its
+ * A run is noted when it finishes (`noteTrackRun`, `noteTriangulateRun`; the
+ * whole-project Triangulate runs mark each frame as it lands with
+ * `markTriangulatedGroups` and end with `noteTriangulateRunMarked`). Its
  * result stands while the session still shows it:
  *   - Track: some instance group has an identity.
  *   - Triangulate: some group still holds a 3D array the run produced or kept.
@@ -21,7 +23,7 @@
  * Depends on: pose/pose-data.js
  */
 
-import { someValidPoint3d } from './pose-data.js?v=dd1424f475d6';
+import { someValidPoint3d } from './pose-data.js?v=bd4a55557cd2';
 
 /** Session -> {frame, group} witness, or null = find one. Absent = not run. */
 var _trackRuns = new WeakMap();
@@ -69,26 +71,45 @@ export function noteTrackRun(session) {
 }
 
 /**
+ * Mark the 3D a Triangulate run left on one frame's groups: every group with a
+ * solve method and some valid 3D, whether the run solved it or kept 3D it
+ * already had. A whole-project run calls this per frame as the frame's results
+ * land (spread over the run), then `noteTriangulateRunMarked` at the end;
+ * marking ~540k groups in the run's last task cost ~80 ms there.
+ * @param {Array<InstanceGroup>|undefined} groups - one frame's group list
+ */
+export function markTriangulatedGroups(groups) {
+    if (!groups) return;
+    for (var gi = 0; gi < groups.length; gi++) {
+        var g = groups[gi];
+        if (g && g.triangulationMethod && g.points3d && someValidPoint3d(g.points3d)) {
+            _triangulatedArrays.add(g.points3d);
+        }
+    }
+}
+
+/**
+ * A Triangulate run finished on `session`, its frames already marked with
+ * `markTriangulatedGroups`. O(1).
+ * @param {Session} session
+ */
+export function noteTriangulateRunMarked(session) {
+    if (!session || !session.instanceGroups) return;
+    _triangulateRuns.set(session, null);
+}
+
+/**
  * A Triangulate run finished on `session`: mark the 3D of every group on
  * `frames` (null = every frame) that the run left solved — whether it solved
- * the group or kept 3D it already had.
+ * the group or kept 3D it already had. For runs that did not mark as they went.
  * @param {Session} session
  * @param {Iterable<number>|null} frames
  */
 export function noteTriangulateRun(session, frames) {
     if (!session || !session.instanceGroups) return;
     var frameIdxs = frames || session.instanceGroups.keys();
-    for (var frameIdx of frameIdxs) {
-        var groups = session.instanceGroups.get(frameIdx);
-        if (!groups) continue;
-        for (var gi = 0; gi < groups.length; gi++) {
-            var g = groups[gi];
-            if (g && g.triangulationMethod && g.points3d && someValidPoint3d(g.points3d)) {
-                _triangulatedArrays.add(g.points3d);
-            }
-        }
-    }
-    _triangulateRuns.set(session, null);
+    for (var frameIdx of frameIdxs) markTriangulatedGroups(session.instanceGroups.get(frameIdx));
+    noteTriangulateRunMarked(session);
 }
 
 /**
@@ -99,6 +120,11 @@ export function carryTriangulateMark(oldPoints3d, newPoints3d) {
     if (oldPoints3d && newPoints3d && _triangulatedArrays.has(oldPoints3d)) {
         _triangulatedArrays.add(newPoints3d);
     }
+}
+
+/** Is this 3D array marked as a Triangulate run's result? (For checks and tests.) */
+export function isTriangulateMarked(points3d) {
+    return !!points3d && _triangulatedArrays.has(points3d);
 }
 
 /** Has Track been run on `session`, with identities still assigned? */

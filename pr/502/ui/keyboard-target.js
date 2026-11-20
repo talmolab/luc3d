@@ -190,74 +190,6 @@ export function targetOwnsKey(t, e) {
 }
 
 /**
- * True while a modal that owns the keyboard is open: an element with `data-shortcut-modal`
- * is in the document. (A DOM query, no module state, so a modal that forgets to close cannot
- * leave a stale flag.)
- *
- * @param {Document} [doc]
- * @returns {boolean}
- */
-export function shortcutModalOpen(doc) {
-    const d = doc || (typeof document !== 'undefined' ? document : null);
-    try {
-        return !!(d && typeof d.querySelector === 'function' && d.querySelector('[data-shortcut-modal]'));
-    } catch (err) {
-        return false;
-    }
-}
-
-/** Every modal backdrop the app draws (each dialog's outermost element). */
-export const MODAL_LAYER_SELECTOR =
-    '.multi-frame-modal-overlay, .plane-confirm-overlay, .settings-overlay, .export-result-overlay, [data-shortcut-modal]';
-
-/** The playback keys: ←/→ (with Opt: labeled frames), Space, Home, End. */
-export function isPlaybackKey(e) {
-    if (!e || e.ctrlKey || e.metaKey) return false;
-    const k = e.key;
-    return k === 'ArrowLeft' || k === 'ArrowRight' || k === ' ' || k === 'Home' || k === 'End';
-}
-
-/**
- * True while a modal is open that keeps the playback keys (play / pause, frame
- * step, first / last frame) off the video behind it: every modal, except the
- * tracking and triangulation ones, which mark their backdrop
- * `data-allow-playback` (Settings' Tracking / Triangulation Wizard, Track
- * setup, Track Frame Range, the Track All summary, Fix ID switch, Group by
- * Track & Triangulate, Choose Frames for Triangulation, the non-modal Set Angle
- * dialog) so the user can still scrub while they are up. Only a backdrop that
- * is on screen counts.
- *
- * @param {Document} [doc]
- * @returns {boolean}
- */
-export function playbackBlockedByModal(doc) {
-    const d = doc || (typeof document !== 'undefined' ? document : null);
-    try {
-        if (!d || typeof d.querySelectorAll !== 'function') return false;
-        const layers = d.querySelectorAll(MODAL_LAYER_SELECTOR);
-        for (let i = 0; i < layers.length; i++) {
-            const n = layers[i];
-            if (n.hasAttribute('data-allow-playback')) continue;
-            if (typeof n.getClientRects === 'function' && n.getClientRects().length === 0) continue;   // hidden
-            return true;
-        }
-    } catch (err) { /* treat as no modal */ }
-    return false;
-}
-
-/**
- * The guard for the playback key handlers: `shouldIgnoreShortcut`, plus a
- * playback key while a modal holds it (`playbackBlockedByModal`).
- *
- * @param {KeyboardEvent} e
- * @returns {boolean}
- */
-export function shouldIgnorePlaybackKey(e) {
-    if (shouldIgnoreShortcut(e)) return true;
-    return isPlaybackKey(e) && playbackBlockedByModal(e.target && e.target.ownerDocument);
-}
-
-/**
  * The one guard every global keydown handler uses: true when this keystroke
  * belongs to whatever has focus — or to the browser — rather than to the app.
  *
@@ -276,9 +208,6 @@ export function shouldIgnorePlaybackKey(e) {
 export function shouldIgnoreShortcut(e) {
     if (!e) return false;
     const t = e.target;
-    // A modal that owns the keyboard (`data-shortcut-modal` on its scrim, e.g. the worker file browser)
-    // keeps every app shortcut from acting on the view behind it.
-    if (shortcutModalOpen(t && t.ownerDocument)) return true;
     if (isClipboardChord(e) &&
         hasTextSelection(t && t.ownerDocument)) return true;
     return isTextEntryTarget(t) || targetOwnsKey(t, e);

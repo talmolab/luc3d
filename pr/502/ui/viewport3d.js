@@ -17,7 +17,7 @@
  * requires the shared accessors rather than array indexing.
  */
 
-import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=dd1424f475d6';
+import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=bd4a55557cd2';
 
 // ============================================
 // Deferred work (hidden viewport)
@@ -304,10 +304,6 @@ export class Viewport3D {
         /** @type {boolean} Keep the WebGL drawing buffer after compositing so
          *  the canvas can be captured frame-by-frame (used by 3D video export). */
         this._preserveDrawingBuffer = !!options.preserveDrawingBuffer;
-
-        /** @type {boolean} A click on a camera selects it (`selectCamera`). Off for a
-         *  viewport that colours cameras itself (`tintCameras`). */
-        this._pickCameras = options.pickCameras !== false;
 
         /** @type {boolean} Whether to show camera labels */
         this.showCameraLabels = options.showCameraLabels !== undefined ? options.showCameraLabels : true;
@@ -866,7 +862,6 @@ export class Viewport3D {
                 this._handleOriginPick(e);
                 return;
             }
-            if (!this._pickCameras) return;
             const rect = this.renderer.domElement.getBoundingClientRect();
             mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -2827,49 +2822,6 @@ export class Viewport3D {
                 }
             }
         });
-    }
-
-    /**
-     * Colour every camera by a caller's map and light up a FOCUS set, dimming
-     * the rest — for a second viewport that shows which cameras go together
-     * (the Inference panel's Models modal: a camera wears its model's colour,
-     * hovering a model focuses all its cameras). The app's own viewport never
-     * calls it: its colours stay `highlightCamera`'s.
-     *
-     * @param {{colors?: Object<string,string>, defaultColor?: string, focus?: string[]|null}} spec
-     *   `colors`: camera name -> CSS colour (missing → `defaultColor`, grey);
-     *   `focus`: names to light up; null/empty = none focused, nothing dimmed.
-     */
-    tintCameras(spec) {
-        if (!this._cameraGroup) return;
-        if (!this._visible) {
-            this._deferred.set('highlight', () => this.tintCameras(spec));
-            return;
-        }
-        var s = spec || {};
-        var colors = s.colors || {};
-        var dflt = s.defaultColor || '#777777';
-        var focus = s.focus && s.focus.length ? new Set(s.focus) : null;
-        var prefixes = ['camera_', 'cameraBase_', 'label_', 'camSphere_', 'camUp_'];
-        this._cameraGroup.traverse(function (child) {
-            if (!child.material || child.material.visible === false) return;
-            var name = child.name || '';
-            var cam = null;
-            for (var pi = 0; pi < prefixes.length; pi++) {
-                if (name.startsWith(prefixes[pi])) { cam = name.substring(prefixes[pi].length); break; }
-            }
-            if (cam === null) return;
-            child.material.color.set(colors[cam] || dflt);
-            child.material.transparent = true;
-            var on = focus && focus.has(cam);
-            child.material.opacity = focus ? (on ? 1.0 : 0.15) : 0.85;
-            if (name.startsWith('camSphere_')) child.scale.setScalar(on ? 1.8 : 1);
-        });
-    }
-
-    /** The plane payload last passed to `setPlanes` (read-only; for mirroring the scene). */
-    getPlanes() {
-        return this._planes || [];
     }
 
     /**

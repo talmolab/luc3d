@@ -19,27 +19,23 @@
  * The session is a stub (Maps of frame groups / instance groups answering the
  * calls `populateVideosTable` makes); no video is decoded.
  *
- * Run: node tests/e2e/videos-table-fit.mjs   (PORT=… to pick the port)
+ * Run: node tests/e2e/videos-table-fit.mjs
  */
-import { chromium, webkit } from 'playwright';
-import { spawn } from 'node:child_process';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const PORT = Number(process.env.PORT || 8163);
+const server = await startServer(repoRoot);
+const PORT = server.port;
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1200));
-
 const LONG_PATH = '/Volumes/talmo/joshua/recordings/2026-11-04_cohort3_five_mice_arena/session_0007/Camera0_sideR/0.mp4';
 
-async function runIn(browserType, label) {
+async function runIn(browser, label) {
     console.log(`\n== ${label} ==`);
-    const browser = await browserType.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
         page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
@@ -56,12 +52,16 @@ async function runIn(browserType, label) {
             const names = ['Camera0_sideR', 'Camera1_sideL', 'Camera2_topDown', 'Camera3_backCorner'];
             // 98,765 labeled frames per camera and 87,654 groups: five-digit
             // counts with thousands separators.
-            const frameGroups = new Map();
+            // The shape `createVideoTableCounter` reads: per frame, Maps of
+            // camera -> instance list; per group, a Map of camera -> member.
+            // `showVideoFileDetail` asks the frame through its methods.
             const inst = [{ score: 0.87, type: 'predicted' }];
-            const fg = { getInstances: () => inst, getUnlinkedInstances: () => [] };
+            const fg = { instances: new Map(names.map(n => [n, inst])), unlinkedInstances: new Map(),
+                getInstances: () => inst, getUnlinkedInstances: () => [] };
+            const frameGroups = new Map();
             for (let f = 0; f < 98765; f++) frameGroups.set(f, fg);
+            const grp = [{ instances: new Map(names.map(n => [n, inst[0]])) }];
             const instanceGroups = new Map();
-            const grp = [{ getInstance: () => true }];
             for (let f = 0; f < 87654; f++) instanceGroups.set(f, grp);
             s.videoFiles = names.map(n => ({
                 name: n, assignedCamera: n, videoPath: longPath.replace('Camera0_sideR', n),
@@ -71,6 +71,11 @@ async function runIn(browserType, label) {
             const mod = await import(new URL('ui/info-panel.js', document.baseURI).href);
             mod.populateVideosTable();
         }, LONG_PATH);
+        // The counts fill in over a few tasks (`countVideosInSlices`).
+        await page.waitForFunction(() => {
+            const tds = [...document.querySelectorAll('#videosTable tbody td')];
+            return tds.length > 0 && tds.every(td => td.textContent !== '\u2026' && td.textContent !== '');
+        }, null, { timeout: 30000 });
 
         // ---- §1 every cell inside the panel ----
         const geo = await page.evaluate(() => {
@@ -143,8 +148,13 @@ async function runIn(browserType, label) {
 }
 
 try {
-    await runIn(chromium, 'Chromium');
-    await runIn(webkit, 'WebKit');
+    await runIn(await launchBrowser(), 'Chromium');
+    // WebKit is the desktop app's engine (WKWebView). CI installs Chromium
+    // only, so this half runs where Playwright's WebKit is installed.
+    let wk = null;
+    try { wk = await (await import('playwright')).webkit.launch(); } catch { wk = null; }
+    if (wk) await runIn(wk, 'WebKit');
+    else console.log('\n(Playwright WebKit not installed: the WebKit half did not run)');
 } finally {
     server.kill();
 }

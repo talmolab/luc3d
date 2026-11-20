@@ -9,54 +9,54 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
-} from '../pose/pose-data.js?v=dd1424f475d6';
-import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=dd1424f475d6';
+} from '../pose/pose-data.js?v=bd4a55557cd2';
+import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js?v=bd4a55557cd2';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js?v=dd1424f475d6';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=dd1424f475d6';
-import { createDemoSkeleton } from '../demo-data.js?v=dd1424f475d6';
+} from '../pose/triangulation.js?v=bd4a55557cd2';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=bd4a55557cd2';
+import { createDemoSkeleton } from '../demo-data.js?v=bd4a55557cd2';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js?v=dd1424f475d6';
+} from './file-io.js?v=bd4a55557cd2';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=dd1424f475d6';
+} from '../ui/app-state.js?v=bd4a55557cd2';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, folderPickerStartFor, createViewForVideoFile, updateTotalFrames,
     adoptLabeledFrameCount, rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=dd1424f475d6';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=dd1424f475d6';
-import { updateInfoPanel } from '../ui/info-panel.js?v=dd1424f475d6';
+} from '../loading/session-loader.js?v=bd4a55557cd2';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=bd4a55557cd2';
+import { updateInfoPanel } from '../ui/info-panel.js?v=bd4a55557cd2';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js?v=dd1424f475d6';
+} from '../pose/initialization.js?v=bd4a55557cd2';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=dd1424f475d6';
-import { handleLoadSlpFile } from './slp-import.js?v=dd1424f475d6';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=bd4a55557cd2';
+import { handleLoadSlpFile } from './slp-import.js?v=bd4a55557cd2';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js?v=dd1424f475d6';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=dd1424f475d6';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=dd1424f475d6';
+} from './slp-streaming-write.js?v=bd4a55557cd2';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=bd4a55557cd2';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=bd4a55557cd2';
 import {
     showLoading, hideLoading, showLoadingProgress, createProgressPacer, yieldToPaint,
-} from '../ui/loading-overlay.js?v=dd1424f475d6';
-import { clearReadout } from '../ui/frame-readout.js?v=dd1424f475d6';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=dd1424f475d6';
-import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=dd1424f475d6';
-import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=dd1424f475d6';
-import { buildSaveProvenance } from './slp-provenance.js?v=dd1424f475d6';
-import { withCompactSave } from './compact-save.js?v=dd1424f475d6';
-import { showCompactSaveModal } from '../ui/compact-save-modal.js?v=dd1424f475d6';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=dd1424f475d6';
-import { saveStartFolder } from '../loading/recording-folder.js?v=dd1424f475d6';
-import { askConfirm } from '../ui/ask.js?v=dd1424f475d6';
+} from '../ui/loading-overlay.js?v=bd4a55557cd2';
+import { clearReadout } from '../ui/frame-readout.js?v=bd4a55557cd2';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=bd4a55557cd2';
+import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js?v=bd4a55557cd2';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=bd4a55557cd2';
+import { buildSaveProvenance } from './slp-provenance.js?v=bd4a55557cd2';
+import { withCompactSave } from './compact-save.js?v=bd4a55557cd2';
+import { showCompactSaveModal } from '../ui/compact-save-modal.js?v=bd4a55557cd2';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=bd4a55557cd2';
+import { saveStartFolder } from '../loading/recording-folder.js?v=bd4a55557cd2';
+import { setPageDirty, setPageProject } from '../ui/page-title.js?v=bd4a55557cd2';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -124,33 +124,15 @@ export async function ensureNo3dImportBlockingLoad() {
     return true;
 }
 
-/**
- * File ▸ New Project. With a session or views open (and no `force`) it asks
- * first, through `askConfirm` (ui/ask.js: native confirm in a browser, the
- * desktop shell's dialog in the app, where `window.confirm` returns false at
- * once). Returns a Promise of whether the project was reset. With `force`, or
- * with nothing open, the reset runs SYNCHRONOUSLY before this returns —
- * `ensureNo3dImportBlockingLoad` and tests rely on that.
- */
 export function newProject(force) {
     if (!force && (state.session || state.views.length > 0)) {
-        return askConfirm('Unsaved changes will be lost. Start a new project?',
-            { title: 'New Project', okLabel: 'Start New Project' })
-            .then(function (ok) {
-                if (!ok) return false;
-                resetProject();
-                return true;
-            });
+        if (!confirm('Unsaved changes will be lost. Start a new project?')) return;
     }
-    resetProject();
-    return Promise.resolve(true);
-}
 
-/** The reset half of `newProject`, with no question asked. */
-function resetProject() {
     // Drop the "imported 3D points without a session" marker — a full reset
     // erases any such overlay (including the skeleton) by design.
     state.has3dImportWithoutSession = false;
+    setPageProject(null);
 
     // Detach interaction handlers from old canvases
     if (interactionManager) {
@@ -165,13 +147,20 @@ function resetProject() {
     state.isPlaying = false;
     setVideoController(null);
 
-    // Close lazy loader if active
-    if (state.session && state.session.lazyLoader) {
-        state.session.lazyLoader.close();
-    }
+    // Close every session's lazy loader (the active one, and any other session
+    // of a multi-session project).
+    var closing = state.sessions.slice();
+    if (state.session && closing.indexOf(state.session) < 0) closing.push(state.session);
+    closing.forEach(function (s) { if (s && s.lazyLoader) s.lazyLoader.close(); });
 
-    // Clear session and annotation data
+    // Clear session and annotation data. The session LIST too: a session left
+    // in it stayed on the session strip, and the next folder loaded was added
+    // to it as a second session of the old project.
     state.session = null;
+    state.sessions = [];
+    state.activeSessionIdx = 0;
+    // File ▸ Save must not write the new project over the old one's file.
+    state.slpFileHandle = null;
     state.currentFrame = 0;
     state.totalFrames = 0;
     state.fps = 30;
@@ -202,6 +191,9 @@ function resetProject() {
     paneManager.clearAll();
     var stripList = document.getElementById('viewStripList');
     if (stripList) stripList.innerHTML = '';
+    if (document.getElementById('sessionStripList')) populateSessionStrip();
+    // Nothing is open, so nothing is unsaved.
+    clearDirty();
 
     // Reset frame counter display
     clearReadout();
@@ -383,7 +375,7 @@ function serializeSessionFrames(session) {
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
     // Relative to THIS module (import-export/), not the page — hence `../`.
-    var mod = await import('../lib/sleap-io/index.browser.js?v=dd1424f475d6');
+    var mod = await import('../lib/sleap-io/index.browser.js?v=bd4a55557cd2');
     window.SleapIO = mod;
     return mod;
 }
@@ -395,7 +387,7 @@ export function markDirty() {
     if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
-    document.title = '\u2022 LUC3D';
+    setPageDirty(true);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'inline-block';
 }
@@ -409,7 +401,7 @@ export function clearDirty() {
     } else if (state.session) {
         state.session.isDirty = false;
     }
-    document.title = 'LUC3D';
+    setPageDirty(false);
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
 }
@@ -765,15 +757,14 @@ async function buildSlpBytes(opts) {
             if (estBytes > capBytes * CAGE_WARN_FRACTION) {
                 var estGB = (estBytes / 1e9).toFixed(1);
                 var capGB = (capBytes / 1e9).toFixed(1);
-                var proceed = await askConfirm(
+                var proceed = window.confirm(
                     'This project is very large. Its triangulated grouping is estimated to ' +
                     'occupy ~' + estGB + ' GB of this tab\'s ~' + capGB + ' GB JavaScript memory ' +
                     'limit, leaving little headroom for a merged save, which could crash the ' +
                     'tab before finishing.\n\n' +
                     'Click OK to attempt the save anyway, or Cancel and use ' +
                     '"Export SLEAP File Per Session" / "By Cam" instead — those write one ' +
-                    'smaller file per camera and are far less likely to crash.',
-                    { title: 'Very large save', okLabel: 'Save Anyway' }
+                    'smaller file per camera and are far less likely to crash.'
                 );
                 if (!proceed) throw new SaveCancelledError();
             }
@@ -1221,6 +1212,8 @@ export async function quickSave(previousFile) {
         state.isSaving = false;
         hideLoading();
         clearDirty();
+        // The project is now the file it was saved to (Save As retitles the tab).
+        if (state.slpFileHandle && state.slpFileHandle.name) setPageProject(state.slpFileHandle.name);
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
         setStatus('Saved (' + sizeMB + ' MB)', 'success');
     } catch (err) {
@@ -1306,11 +1299,7 @@ export async function saveCompactCopy(opts) {
     if (!state.session) { setStatus('No session to save', 'error'); return; }
     if (state.isSaving) { setStatus('Save already in progress...', 'warning'); return; }
     if (!opts.pickFile && !window.showSaveFilePicker) {
-        // The desktop app's shim provides showSaveFilePicker, so this branch is
-        // not expected there; if it ever is, browser advice would be wrong.
-        setStatus((typeof window !== 'undefined' && window.lucidDesktop)
-            ? 'A compact copy needs a save dialog to choose the file, which is not available here'
-            : 'A compact copy needs a browser that can save to a chosen file (Chrome or Edge; in Brave, ' +
+        setStatus('A compact copy needs a browser that can save to a chosen file (Chrome or Edge; in Brave, ' +
             'turn on brave://flags/#file-system-access-api)', 'warning');
         return;
     }
@@ -1607,7 +1596,14 @@ export function saveProject() {
     }
 }
 
-export async function handleLoadProject(prePickedFile) {
+/**
+ * Open a project file (`.slp`, `.h5` or project `.json`); without one, pick it.
+ * @param {File} [prePickedFile]
+ * @param {?FileSystemFileHandle} [fileHandle]  the `.slp`'s own handle: File ▸ Save
+ *   writes back to it. Adopted only once the load replaces the open project; any
+ *   other load leaves no handle, so Save asks where to write.
+ */
+export async function handleLoadProject(prePickedFile, fileHandle) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
@@ -1639,18 +1635,17 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js?v=dd1424f475d6');
+                var _sl = await import('../loading/session-loader.js?v=bd4a55557cd2');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
-                    return _sl.handleLoadProjectSlpLazy(file);
+                    return _sl.handleLoadProjectSlpLazy(file, { fileHandle: fileHandle });
                 }
             }
-            return handleLoadSlpFile(file);
+            return handleLoadSlpFile(file, fileHandle);
         }
 
         var fileSize = file.size;
         if (fileSize > 50 * 1024 * 1024) {
-            if (!(await askConfirm('Project file is ' + (fileSize / 1024 / 1024).toFixed(0) + 'MB — this may be slow. Continue?',
-                    { title: 'Large project file', okLabel: 'Continue' }))) {
+            if (!confirm('Project file is ' + (fileSize / 1024 / 1024).toFixed(0) + 'MB — this may be slow. Continue?')) {
                 setStatus('Load cancelled', 'warning');
                 return;
             }
@@ -1667,6 +1662,7 @@ export async function handleLoadProject(prePickedFile) {
         // `readPlaneMetadata` only restores into an EMPTY model, so without
         // this the previous project's planes survive and this file's are lost.
         resetPlaneState();
+        setPageProject(file.name);
         var cameras;
         if (data.version === 3) {
             cameras = _restoreProjectV3(data);
@@ -1675,6 +1671,8 @@ export async function handleLoadProject(prePickedFile) {
         } else {
             cameras = _restoreLegacySession(data);
         }
+        // A .json project has no .slp to save back to: Save asks where.
+        state.slpFileHandle = null;
 
 
         // 2. Load videos — check if already loaded, only prompt for missing ones

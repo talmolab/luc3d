@@ -332,6 +332,33 @@ export class FrameIdentityMap extends Map {
     forEach(cb, thisArg) {
         for (var e of this._iter(0)) cb.call(thisArg, e[1], e[0], this);
     }
+
+    /**
+     * `cb(key, value)` for every live entry, in insertion order, with no
+     * allocation per entry (the iterators build a `[k, v]` array each, ~4M of
+     * them on a large project). `cb` must not modify the map.
+     * `from` / `to` (entry positions, default 0 / `entrySpan()`) visit a stretch,
+     * so a long scan can be done in pieces: consecutive stretches visit what one
+     * call visits, in the same order, while `layoutStamp()` is unchanged.
+     * @returns {number} where the next stretch starts (`to`)
+     */
+    forEachKeyValue(cb, from, to) {
+        var end = to == null ? this._n : Math.min(to, this._n);
+        for (var i = from > 0 ? from : 0; i < end; i++) {
+            if (!(this._state[i] & FIM_LIVE)) continue;
+            cb(this._keyAt(i), this._valAt(i));
+        }
+        return end;
+    }
+
+    /** Entry positions in use (live + deleted): `forEachKeyValue`'s whole range. */
+    entrySpan() { return this._n; }
+
+    /**
+     * Changes when entries move to other positions (a clear or a compaction), so a
+     * scan done in stretches knows its positions no longer mean the same entries.
+     */
+    layoutStamp() { return this._clears + ':' + this._compactions; }
 }
 
 export class Skeleton {
@@ -2692,6 +2719,48 @@ export class Session {
         var u = _fimUnpack(key);
         var cam = this.cameras[u.camIdx];
         return { frameIdx: u.frameIdx, camName: cam ? cam.name : String(u.camIdx), trackIdx: u.trackIdx };
+    }
+
+    /**
+     * The records of `frameIdentityEntries()`, same order and same skips, as
+     * `cb(frameIdx, camName, trackIdx, identityId)`: no record object, no
+     * `[k, v]` pair and no generator step per entry. For whole-map scans that
+     * run in one task (the ID timeline's rebuild). `cb` must not modify the map.
+     * `from` / `to` scan a stretch of positions (see `frameIdentityScan`).
+     * @param {function(number, string, number, number): void} cb
+     * @returns {number} where the next stretch starts
+     */
+    forEachFrameIdentity(cb, from, to) {
+        var self = this, map = this.frameIdentityMap;
+        if (!map) return 0;
+        var visit = function (key, identityId) {
+            if (_fimIsPacked(key)) {
+                // _fimUnpack + _fimDecode, inlined
+                var frameIdx = Math.floor(key / FIM_CAM_STRIDE);
+                var rem = key - frameIdx * FIM_CAM_STRIDE;
+                var camIdx = Math.floor(rem / FIM_TRACK_STRIDE);
+                var cam = self.cameras[camIdx];
+                cb(frameIdx, cam ? cam.name : String(camIdx), (rem - camIdx * FIM_TRACK_STRIDE) - 1, identityId);
+                return;
+            }
+            var parts = self._fimDecode(key);
+            if (parts) cb(parts.frameIdx, parts.camName, parts.trackIdx, identityId);
+        };
+        if (typeof map.forEachKeyValue === 'function') return map.forEachKeyValue(visit, from, to);
+        for (var e of map) visit(e[0], e[1]);
+        return Infinity;
+    }
+
+    /**
+     * `forEachFrameIdentity`'s whole range of positions for a scan in stretches
+     * (`from` / `to`), and a stamp that changes when the positions stop meaning
+     * the same entries; null when the map cannot be scanned in stretches.
+     * @returns {?{span: number, stamp: string}}
+     */
+    frameIdentityScan() {
+        var map = this.frameIdentityMap;
+        if (!map || typeof map.entrySpan !== 'function') return null;
+        return { span: map.entrySpan(), stamp: map.layoutStamp() };
     }
 
     /**

@@ -122,9 +122,9 @@ import {
     planeEdgesLocal, planeEdgesPoolIndices, planeCentroid2d,
     points3dForPlane, writePoints3dForPlane, nodeErrorsForPlane,
     nodeFreezeState,
-} from '../pose/plane-data.js?v=dd1424f475d6';
-import { PIN_STATES } from '../pose/plane-nodes.js?v=dd1424f475d6';
-import { hasPoint3d, getPoint3d } from '../pose/pose-data.js?v=dd1424f475d6';
+} from '../pose/plane-data.js?v=bd4a55557cd2';
+import { PIN_STATES } from '../pose/plane-nodes.js?v=bd4a55557cd2';
+import { hasPoint3d, getPoint3d } from '../pose/pose-data.js?v=bd4a55557cd2';
 
 /**
  * The three pin states, as icons.
@@ -163,27 +163,23 @@ export const ICON_PIN = (function () {
     };
 }());
 
-/** The Pin column's explanation button. @private */
-export const ICON_INFO =
-    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" ' +
-    'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
-    'aria-hidden="true"><circle cx="12" cy="12" r="9"/>' +
-    '<path d="M12 11.2v5"/>' +
-    '<circle cx="12" cy="7.6" r="1.1" fill="currentColor" stroke="none"/></svg>';
+/** The Pin column's explanation button: now defined in ui/info-tip.js (import-free, so the Track
+ *  dialogs can use it too) and re-exported here for the plane modules that import it from the hub. */
+export { ICON_INFO };
 
-import { state, interactionManager, viewport3d } from './app-state.js?v=dd1424f475d6';
-import { makeVideoToCanvasTransform } from './overlays.js?v=dd1424f475d6';
-import { persistSectionStates } from './section-state.js?v=dd1424f475d6';
-import { setInfoTip } from './info-tip.js?v=dd1424f475d6';
-import { showPlaneDialog } from './plane-dialog.js?v=dd1424f475d6';
+import { state, interactionManager, viewport3d } from './app-state.js?v=bd4a55557cd2';
+import { makeVideoToCanvasTransform } from './overlays.js?v=bd4a55557cd2';
+import { persistSectionStates } from './section-state.js?v=bd4a55557cd2';
+import { setInfoTip, ICON_INFO } from './info-tip.js?v=bd4a55557cd2';
+import { showPlaneDialog } from './plane-dialog.js?v=bd4a55557cd2';
 // The Visibility panel's `Planes` toggles. Read by `syncPlanes3D` here and by
 // the 2D overlay, which is what keeps the two representations agreeing about
 // what "planes are off" means.
-import { planeVisibility } from './plane-visibility.js?v=dd1424f475d6';
+import { planeVisibility } from './plane-visibility.js?v=bd4a55557cd2';
 // Imported as well as re-exported below: `export { x } from` makes the name
 // importable FROM here but does not bind it in this module's own scope, and
 // `enterPlaneMode` / `exitPlaneMode` call this one directly.
-import { applyPlaneModeToolbarLock } from './plane-toolbar-lock.js?v=dd1424f475d6';
+import { applyPlaneModeToolbarLock } from './plane-toolbar-lock.js?v=bd4a55557cd2';
 // Section 1 of the panel, the Nodes pool. Imported (not merely re-exported)
 // because
 // `refreshPlanePanel` and the setup wiring call these directly.
@@ -192,7 +188,7 @@ import {
     // Shared with the 3D corner drag below, which reports where a
     // plane-locked node was pulled back to.
     planeLockWhere,
-} from './plane-nodes-panel.js?v=dd1424f475d6';
+} from './plane-nodes-panel.js?v=bd4a55557cd2';
 // The ROSTER half of section 2 — the Planes table and the actions that run on
 // the selected plane. Imported, not merely re-exported: the panel refresh below
 // calls these directly.
@@ -201,40 +197,40 @@ import {
     // The three action-button glyphs: the one-time wiring below sets their
     // innerHTML, so the hub needs the strings as well as the renderers.
     ICON_TRIANGULATE, ICON_MESH, ICON_FIT,
-} from './plane-list-panel.js?v=dd1424f475d6';
+} from './plane-list-panel.js?v=bd4a55557cd2';
 // The EDITOR half of section 2, below the roster in the same <details>.
-import { renderEditor } from './plane-editor-panel.js?v=dd1424f475d6';
-import { setPanelRailLocked } from './panel-rail.js?v=dd1424f475d6';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=dd1424f475d6';
+import { renderEditor } from './plane-editor-panel.js?v=bd4a55557cd2';
+import { setPanelRailLocked } from './panel-rail.js?v=bd4a55557cd2';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=bd4a55557cd2';
 // The 3D Mesh Objects table lives in its own module and is purely additive —
 // this import and the two calls below are the whole of its coupling to the
 // plane panel. Circular (it imports `planeModel`/`refreshPlanePanel` from
 // here), and safe for the same reason the cycles above are: call-time use.
 import {
     setupMeshObjects, refreshMeshObjectsPanel, getSelectedMeshObject,
-} from './mesh-objects.js?v=dd1424f475d6';
+} from './mesh-objects.js?v=bd4a55557cd2';
 // Circular (rendering.js imports `drawPlaneOverlays` from here, and
 // triangulation.js imports rendering.js). Safe because every use below is
 // inside a function body, so the binding is resolved at call time rather than
 // at module evaluation.
-import { drawAllOverlays } from './rendering.js?v=dd1424f475d6';
+import { drawAllOverlays } from './rendering.js?v=bd4a55557cd2';
 import {
     triangulatePoints, reprojectPointCamera, cameraDepth,
     fitPlaneToPoints3d, projectPoints3dOntoPlane,
     fitPlaneConstrained, projectPoints3dOntoPlaneConstrained,
     mergeFrozenPoints3d, summarizePlaneTriangulation, planesInvalidatedByFit,
-} from '../pose/triangulation.js?v=dd1424f475d6';
+} from '../pose/triangulation.js?v=bd4a55557cd2';
 // Circular (origin-definition imports `planeState` / `syncPlanes3D` back).
 // Same rule as the rendering.js cycle above: call-time use only.
 import {
     enterOriginMode, exitOriginMode, isOriginModeActive, attachOriginCallbacks,
     setupOriginDefinition, renderOriginResult, fittedPlanes,
-} from './origin-definition.js?v=dd1424f475d6';
+} from './origin-definition.js?v=bd4a55557cd2';
 // Circular (plane-angle.js imports `planeModel` / `refreshPlanePanel` /
 // `showPlaneDialog` back). Same rule as the cycles above: call-time use only.
 import {
     setupPlaneAngle, renderAngleButton, isAngleModalOpen, closeAngleModal,
-} from './plane-angle.js?v=dd1424f475d6';
+} from './plane-angle.js?v=bd4a55557cd2';
 
 // Re-exported so callers (and tests) can reach the model through the feature
 // module without knowing it was split out.
@@ -1309,7 +1305,7 @@ function reportFit(plane, res) {
 // Moved to `ui/plane-dialog.js` — it touches no plane state, and four
 // modules share it. Re-exported here so every existing importer and every
 // test that reaches it through this path is unaffected.
-export { showPlaneDialog } from './plane-dialog.js?v=dd1424f475d6';
+export { showPlaneDialog } from './plane-dialog.js?v=bd4a55557cd2';
 
 // ============================================
 // Pushing planes into the 3D viewport
@@ -1661,7 +1657,7 @@ export function isPlaneModeActive() {
 
 // Moved to `ui/plane-toolbar-lock.js`. Re-exported so `ui/rendering.js`
 // and the tests keep reaching it through this module's path.
-export { applyPlaneModeToolbarLock } from './plane-toolbar-lock.js?v=dd1424f475d6';
+export { applyPlaneModeToolbarLock } from './plane-toolbar-lock.js?v=bd4a55557cd2';
 
 export function enterPlaneMode() {
     if (planeState.active) return;
@@ -2133,7 +2129,7 @@ function onPlaneChanged(inst, movedIndices, opts) {
 
 // Moved to `ui/plane-overlays.js`. Re-exported so `ui/rendering.js` and
 // the tests keep reaching it through this module's path.
-export { drawPlaneOverlays } from './plane-overlays.js?v=dd1424f475d6';
+export { drawPlaneOverlays } from './plane-overlays.js?v=bd4a55557cd2';
 
 // ============================================
 // Wiring

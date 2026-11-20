@@ -28,23 +28,24 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=dd1424f475d6';
-import { state, getActiveSession } from './app-state.js?v=dd1424f475d6';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=dd1424f475d6';
-import { showPanelTab } from './panel-rail.js?v=dd1424f475d6';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=dd1424f475d6';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=dd1424f475d6';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=dd1424f475d6';
-import { getTrackingThreshold } from './settings.js?v=dd1424f475d6';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=dd1424f475d6';
+import { noteProgress } from './progress-delta.js?v=bd4a55557cd2';
+import { state, getActiveSession } from './app-state.js?v=bd4a55557cd2';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=bd4a55557cd2';
+import { showPanelTab } from './panel-rail.js?v=bd4a55557cd2';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=bd4a55557cd2';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=bd4a55557cd2';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=bd4a55557cd2';
+import { getTrackingThreshold } from './settings.js?v=bd4a55557cd2';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=bd4a55557cd2';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=bd4a55557cd2';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=dd1424f475d6';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=dd1424f475d6';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=dd1424f475d6';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=dd1424f475d6';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=bd4a55557cd2';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=bd4a55557cd2';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=bd4a55557cd2';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=bd4a55557cd2';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=dd1424f475d6';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=bd4a55557cd2';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -214,7 +215,6 @@ function openProgressDialog(title) {
     var ctl = new AbortController();
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay id-switch-progress-overlay';   // no grey backdrop (styles.css)
-    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-progress"><h3>' + escapeHtml(title) + '</h3>' +
         '<div class="id-switch-progress-text">Starting…</div>' +
         // the same playhead line as the ID Switches rows' bars, standing proud of an inner track that clips the fill
@@ -300,13 +300,19 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
-    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
-    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    // The overlay's plain form (spinner + message), not a counter: the check (~0.5 s on an 8-camera,
+    // 108,000-frame project) has no progress worth counting — the counter used to print "0/1 frames (0%)",
+    // frozen until the overlay closed.
     showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, { fps: rate.fps });
+        // Sampling the session runs here (it reads the InstanceGroups), in slices of ~25 ms with the
+        // page painting between them (`pauseSampling`); the scoring goes to a worker
+        // (pose/size-check-pool.js). Without one it scores here, and `onProgress` lets the page paint
+        // between the two halves.
+        var paint = function () { return yieldToPaint(); };
+        return await checkSizeSwitches(session, { fps: rate.fps, scoreGrid: scoreSizeGridOffThread,
+            pauseSampling: paint, onProgress: paint });
     } finally { hideLoading(); }
 }
 
@@ -328,6 +334,8 @@ async function runImage(session, rate, inject) {
     try {
         embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); }, imageModel: pkg,
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
+            maxGpuPct: getTrackingThreshold('imageCheckGpuTimePct'),
+            maxCpuPct: getTrackingThreshold('imageCheckCpuTimePct'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
         // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs
@@ -672,7 +680,6 @@ function openFixDialog(session, st, f) {
     }
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
-    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-fix-modal" role="dialog" aria-labelledby="idSwitchFixTitle">' +
         '<h3 id="idSwitchFixTitle">Fix ID switch</h3>' +
         '<p>Swap ' + idName(session, plan.nameA) + ' ↔ ' + idName(session, plan.nameB) + ' on <b>frames ' +

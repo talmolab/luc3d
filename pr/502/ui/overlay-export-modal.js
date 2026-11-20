@@ -24,23 +24,23 @@
 
 // Pinned to 6.6.1 — keep in sync with the dockview.css pin in index.html and the
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
-import { noteProgress } from './progress-delta.js?v=dd1424f475d6';
+import { noteProgress } from './progress-delta.js?v=bd4a55557cd2';
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
-import { state, videoController, getActiveSession } from './app-state.js?v=dd1424f475d6';
-import { Viewport3D } from './viewport3d.js?v=dd1424f475d6';
+import { state, videoController, getActiveSession } from './app-state.js?v=bd4a55557cd2';
+import { Viewport3D } from './viewport3d.js?v=bd4a55557cd2';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
     TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
-} from './overlays.js?v=dd1424f475d6';
-import { getVisibilitySettings, fillLazyReprojections } from './rendering.js?v=dd1424f475d6';
+} from './overlays.js?v=bd4a55557cd2';
+import { getVisibilitySettings, fillLazyReprojections } from './rendering.js?v=bd4a55557cd2';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
     ensureLazyTrailWindow,
     sessionHasCalibration,
-} from '../pose/triangulation.js?v=dd1424f475d6';
-import { setStatus } from '../import-export/save-load.js?v=dd1424f475d6';
+} from '../pose/triangulation.js?v=bd4a55557cd2';
+import { setStatus } from '../import-export/save-load.js?v=bd4a55557cd2';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
@@ -50,17 +50,16 @@ import {
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
     distributeAxisSizes, SASH_SHARE_FAR,
-} from './overlay-export-layout.js?v=dd1424f475d6';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=dd1424f475d6';
-import { fileSystemAccessHint } from './browser-hints.js?v=dd1424f475d6';
-import { askConfirm } from './ask.js?v=dd1424f475d6';
+} from './overlay-export-layout.js?v=bd4a55557cd2';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=bd4a55557cd2';
+import { fileSystemAccessHint } from './browser-hints.js?v=bd4a55557cd2';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
 // what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
 import {
     buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
-} from './video-filters.js?v=dd1424f475d6';
+} from './video-filters.js?v=bd4a55557cd2';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -1929,10 +1928,9 @@ export function showOverlayExportModal() {
                 // to be built in memory. Mirror the JSON exporter and let the
                 // user decide instead of risking the tab silently.
                 var fsaHint = fileSystemAccessHint();
-                if (!(await askConfirm('This export is about ' + fmtBytes(estTotal) + '. Without a ' +
+                if (!window.confirm('This export is about ' + fmtBytes(estTotal) + '. Without a ' +
                     'save-file picker it must be built entirely in memory, which may crash the ' +
-                    'tab.' + (fsaHint ? '\n\n' + fsaHint : '') + '\n\nExport anyway?',
-                    { title: 'Export Overlay Video', okLabel: 'Export Anyway' }))) {
+                    'tab.' + (fsaHint ? '\n\n' + fsaHint : '') + '\n\nExport anyway?')) {
                     abortExport('Overlay video export cancelled');
                     return;
                 }
