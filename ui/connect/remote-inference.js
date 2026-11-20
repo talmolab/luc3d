@@ -31,6 +31,7 @@ import { noteProgress, resetProgress } from '../progress-delta.js';
 import { formatEta } from '../inference-args.js';
 import { showLoading, showLoadingProgress, hideLoading } from '../loading-overlay.js';
 import { el, button, icon as baseIcon } from './dom.js';
+import { createAssignment, modelOfView, perViewModelPaths } from '../inference-model-assignment.js';
 
 function icon(name, cls) { return baseIcon(name, cls, 'inf-icon'); }
 function basename(p) { return String(p).split(/[\\/]/).pop(); }
@@ -134,8 +135,11 @@ export async function fetchAndLoadJobs(jobs, o) {
  *   onChange: () => void,
  * }} host
  */
+const ASSIGN_HINT = 'Assign a model to a view (Models ▸ Assign models…).';
+
 export function createRemoteInference(host) {
-    const models = [];
+    // Which worker model folders each view runs with (the Inference panel's Assign models… modal edits it).
+    let assignment = createAssignment();
     const views = { key: '', byView: {}, busy: false, error: null, token: 0 };
     const out = { key: '', dir: null, source: null, checking: false, note: null, token: 0 };
     const runIds = new Set();
@@ -277,13 +281,17 @@ export function createRemoteInference(host) {
 
     // ----------------------------------------------------------------- models
 
-    async function addModel() {
-        if (!connected()) return;
-        const p = await openRemoteFileBrowser({
+    /** A model folder on the worker (the Assign models… modal's Add model / + folder), or null. */
+    async function pickModel() {
+        if (!connected()) return null;
+        return (await openRemoteFileBrowser({
             workerId: workerId(), mounts: mountPaths(), mountLabels: mountLabels(), mode: 'directory', title: 'Select Model Directory on the worker',
-        });
-        if (p && models.indexOf(p) === -1) { models.push(p); changed(); }
+        })) || null;
     }
+    function getAssignment() { return assignment; }
+    function setAssignment(a) { assignment = a; changed(); }
+    /** The worker path of a view's video, once found on the worker. */
+    function workerVideo(view) { const r = views.byView[view]; return r && r.visible ? r.worker : null; }
 
     // ----------------------------------------------------------------- jobs
 
@@ -384,13 +392,14 @@ export function createRemoteInference(host) {
         if (!host.getSession()) return 'Open a session first.';
         if (!workerId()) return 'Connect to a worker in the Connect tab to start remote inference.';
         if (!connected()) return 'Connect to a worker in the Connect tab to start remote inference.';
-        if (models.length === 0) return 'Add a model (Browse Worker).';
+        if (Object.keys(assignment.byView).length === 0) return ASSIGN_HINT;
         if (views.busy) return 'Checking the worker…';
         const descs = host.viewDescriptors();
         if (descs.length && descs.every(function (x) { return x.blocker; })) return 'Inference on lazy-loaded views is not supported yet.';
         const un = unresolvedViews(descs, views.byView);
         if (un.length) return 'Not on the worker: ' + un.join(', ') + '. Locate on worker… or uncheck ' + (un.length > 1 ? 'them' : 'it') + ' (Data).';
         if (runnable().length === 0) return 'Check at least one view (Data).';
+        if (!runnable().some(function (d) { return modelOfView(assignment, d.view); })) return ASSIGN_HINT;
         if (!out.dir) return out.checking ? 'Checking the output folder…' : 'Choose an output folder on the worker (Data).';
         if (isDone()) return 'Dismiss the finished run to start another.';
         return '';
@@ -420,7 +429,8 @@ export function createRemoteInference(host) {
             const t = tag();
             const plan = planRemoteRun({
                 config: host.getConfig(), session: session.name, outputDir: dir,
-                hasPredictionsDir: !!(pstat.exists && pstat.type === 'directory'), stamp: formatRunTimestamp(), project: t, models: models.slice(),
+                hasPredictionsDir: !!(pstat.exists && pstat.type === 'directory'), stamp: formatRunTimestamp(), project: t,
+                perViewModels: perViewModelPaths(assignment, descs.map(function (d) { return d.view; })),
                 views: descs.map(function (d) {
                     const r = views.byView[d.view];
                     return {
@@ -525,46 +535,6 @@ export function createRemoteInference(host) {
     }, function () { sync(); changed(); }, shallowEqual);
 
     // ----------------------------------------------------------------- UI
-
-    function buildModels(parent) {
-        const row = el('div', 'inf-right');
-        const add = button('btn btn-sm inf-btn-outline');
-        add.id = 'infAddRemoteModel';
-        add.append(icon('folder-open'), ' Browse Worker');
-        add.addEventListener('click', addModel);
-        row.appendChild(add);
-        const empty = el('p', 'inf-muted');
-        const list = el('div', 'inf-model-list');
-        list.id = 'infRemoteModels';
-        parent.append(row, empty, list);
-        let lastSig = null;
-        onChange(function () {
-            const topDown = host.getConfig().pipeline === 'top-down' || host.getConfig().pipeline === 'top-down-id';
-            // The panel re-evaluates every 2 s: repaint only when something shown changed, so a focused
-            // button or a click in progress is not replaced under the user.
-            const sig = JSON.stringify([connected(), isRunning(), topDown, models]);
-            if (sig === lastSig) return;
-            lastSig = sig;
-            add.disabled = !connected() || isRunning();
-            add.title = connected() ? '' : 'Connect to a worker first';
-            empty.hidden = models.length > 0;
-            empty.textContent = topDown ? 'Add two directories (centroid + centered-instance).' : 'Add a model directory.';
-            list.textContent = '';
-            models.forEach(function (p, i) {
-                const item = el('div', 'inf-model');
-                item.appendChild(icon('folder', 'inf-ok'));
-                const name = el('span', 'inf-model-name', p);
-                name.title = p;
-                item.appendChild(name);
-                const rm = button('inf-x');
-                rm.innerHTML = railIconSvg('x'); rm.setAttribute('aria-label', 'Remove');
-                rm.disabled = isRunning();
-                rm.addEventListener('click', function () { models.splice(i, 1); changed(); });
-                item.appendChild(rm);
-                list.appendChild(item);
-            });
-        });
-    }
 
     function buildViews(parent) {
         const note = el('p', 'inf-muted inf-path');
@@ -730,7 +700,7 @@ export function createRemoteInference(host) {
     }
 
     return {
-        models, buildModels, buildViews, buildRun, sync, start, cancel, fetchAndLoad, canRun, whyNot, isRunning, onChange, refreshUi,
-        _state: function () { return { views: views, out: out, run: run, log: log, runIds: runIds, models: models }; },
+        pickModel, getAssignment, setAssignment, connected, workerVideo, buildViews, buildRun, sync, start, cancel, fetchAndLoad, canRun, whyNot, isRunning, onChange, refreshUi,
+        _state: function () { return { views: views, out: out, run: run, log: log, runIds: runIds, assignment: assignment }; },
     };
 }

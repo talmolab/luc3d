@@ -4179,7 +4179,8 @@ configs are not read). **Imports.** `launcher-spec`, `remote-track-spec`, `proje
 folder + relative path) and worker path (`resolveViewVideos`), `inferLocateRule` (one Locate per
 session root), the duplicate-worker-file refusal, `remoteOutputPath`
 (`<dir>/predictions/<session>__<view>.<stamp>.predictions.slp`), `buildViewSpec` (via
-`buildRemoteTrackSpecs`), `planRemoteRun`, `pendingFetches`, progress-line helpers
+`buildRemoteTrackSpecs`), `planRemoteRun` (`perViewModels`: each view's own worker model folders, a view
+without one skipped as "no model"; or `models` for every view), `pendingFetches`, progress-line helpers
 (`progressFromLine`: sleap-nn `--gui` JSON, else the rich bar line `NN%|..| a/b [t<eta, x it/s]` /
 `NN% a/b`), `lastErrorLine` (the exception line of a failed job's log, shown beside the worker's "exit
 code 1"), `unresolvedViews` (checked views not on the worker: Run waits), `MAX_FRAMES_SPEC_CHARS` /
@@ -10483,6 +10484,16 @@ Rows whose camera is excluded from tracking in the Tracking Wizard
 both the gutter label and the occupancy bars — distinct from the
 per-session visibility filter (`_hiddenCameras`), which drops the row entirely.
 
+**Frame markers count ungrouped instances.** `_buildFrameMarkers` (run by
+`setData`) sets a resident frame's `hasUser` / `hasPredicted` from both its
+grouped (`fg.instances`) and ungrouped (`fg.unlinkedInstances`) instances, so
+predictions merged by an inference run (`ui/inference-merge.js`: local sleap-nn
+or Connect's Fetch & Load) or an imported `.slp`, which arrive ungrouped and
+usually untracked (no track row), mark their frames as soon as the merge's
+`setData` runs. Lazy projects: resident frames only, as before. Tests:
+`tests/test-timeline.js` (Data Building), e2e `desktop-inference` §5/§8,
+`connect-inference-merge` §4.
+
 **The canvas is a BAND of the content, not all of it.** Inside the scroll
 wrapper (`_trackScrollEl`), a spacer (`_spacerEl`) carries the timeline's full
 content height — `max(getPreferredHeight(), visible height)` — so the scroll
@@ -12966,7 +12977,10 @@ collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
 **Remote / web (P4).** Loaded on every build. Backend picker
 (`ui/connect/backend-picker.js`): Local (desktop with sleap-nn) or a paired
 SLEAP Connect worker; with no local sleap-nn (web, desktop without it) the panel
-is remote-only (Models/Views/run block swap to `ui/connect/remote-inference.js`).
+is remote-only (Views/run block swap to `ui/connect/remote-inference.js`). The Models section is the
+same for both backends: Assign models… edits the local assignment, or the remote one
+(`remote.getAssignment`/`setAssignment`, worker folders picked through `remote.pickModel`, each view's
+worker video shown), enabled once a worker is connected.
 Local code reaches `window.lucidDesktop` only inside `setupInferencePanel` and
 the local paths. A 2 s refresh while shown notices a session opened meanwhile.
 With a worker selected, the settings sleap-connect's `TrackJobSpec` cannot carry (Max instances,
@@ -13032,7 +13046,7 @@ assigned until the user assigns it. Plain data, import-free.
 `perViewModelPaths(a, views)` (→ `config.perViewModels`), `modelLabel`,
 `folderName`, `foldersNeeded`, `MODEL_COLORS`.
 
-**Imported by.** `ui/inference-panel.js`, `ui/inference-models-modal.js`.
+**Imported by.** `ui/inference-panel.js`, `ui/inference-models-modal.js`, `ui/connect/remote-inference.js`.
 Test: `tests/test-inference-model-assignment.mjs`.
 
 ### ui/inference-models-modal.js
@@ -13241,24 +13255,25 @@ remote-browser-store,remote-browser}.js`, `ui/panel-rail-icons.js`. **Imported b
 
 #### ui/connect/remote-inference.js
 **Purpose.** The Inference panel's remote branch (sleap-app `inferenceStore.ts` remote path +
-`RemoteOutputFolder.tsx`): models picked on the worker, each view's video placed on the worker
+`RemoteOutputFolder.tsx`): each view's model (an assignment of worker folders, edited by the panel's
+Assign models… modal; `pickModel` opens the worker browser), each view's video placed on the worker
 (path rules, `fs.stat`, Locate on worker...), the output folder (per worker per project,
 `setOutputDir`), Run = one `track` job per view in one `run` (`submitJobsOn`, explicit
 `output_path`), per-view progress from job streams, Cancel, and Fetch & Load Results
 (`fetchResultBlobOn` + `fsFallback`, `mergeViewPredictions`, `markJobFetched`, a progress card);
 completed unfetched jobs of the project are offered again after a reload. The panel re-evaluates every
-2 s, so each block (models, views, run box) repaints only when its content signature changes (a focused
+2 s, so each block (views, run box) repaints only when its content signature changes (a focused
 control or a click in progress is never replaced); a failed job shows the log's exception line. Run waits
 until every checked view is on the worker and a finished run is Dismissed (sleap-app's all-resolved gate
 and `!isDone`); each job records the Existing-predictions `mergeMode` at submit, which Fetch & Load uses
 (a job without one uses the panel's current mode). Progress shows frames / percent / fps / ETA
 ("Initializing..." first); the log holds the echoed spec (`$ Remote (N videos): …`), submit / fetch lines
 and each job's worker output (`[cam1] …`), with Expand and Copy Log. **Exports.**
-`createRemoteInference(host)`, and for the Connect window's Jobs tab: `fetchAndLoadJobs(jobs, {mode, mergeFile?, onLog?})`
+`createRemoteInference(host)` (`pickModel`, `getAssignment`, `setAssignment`, `connected`, `workerVideo`, …), and for the Connect window's Jobs tab: `fetchAndLoadJobs(jobs, {mode, mergeFile?, onLog?})`
 (the Fetch & Load loop: overlay per job, Esc cancels, `{loaded, failures, cancelled}`; the panel's own button runs
 through it), `fetchJobPredictions(workerId, jobId, {name, onProgress})` (blob or `fs.read` of the job's `output_path` →
 `{file, outPath, detail}`), `openProjectInfo()` (the open file name + session folder names, for `lucidProjectTag`).
-**Imports.** `pose/connect/*`, `remote-file-browser.js`, `ui/{app-state,inference-merge,loading-overlay,progress-delta,panel-rail-icons}.js`.
+**Imports.** `pose/connect/*`, `remote-file-browser.js`, `ui/{app-state,inference-merge,inference-model-assignment,loading-overlay,progress-delta,panel-rail-icons}.js`.
 **Imported by.** `ui/inference-panel.js`, `ui/connect/{worker-jobs,merge-predictions-dialog}.js`.
 **Coverage.** `tests/e2e/connect-inference-merge.mjs`, `connect-jobs.mjs`.
 

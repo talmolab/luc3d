@@ -23,7 +23,8 @@
  *     frames 0-9, also written at output_path): Fetch & Load Results is
  *     offered; clicking it downloads through fs.read, merges with Replace:
  *     20 predicted instances per view, the user label untouched, the old
- *     prediction on a re-inferred frame replaced; the jobs are marked fetched.
+ *     prediction on a re-inferred frame replaced; the timeline marks frames
+ *     0-9 as predicted; the jobs are marked fetched.
  *  5. Reload: completed-but-unfetched jobs come back as "Predictions ready"
  *     and Fetch & Load works after a reload; results of another session are
  *     refused with a message.
@@ -126,6 +127,20 @@ await runConnectE2E(9393, async ({ browser, BASE }) => {
     })));
     const dbl = (name) => page.dblclick(`#remoteFileBrowser .rfb-entry[data-name="${name}"]`);
     const browserOpen = () => page.waitForSelector('#remoteFileBrowser .rfb-entry');
+    // In the Assign models… modal: Add model → the worker browser → /data/models/td.
+    const pickRemoteModel = async (checkMode) => {
+        await page.click('#infMmAddModel');
+        await browserOpen();
+        await page.evaluate(() => { document.querySelector('#remoteFileBrowser .rfb-side-item[title="/data"]').click(); });
+        await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="models"]');
+        await dbl('models'); await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="td"]');
+        await dbl('td');
+        await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="training_config.yaml"]');
+        if (checkMode) check(await page.evaluate(() => /Folders? |Choose Folder/.test(document.querySelector('#remoteFileBrowser .rfb-btn-primary').textContent)), 'directory mode: Choose Folder');
+        await page.click('#remoteFileBrowser .rfb-btn-primary');
+        await page.waitForFunction(() => !document.getElementById('remoteFileBrowser'));
+        await page.waitForSelector('#infMmModels tbody tr');
+    };
 
     console.log('\n1. Web build');
     await boot();
@@ -180,18 +195,19 @@ await runConnectE2E(9393, async ({ browser, BASE }) => {
     const rules = await store((s) => s.pairedWorkers[0].pathRules);
     check(rules.length === 1 && rules[0].local === 'rec' && rules[0].worker === '/data/sess', 'the rule is rec → /data/sess', rules);
 
-    await page.click('#infAddRemoteModel');
-    await browserOpen();
-    await page.evaluate(() => { document.querySelector('#remoteFileBrowser .rfb-side-item[title="/data"]').click(); });
-    await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="models"]');
-    await dbl('models'); await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="td"]');
-    await dbl('td');
-    await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="training_config.yaml"]');
-    check(await page.evaluate(() => /Folders? |Choose Folder/.test(document.querySelector('#remoteFileBrowser .rfb-btn-primary').textContent)), 'directory mode: Choose Folder');
-    await page.click('#remoteFileBrowser .rfb-btn-primary');
-    await page.waitForFunction(() => !document.getElementById('remoteFileBrowser'));
-    const models = await page.evaluate(() => Array.from(document.querySelectorAll('#infRemoteModels .inf-model-name')).map((e) => e.textContent));
-    check(models.join() === '/data/models/td', 'the model is a worker path', models);
+    check(await page.evaluate(() => !document.getElementById('infAssignModels').disabled), 'Assign models… is enabled once a worker is connected');
+    await page.click('#infAssignModels');
+    await page.waitForSelector('#infMmViews');
+    const mmRows = await page.evaluate(() => Array.from(document.querySelectorAll('#infMmViews tbody tr')).map((r) => r.dataset.view + '=' + r.querySelector('select').value + '@' + r.textContent));
+    check(mmRows.length === 2 && mmRows.every((r) => /=@/.test(r)) && /\/data\/sess\/cam1\/cam1\.mp4/.test(mmRows[0]),
+        'the modal lists each view with its WORKER video and no model', mmRows);
+    await pickRemoteModel(true);
+    await page.click('#infMmSelectAll');
+    await page.click('#infMmBulkAssign');
+    await page.click('#infMmApply');
+    await page.waitForFunction(() => !document.getElementById('infModelsModal'));
+    const models = await page.evaluate(() => Array.from(document.querySelectorAll('#infModelSummary .inf-model-name')).map((e) => e.textContent + '|' + e.title));
+    check(models.join() === 'td|/data/models/td', 'the model is a worker path, shown by its folder name', models);
     await page.waitForFunction(() => /^\/data\/sess/.test(document.getElementById('infOutputDir').textContent));
     check(await page.evaluate(() => document.getElementById('infOutputDir').textContent) === '/data/sess', 'output folder: the session\'s own folder on the worker');
     await page.waitForFunction(() => !document.getElementById('infRun').disabled);
@@ -278,12 +294,14 @@ await runConnectE2E(9393, async ({ browser, BASE }) => {
             oldPred: all(1, 'cam1').filter((i) => i.type === 'predicted' && i.getPoint(0) && i.getPoint(0)[0] === 1).length,
             fetched: m.useConnectStore.getState().trackedJobs.map((j) => j.fetchedAt != null),
             fetchBtnHidden: document.getElementById('infFetchLoad').hidden,
+            marks: Array.from({ length: 10 }, (_, f) => window.__lucid.timeline._frameMarkers.get(f) || null),
         };
     });
     check(p4.per['cam1:predicted'] === 20 && p4.per['cam2:predicted'] === 20, '20 predicted instances per view', p4.per);
     check(p4.userAt0.length === 1 && JSON.stringify(p4.userAt0[0]) === '[[11,22],[33,44]]', 'the user label is untouched (Replace)', p4.userAt0);
     check(p4.oldPred === 0, 'the old prediction on a re-inferred frame was replaced');
     check(/✓ cam1: 20 predicted instances on 10 frames/.test(p4.log), 'the log reports the merge', p4.log);
+    check(p4.marks.every((m) => m && m.hasPredicted), 'the timeline marks every frame with new predictions (0-9) right after Fetch & Load', p4.marks);
     check(p4.dirty === true, 'the project is dirty');
     check(p4.fetched.length === 2 && p4.fetched.every(Boolean), 'both jobs are marked fetched', p4.fetched);
     check(p4.fetchBtnHidden, 'Fetch & Load is gone once everything is loaded');
@@ -351,15 +369,13 @@ await runConnectE2E(9393, async ({ browser, BASE }) => {
     });
     await page.waitForFunction(() => /\/data\/sess\/cam1\/cam1\.mp4/.test(document.querySelector('#infRemoteViews .inf-view[data-view="cam2"]').textContent));
     // (models are not remembered across a reload)
-    await page.click('#infAddRemoteModel');
-    await browserOpen();
-    await page.evaluate(() => { document.querySelector('#remoteFileBrowser .rfb-side-item[title="/data"]').click(); });
-    await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="models"]');
-    await dbl('models'); await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="td"]');
-    await dbl('td');
-    await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="training_config.yaml"]');
-    await page.click('#remoteFileBrowser .rfb-btn-primary');
-    await page.waitForFunction(() => !document.getElementById('remoteFileBrowser'));
+    await page.click('#infAssignModels');
+    await page.waitForSelector('#infMmViews');
+    await pickRemoteModel(false);
+    await page.click('#infMmSelectAll');
+    await page.click('#infMmBulkAssign');
+    await page.click('#infMmApply');
+    await page.waitForFunction(() => !document.getElementById('infModelsModal'));
     await page.click('#infRemoteDismiss').catch(() => {});
     await page.waitForFunction(() => !document.getElementById('infRun').disabled);
     const before = worker.jobs.size;
@@ -369,16 +385,22 @@ await runConnectE2E(9393, async ({ browser, BASE }) => {
     check(await page.evaluate(() => /cam1 and cam2 point at the same file on the worker \(\/data\/sess\/cam1\/cam1\.mp4\)/.test(document.getElementById('infRemoteError').textContent)), 'the refusal names both views and the file');
 
     console.log('\n7. Esc closes the file browser');
-    await page.click('#infAddRemoteModel');
+    await page.click('#infAssignModels');
+    await page.waitForSelector('#infMmViews');
+    await page.click('#infMmAddModel');
     await browserOpen();
     await page.keyboard.press('Escape');
-    check(await page.evaluate(() => !document.getElementById('remoteFileBrowser')), 'Esc closes it');
+    check(await page.evaluate(() => !document.getElementById('remoteFileBrowser') && !!document.getElementById('infModelsModal')), 'Esc closes it (the models modal under it stays)');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('infModelsModal'));
 
     console.log('\n11. The file browser: big folders, keys, Tab, long names, notice');
     for (let i = 0; i < 250; i++) worker.addFile('/data/zbig/f' + String(i).padStart(4, '0') + '.png', i === 249 ? 'x'.repeat(5000) : 'x');
     const LONG = '2026-10-20_courtship_assay_arena_B_session_0042_proofread.v003.slp';
     worker.addFile('/data/zbig/' + LONG, 'x');
-    await page.click('#infAddRemoteModel');
+    await page.click('#infAssignModels');
+    await page.waitForSelector('#infMmViews');
+    await page.click('#infMmAddModel');
     await browserOpen();
     await page.evaluate(() => { document.querySelector('#remoteFileBrowser .rfb-side-item[title="/data"]').click(); });
     await page.waitForSelector('#remoteFileBrowser .rfb-entry[data-name="zbig"]');
@@ -421,17 +443,19 @@ await runConnectE2E(9393, async ({ browser, BASE }) => {
     } else check(false, 'a missing folder falls back with a notice (could not provoke it)');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.getElementById('remoteFileBrowser'));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('infModelsModal'));
 
     console.log('\n8. The 2 s refresh leaves the panel\'s controls alone');
-    await page.waitForSelector('#infRemoteModels .inf-x');
+    await page.waitForSelector('#infAssignModels');
     const keep = await page.evaluate(() => new Promise((res) => {
         const cb = document.querySelector('#infRemoteViews .inf-view[data-view="cam2"] input[type=checkbox]');
-        const rm = document.querySelector('#infRemoteModels .inf-x');
+        const rm = document.querySelector('#infAssignModels');
         cb.__mark = rm.__mark = 1;
         cb.focus();
         setTimeout(() => {
             const cb2 = document.querySelector('#infRemoteViews .inf-view[data-view="cam2"] input[type=checkbox]');
-            const rm2 = document.querySelector('#infRemoteModels .inf-x');
+            const rm2 = document.querySelector('#infAssignModels');
             res({ focus: document.activeElement === cb, sameCb: cb2 === cb, sameRm: rm2 === rm });
         }, 4600);
     }));

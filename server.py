@@ -64,6 +64,26 @@ class LucidHandler(SimpleHTTPRequestHandler):
     # response here carries an accurate Content-Length, which HTTP/1.1 requires.
     protocol_version = "HTTP/1.1"
 
+    # Every response says Cache-Control: no-cache (revalidate before each use).
+    # With only Last-Modified, a browser guesses freshness from the file's age, so
+    # a module untouched for weeks was reused for days without asking -- the
+    # desktop app's WKWebView (`tauri dev` loads this server) kept showing old UI
+    # after a checkout changed the file. Plain files still answer
+    # If-Modified-Since with a cheap 304, so a reload stays fast.
+    def send_response(self, *args, **kwargs):
+        self._cache_control_sent = False
+        super().send_response(*args, **kwargs)
+
+    def send_header(self, keyword, value):
+        if keyword.lower() == "cache-control":
+            self._cache_control_sent = True
+        super().send_header(keyword, value)
+
+    def end_headers(self):
+        if not getattr(self, "_cache_control_sent", True):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     def do_GET(self):
         rewritten = self._rewritten_body()
         if rewritten is None:

@@ -53,7 +53,7 @@ import { matchViewVideos, isVideoName } from './inference-video-paths.js';
 import { mergeViewPredictions } from './inference-merge.js';
 import { createRemoteInference } from './connect/remote-inference.js';
 import { createBackendPicker } from './connect/backend-picker.js';
-import { createAssignment, perViewModelPaths, viewsOfModel, modelLabel, pruneViews } from './inference-model-assignment.js';
+import { createAssignment, addModel, assignViews, perViewModelPaths, viewsOfModel, modelLabel, pruneViews } from './inference-model-assignment.js';
 import { openModelsModal } from './inference-models-modal.js';
 
 export const INFERENCE_TAB_ID = 'tabInference';
@@ -491,14 +491,29 @@ function modalViews() {
     });
 }
 
+/** The assignment the current backend runs with: local model folders, or worker paths for a remote run. */
+function currentAssignment() { return isRemote() && remote ? remote.getAssignment() : assignment; }
+
+/** Whether Assign models… can pick a folder: a local sleap-nn, or a connected worker. */
+function canPickModels() { return isRemote() ? !!remote && remote.connected() : !!sn; }
+
 function openAssignModels() {
-    syncVideosToSession();
+    const rem = isRemote() && !!remote;
+    let rows;
+    if (rem) {
+        rows = sessionViews().map(function (v) {
+            return { view: v, video: remote.workerVideo(v), blocked: viewInferenceBlocker(state.session, v) };
+        });
+    } else {
+        syncVideosToSession();
+        rows = modalViews();
+    }
     openModelsModal({
-        assignment: assignment,
-        views: modalViews(),
+        assignment: currentAssignment(),
+        views: rows,
         pipeline: cfg.pipeline,
-        pickModel: function () { return sn.pickModelDirectory('Select Model Directory'); },
-        onApply: function (a) { assignment = a; refresh(); },
+        pickModel: rem ? remote.pickModel : function () { return sn.pickModelDirectory('Select Model Directory'); },
+        onApply: function (a) { if (rem) remote.setAssignment(a); else assignment = a; refresh(); },
     });
 }
 
@@ -792,10 +807,7 @@ function buildPanel(root) {
     // Models
     const models = section(top, 'Models', true);
     const lm = el('div', 'inf-sub0');
-    models.appendChild(shownIf(lm, function () { return !isRemote(); }));
-    const rmBox = el('div', 'inf-sub0');
-    models.appendChild(shownIf(rmBox, isRemote));
-    remote.buildModels(rmBox);
+    models.appendChild(lm);
     const addRow = el('div', 'inf-right');
     const add = el('button', 'btn btn-sm inf-btn-outline');
     add.type = 'button';
@@ -813,8 +825,10 @@ function buildPanel(root) {
     const unassigned = el('p', 'inf-muted');
     lm.appendChild(unassigned);
     onRefresh(function () {
-        add.disabled = isRunning() || !sn;
+        add.disabled = isRunning() || !canPickModels();
+        add.title = isRemote() && !canPickModels() ? 'Connect to a worker first' : '';
         const views = sessionViews();
+        const assignment = currentAssignment();
         pruneViews(assignment, views);
         modelList.textContent = '';
         assignment.models.forEach(function (m) {
@@ -1343,7 +1357,7 @@ export async function setupInferencePanel() {
 
 /**
  * The Connect window's New job wizard ("This project" data source) hands its model folders here: they
- * replace the remote model list and the panel's own remote Run starts (one job per view, the panel's
+ * become the remote model of every view and the panel's own remote Run starts (one job per view, the panel's
  * views / frames / options / output folder), exactly as pressing Run Remote Inference would. Waits for the
  * worker checks, and says why not when Run is not possible. P4 behaviour is unchanged.
  *
@@ -1352,8 +1366,11 @@ export async function setupInferencePanel() {
  */
 export async function runRemoteInferenceWithModels(models) {
     if (!remote) return { ok: false, error: 'The Inference panel is not available.' };
+    if (!models || !models.length) return { ok: false, error: 'Add a model on the worker.' };
     if (sn) backend.remote = true;
-    remote.models.splice(0, remote.models.length, ...models);
+    const a = createAssignment();
+    assignViews(a, sessionViews(), addModel(a, models).id);
+    remote.setAssignment(a);
     refresh();
     const t0 = Date.now();
     while (Date.now() - t0 < 20000 && /^Checking/.test(remote.whyNot())) await new Promise(function (r) { setTimeout(r, 150); });

@@ -29,7 +29,8 @@
  *     no --video_index; the predictions come back as ungrouped predicted
  *     instances per view (20 each); the user label is untouched; the old
  *     prediction on a re-inferred frame is replaced; progress "10 / 10
- *     frames"; Complete; the project is dirty.
+ *     frames"; Complete; the project is dirty; the timeline marks frames 0-9
+ *     as predicted right after the merge (ungrouped predictions count).
  *  6. A failing job: Failed, the error names the view and sleap-nn's last
  *     stderr line (not the macOS objc noise), and the next view is NOT run.
  *  7. REAL tracked sleap-nn output merged
@@ -38,7 +39,8 @@
  *  8. A lazy project: its views are listed as blocked (TEMPORARY) and Run is
  *     disabled with the reason; the merge itself (for when that is lifted): the same merge removes the old prediction's STORE row,
  *     keeps the user label, adds 20 predictions, and pins the new frames
- *     (frameEvictionBlocker) so nothing is lost before a save.
+ *     (frameEvictionBlocker) so nothing is lost before a save; the timeline
+ *     marks the new frames.
  *
  * Usage: node tests/e2e/desktop-inference.mjs   (PORT= to move its server)
  */
@@ -413,6 +415,8 @@ try {
             dirty: window.__lucid.state.isDirty,
             log: Array.from(window.__mock.calls).length,
             logText: document.getElementById('infLog').textContent,
+            // The timeline's frame marks right after the merge (no other redraw in between).
+            marks: Array.from({ length: 10 }, (_, f) => window.__lucid.timeline._frameMarkers.get(f) || null),
         };
     });
     check(p5.status === 'Complete', 'status Complete', p5);
@@ -436,6 +440,8 @@ try {
     check(/View 2 of 2: cam2/.test(p5.jobLine), 'the job line names the view', p5.jobLine);
     check(p5.dirty === true, 'the project is dirty');
     check(/✓ cam2: 20 predicted instances on 10 frames/.test(p5.logText), 'the log reports the merge', p5.logText);
+    check(p5.marks.every((m) => m && m.hasPredicted), 'the timeline marks every frame with new predictions (0-9) right after the merge', p5.marks);
+    check(p5.marks.slice(1).every((m) => !m.hasUser), 'frames 1-9 are predicted-only (drawn as prediction marks)', p5.marks);
 
     // ---------------------------------------------------------------- 6
     console.log('\n6. A failing job stops the queue');
@@ -540,7 +546,8 @@ try {
         }
         const pinned = [];
         for (let f = 0; f < 10; f++) pinned.push(lr.frameEvictionBlocker(L, f, L.frameGroups.get(f), null));
-        return { r, before1, after1, after0, preds, users0, pinned, panel };
+        const marks = Array.from({ length: 10 }, (_, f) => window.__lucid.timeline._frameMarkers.get(f) || null);
+        return { r, before1, after1, after0, preds, users0, pinned, panel, marks };
     }, PRED_B64);
     check(!p7.err, 'lazy project opened', p7.err);
     if (!p7.err) {
@@ -552,6 +559,7 @@ try {
         check(p7.after0 === 1 && p7.users0 === 1, 'the user label (store row + instance) is kept', p7);
         check(p7.r.instances === 20 && p7.preds === 20, '20 predictions added on frames 0-9', p7);
         check(p7.pinned.every((b) => b !== null), 'every frame with new predictions is pinned until saved', p7.pinned);
+        check(p7.marks.every((m) => m && m.hasPredicted), 'lazy: the timeline marks every frame with new predictions right after the merge', p7.marks);
     }
 } catch (e) {
     console.error(e);
