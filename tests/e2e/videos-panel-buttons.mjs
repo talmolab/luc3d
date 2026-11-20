@@ -161,7 +161,7 @@ try {
         'camB keeps its pane, cell and thumbnail');
     check(await page.evaluate(() => document.getElementById('btnRemoveVideo').disabled),
         'Remove Video is disabled again (its row is gone)');
-    check(await page.evaluate(() => Array.from(document.querySelectorAll('#videosTable tbody tr'))
+    check(await page.evaluate(() => Array.from(document.querySelectorAll('#videosTable tbody tr.video-name-row'))
         .map(r => r.children[0].textContent).join()) === 'camB',
         'the Videos table lists only camB');
     check(s.cameras.indexOf('camA') >= 0,

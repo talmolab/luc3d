@@ -4023,6 +4023,37 @@ button.tri-dropdown-item:disabled {
   padding-right: 4px;
 }
 
+/* The Videos table (ui/info-panel.js populateVideosTable) fits the 300px
+   panel by stacking: each video is a name row spanning the table, then a row
+   of counts that never clip. The pair hovers and selects as one. A name too
+   long for the panel ellipsizes, with the full name and path in its title.
+   Path and resolution live in the selected-video detail, where a path breaks
+   anywhere. */
+#videosTable td.video-name {
+  max-width: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+  font-weight: 500;
+}
+#videosTable tr.video-counts-row td {
+  max-width: none;
+  overflow: visible;
+  padding-top: 2px;
+}
+#videosTable tr.video-name-row:hover + tr.video-counts-row:not(.selected),
+#videosTable tr.video-name-row:not(.selected):has(+ tr.video-counts-row:hover) {
+  background: var(--bg-button);
+}
+#videoDetail .video-path-row {
+  gap: 10px;
+  align-items: baseline;
+}
+#videoDetail .video-path-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
 .data-table .mono {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 11px;

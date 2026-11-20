@@ -5197,6 +5197,14 @@ task of a DLT Triangulate All on the 8-camera, 539,852-group project, with the
 section closed (only Instances is open by default). Test:
 `tests/e2e/videos-table-counts.mjs`.
 
+**Layout.** The table fits the 300px panel by stacking:
+each video is a full-width name row (`tr.video-name-row`, tooltip = name +
+path, ellipsizes only past the panel) over a counts row (`tr.video-counts-row`:
+Frames, Labeled, Groups, Score; comma-grouped, never clipped); a click on
+either selects the pair (`#videosTable` rules in `styles.css`). Path and resolution are in the selected-video detail
+(`showVideoFileDetail`), where a path breaks anywhere. Test:
+`tests/e2e/videos-table-fit.mjs` (Chromium + WebKit).
+
 **Reprojection Error panel (`updateFrameInfo`).** The headline mean,
 undistorted residual, method label, and per-camera rows are the frame SUMMARY
 (averaged over every triangulated instance). The "Per-instance node breakdown"

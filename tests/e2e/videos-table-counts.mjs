@@ -67,8 +67,9 @@ try {
     // per-camera loops gave for each row's camera.
     const read = () => page.evaluate(() => {
         const { state } = window.__lucid;
-        const rows = [...document.querySelectorAll('#videosTable tbody tr')].map(tr =>
-            [0, 4, 5, 6].map(i => tr.children[i].textContent));
+        // Each video is a name row over a counts row (Frames, Labeled, Groups, Score).
+        const rows = [...document.querySelectorAll('#videosTable tbody tr.video-name-row')].map(tr =>
+            [tr.children[0].textContent].concat([1, 2, 3].map(i => tr.nextElementSibling.children[i].textContent)));
         const list = state.videoFiles.length ? state.videoFiles : state.views;
         const expected = list.map(vf => {
             const cam = vf.assignedCamera || vf.name;
@@ -81,7 +82,7 @@ try {
             for (const [, gs] of state.session.instanceGroups) {
                 for (const g of gs) for (const [c, i] of g.instances) if (i && c === cam) groups++;
             }
-            return [vf.name, String(labeled), String(groups), n > 0 ? (sum / n).toFixed(2) : '-'];
+            return [vf.name, labeled.toLocaleString('en-US'), groups.toLocaleString('en-US'), n > 0 ? (sum / n).toFixed(2) : '-'];
         });
         return { rows, expected };
     });
@@ -130,17 +131,17 @@ try {
     r = await read();
     check(r.rows.every(row => row[1] === '…' && row[2] === '…' && row[3] === '…'),
         'right after the rebuild: "…" ' + JSON.stringify(r.rows[0]));
-    await page.waitForFunction(() => [...document.querySelectorAll('#videosTable tbody tr')]
-        .every(tr => tr.children[5].textContent !== '…'), null, { timeout: 10000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('#videosTable tbody tr.video-counts-row')]
+        .every(tr => tr.children[2].textContent !== '…'), null, { timeout: 10000 });
     r = await read();
     check(JSON.stringify(r.rows) === JSON.stringify(r.expected), 'then the same counts: ' + JSON.stringify(r.rows));
 
     console.log('\n§6 a rebuild during a count: the older count stops, the newer one fills the table');
     await ip();
-    const firstCells = await page.evaluateHandle(() => [...document.querySelectorAll('#videosTable tbody tr')].map(tr => tr.children[5]));
+    const firstCells = await page.evaluateHandle(() => [...document.querySelectorAll('#videosTable tbody tr.video-counts-row')].map(tr => tr.children[2]));
     await ip();
-    await page.waitForFunction(() => [...document.querySelectorAll('#videosTable tbody tr')]
-        .every(tr => tr.children[5].textContent !== '…'), null, { timeout: 10000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('#videosTable tbody tr.video-counts-row')]
+        .every(tr => tr.children[2].textContent !== '…'), null, { timeout: 10000 });
     await page.waitForTimeout(200);
     check(await page.evaluate(cells => cells.every(td => td.textContent === '…'), firstCells),
         'the replaced rows were never filled');

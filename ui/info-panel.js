@@ -381,34 +381,37 @@ export function populateVideosTable() {
     const countCells = [];
 
     videoList.forEach(function (vf, i) {
+        // Each video is TWO rows: its name across the full width, then its
+        // counts. Seven columns in one row measured ~550px in the 300px panel,
+        // and a Name column squeezed beside the counts showed "Came…" for
+        // every camera. Path and resolution are in the selected-video detail
+        // (`showVideoFileDetail`); the name row's tooltip carries the path too.
+        const trName = document.createElement('tr');
+        trName.className = 'video-name-row';
         const tr = document.createElement('tr');
-        tr.addEventListener('click', function () {
-            tbody.querySelectorAll('tr').forEach(function (r) { r.classList.remove('selected'); });
-            tr.classList.add('selected');
-            selectedVideoFile = vf;
-            document.getElementById('btnRemoveVideo').disabled = false;
-            showVideoFileDetail(vf);
+        tr.className = 'video-counts-row';
+        [trName, tr].forEach(function (row) {
+            row.addEventListener('click', function () {
+                tbody.querySelectorAll('tr').forEach(function (r) { r.classList.remove('selected'); });
+                trName.classList.add('selected');
+                tr.classList.add('selected');
+                selectedVideoFile = vf;
+                document.getElementById('btnRemoveVideo').disabled = false;
+                showVideoFileDetail(vf);
+            });
         });
 
-        // Name
         const tdName = document.createElement('td');
+        tdName.className = 'video-name';
+        tdName.colSpan = 4;
         tdName.textContent = vf.name;
+        tdName.title = vf.videoPath ? vf.name + '\n' + vf.videoPath : vf.name;
+        trName.appendChild(tdName);
 
-        // Path
-        const tdPath = document.createElement('td');
-        tdPath.textContent = vf.videoPath || '';
-        tdPath.style.cssText = 'font-size:10px;color:var(--text-muted);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-        tdPath.title = vf.videoPath || '';
-
-        // Frames
+        const nFrames = vf.frameCount || (vf.decoder ? vf.decoder.samples.length : 0);
         const tdFrames = document.createElement('td');
         tdFrames.className = 'mono';
-        tdFrames.textContent = vf.frameCount || (vf.decoder ? vf.decoder.samples.length : '-');
-
-        // Size
-        const tdSize = document.createElement('td');
-        tdSize.className = 'mono';
-        tdSize.textContent = vf.videoWidth + 'x' + vf.videoHeight;
+        tdFrames.textContent = nFrames ? nFrames.toLocaleString('en-US') : '-';
 
         // Counts by camera name (assignedCamera or name), filled in by
         // `countVideosInSlices`: '…' while it counts, empty while the section
@@ -427,13 +430,11 @@ export function populateVideosTable() {
         tdScore.textContent = pending;
         countCells.push({ camName: vf.assignedCamera || vf.name, tdLabeled, tdGroups, tdScore });
 
-        tr.appendChild(tdName);
-        tr.appendChild(tdPath);
         tr.appendChild(tdFrames);
-        tr.appendChild(tdSize);
         tr.appendChild(tdLabeled);
         tr.appendChild(tdGroups);
         tr.appendChild(tdScore);
+        tbody.appendChild(trName);
         tbody.appendChild(tr);
     });
 
@@ -455,8 +456,8 @@ function countVideosInSlices(job, session, cells) {
         const counts = counter.result();
         for (const cell of cells) {
             const c = counts.get(cell.camName) || NO_VIDEO_COUNTS;
-            cell.tdLabeled.textContent = c.labeled;
-            cell.tdGroups.textContent = c.groups;
+            cell.tdLabeled.textContent = c.labeled.toLocaleString('en-US');
+            cell.tdGroups.textContent = c.groups.toLocaleString('en-US');
             cell.tdScore.textContent = c.scoreCount > 0 ? (c.scoreSum / c.scoreCount).toFixed(2) : '-';
         }
     };
@@ -486,13 +487,15 @@ export function showVideoFileDetail(vf) {
 
     const rows = [
         ['Name', vf.name],
+        ['Path', vf.videoPath || '-'],
         ['Resolution', vf.videoWidth + ' x ' + vf.videoHeight + ' px'],
-        ['Frames', vf.frameCount || '-'],
+        ['Frames', vf.frameCount ? vf.frameCount.toLocaleString('en-US') : '-'],
         ['Assigned Camera', vf.assignedCamera || 'Unassigned'],
         ['Has View', state.views.some(function (v) { return v.name === camName; }) ? 'Yes' : 'No'],
-        ['Labeled frames', labeledFrames],
-        ['Instances', totalInstances + ' (user: ' + userCount + ', pred: ' + predictedCount + ')'],
-        ['Unlinked', unlinkedCount],
+        ['Labeled frames', labeledFrames.toLocaleString('en-US')],
+        ['Instances', totalInstances.toLocaleString('en-US') + ' (user: ' + userCount.toLocaleString('en-US')
+            + ', pred: ' + predictedCount.toLocaleString('en-US') + ')'],
+        ['Unlinked', unlinkedCount.toLocaleString('en-US')],
         ['Mean score', scoreN > 0 ? (scoreSum / scoreN).toFixed(3) : '-'],
     ];
     rows.forEach(function (row) {
@@ -505,6 +508,9 @@ export function showVideoFileDetail(vf) {
         value.className = 'value';
         value.style.fontSize = '11px';
         value.textContent = row[1];
+        // A path has no spaces to wrap at; break it anywhere so it stays
+        // inside the panel (`.video-path-value`).
+        if (row[0] === 'Path') { r.classList.add('video-path-row'); value.classList.add('video-path-value'); }
         r.appendChild(label);
         r.appendChild(value);
         div.appendChild(r);
@@ -579,6 +585,9 @@ export function showCameraDetail(cam) {
         value.className = 'value';
         value.style.fontSize = '11px';
         value.textContent = row[1];
+        // A path has no spaces to wrap at; break it anywhere so it stays
+        // inside the panel (`.video-path-value`).
+        if (row[0] === 'Path') { r.classList.add('video-path-row'); value.classList.add('video-path-value'); }
         r.appendChild(label);
         r.appendChild(value);
         div.appendChild(r);
