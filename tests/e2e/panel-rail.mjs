@@ -30,6 +30,11 @@
  *       restores the same open / folded sections.
  *   §7  Open and folded sections are remembered across a reload
  *       (localStorage); the info panel still starts shown.
+ *   §8  The widened rail sits cleanly over the panel: the info panel is one
+ *       stacking context and the rail its own compositing layer (WKWebView
+ *       drew sticky headers over the rail's labels without them); headers and
+ *       the Cameras table stay inside the panel, and the rail is on top of
+ *       every one it covers.
  *
  * Run: node panel-rail.mjs   (spawns its own http.server)
  */
@@ -378,6 +383,60 @@ try {
     s = await railState();
     check(!s.collapsed && J(s.open) === J(saved.open) && J(s.content) === J(saved.content),
         `the open and folded sections are restored after a reload, with the info panel shown (${J(s.open)})`);
+
+    // ---- §8 the widened rail sits cleanly over the panel ----
+    // The desktop app (WKWebView) drew the info panel's sticky section
+    // headers and table headers OVER the widened rail's labels, and the rail
+    // over the rest of the panel. Chromium and Playwright's WebKit composite
+    // differently and never showed it, so this pins the two rules that keep
+    // the order right everywhere, then checks what is actually on top.
+    // Sizes are read once no CSS transition runs (the rail widens over
+    // `--transition-fast`), never after a fixed wait.
+    const railSettled = () => page.waitForFunction(
+        () => !document.getAnimations().some(a => a instanceof CSSTransition), null, { timeout: 10000 });
+    await page.evaluate(async () => {
+        await (await import(new URL('pose/initialization.js', document.baseURI).href)).loadDemoSession();
+    });
+    await page.waitForFunction(() => document.querySelectorAll('#camerasTable tbody tr').length > 0, null, { timeout: 15000 });
+    for (const tab of ['tabInstances', 'tabVisibility', 'tabIdSwitches', 'tabVideos', 'tabSession', 'tabCameras']) {
+        const open = await page.evaluate(t => getComputedStyle(document.querySelector(`.panel-section[data-tab="${t}"]`)).display !== 'none', tab);
+        if (!open) await click(tab);
+    }
+    await click('tabCameras');
+    s = await railState();
+    if (!s.content.includes('tabCameras')) await click('tabCameras');
+    await railSettled();
+    const stacking = await page.evaluate(() => ({
+        isolation: getComputedStyle(document.getElementById('infoPanelWrapper')).isolation,
+        willChange: getComputedStyle(document.querySelector('.panel-rail-inner')).willChange,
+    }));
+    check(stacking.isolation === 'isolate' && /transform/.test(stacking.willChange),
+        `the info panel is one stacking context and the rail its own layer (isolation ${stacking.isolation}, will-change ${stacking.willChange})`);
+    await page.hover('#panelRail .panel-rail-btn[data-tab="tabSkeleton"] .panel-rail-icon');
+    await railSettled();
+    const cover = await page.evaluate(() => {
+        const panel = document.getElementById('infoPanel').getBoundingClientRect();
+        const rail = document.querySelector('.panel-rail-inner').getBoundingClientRect();
+        const out = { inside: true, outside: [], probed: 0, notRail: [] };
+        // Section headers and the Cameras table's headers (the screenshot's
+        // FOCAL). The Videos table is wider than the panel today (clipped by
+        // it, never under the rail): a known limit, left out here.
+        const els = Array.from(document.querySelectorAll('.panel-section-header, #camerasTable th, #camerasTable td'))
+            .filter(e => e.getBoundingClientRect().width > 0);
+        for (const e of els) {
+            const b = e.getBoundingClientRect();
+            if (b.left < panel.left - 0.5 || b.right > panel.right + 0.5) { out.inside = false; out.outside.push(e.textContent.trim().slice(0, 16)); }
+            if (b.right <= rail.left + 2 || b.bottom <= rail.top || b.top >= rail.bottom) continue;
+            out.probed++;
+            const hit = document.elementFromPoint(Math.min(b.right, rail.right) - 2, b.top + b.height / 2);
+            if (!hit || !hit.closest('.panel-rail')) out.notRail.push(e.textContent.trim().slice(0, 16));
+        }
+        return { ...out, n: els.length, railLeft: Math.round(rail.left), panelRight: Math.round(panel.right) };
+    });
+    check(cover.inside && cover.n >= 8, `section headers and the Cameras table stay inside the panel (${cover.n} checked; outside: ${J(cover.outside)})`);
+    check(cover.probed >= 8 && cover.notRail.length === 0,
+        `the widened rail (left ${cover.railLeft}, panel right ${cover.panelRight}) is on top of every header and table cell it covers (${cover.probed} probed; under: ${J(cover.notRail)})`);
+    await moveAway();
 } catch (e) {
     console.log('  ✗ threw:', e && e.stack || e);
     fails++;
