@@ -148,3 +148,28 @@ export function videoTableCounts(session) {
     c.step(Infinity);
     return c.result();
 }
+
+/**
+ * A count short enough for the Videos table's narrow columns: exact below
+ * 1,000, then thousands with one decimal below 100,000 (`98.8k`; `12k`, not
+ * `12.0k`), whole thousands below a million (`108k`), then millions the same
+ * way (`1.2M`, `540M`). The table puts the exact count in the cell's title.
+ * Rounds half up; a value that rounds up to the next unit moves to it
+ * (999,950 → `1M`, not `1000k`).
+ *
+ * @param {number} n  a count (0 or more)
+ * @returns {string}
+ */
+export function compactCount(n) {
+    if (!(n >= 0) || !Number.isFinite(n)) return '-';
+    if (n < 1000) return String(Math.round(n));
+    const units = [[1e3, 'k'], [1e6, 'M'], [1e9, 'B']];
+    for (let u = 0; u < units.length; u++) {
+        const [size, suffix] = units[u];
+        const v = n / size;
+        const digits = v < 100 ? 1 : 0;
+        const r = Math.round(v * 10 ** digits) / 10 ** digits;
+        if (r < 1000 || u === units.length - 1) return String(r) + suffix;
+    }
+    return String(n);
+}

@@ -4,17 +4,19 @@
  * WKWebView).
  *
  * With seven columns (Name, Path, Frames, Size, Labeled, Groups, Score) the
- * table measured ~551px and the panel's `overflow-x: hidden` clipped it.
+ * table measured ~570px and the panel's `overflow-x: hidden` clipped it.
  *
  * §1  With long names and paths, 108,000-frame videos, 1280x1024 and
  *     five-digit labeled/group counts, every header and body cell of
  *     `#videosTable` lies inside `#infoPanel`'s box, and `#infoPanel` does not
  *     scroll sideways. Fails on the 7-column table.
- * §2  Every count is shown whole (no ellipsis) and grouped with commas.
- * §3  Each video is a full-width name row over a counts row: a realistic name
- *     shows whole, its `title` carries name + path, a click on either row
- *     selects the pair, and the selected-video detail shows the path and
- *     resolution that left the table (the long path stays inside the panel).
+ * §2  One row per video; counts are compact (`108k`, `98.8k`), never clipped,
+ *     with the exact comma-grouped count as each cell's title.
+ * §3  Name is the widest column, with at least a third of the table
+ *     (`Camera0_sideR` shows whole in macOS fonts; reported, not asserted); a
+ *     longer name ellipsizes with name + path in its title. A click selects the row,
+ *     and the selected-video detail shows the path and resolution that left
+ *     the table (the long path stays inside the panel).
  *
  * The session is a stub (Maps of frame groups / instance groups answering the
  * calls `populateVideosTable` makes); no video is decoded.
@@ -89,51 +91,63 @@ async function runIn(browser, label) {
             return {
                 panelLeft: panel.left, panelRight: panel.right, panelWidth: panel.width,
                 tableWidth: table.getBoundingClientRect().width,
-                rows: table.querySelectorAll('tbody tr.video-name-row').length,
-                countRows: table.querySelectorAll('tbody tr.video-counts-row').length,
+                rows: table.querySelectorAll('tbody tr').length,
                 cells,
                 hScroll: ip.scrollWidth - ip.clientWidth,
             };
         });
         console.log(`\n§1 table ${geo.tableWidth.toFixed(0)}px in a ${geo.panelWidth.toFixed(0)}px panel`);
-        check(geo.rows === 4 && geo.countRows === 4, 'four videos, each a name row and a counts row');
+        check(geo.rows === 4, 'one row per video');
         const outside = geo.cells.filter(c => !(c.left >= geo.panelLeft - 0.5 && c.right <= geo.panelRight + 0.5));
         check(outside.length === 0, 'every #videosTable cell is inside #infoPanel'
             + (outside.length ? ': ' + outside.slice(0, 4).map(c => `"${c.text}" ${c.left.toFixed(0)}–${c.right.toFixed(0)}`).join(', ') : ''));
         check(geo.hScroll <= 1, '#infoPanel does not scroll sideways (overflow ' + geo.hScroll + 'px)');
 
-        // ---- §2 counts whole and comma-grouped ----
+        // ---- §2 compact counts, exact in the title ----
         console.log('\n§2 counts readable');
         const counts = await page.evaluate(() => {
-            const row = document.querySelector('#videosTable tbody tr.video-counts-row');
+            const row = document.querySelector('#videosTable tbody tr');
             return [...row.querySelectorAll('td.mono')].map(td => ({
-                text: td.textContent.trim(), clipped: td.scrollWidth > td.clientWidth + 1,
+                text: td.textContent.trim(), title: td.title,
+                clipped: td.scrollWidth > td.clientWidth + 1,
             }));
         });
-        const texts = counts.map(c => c.text);
-        for (const want of ['108,000', '98,765', '87,654']) {
-            check(texts.includes(want), `a cell reads ${want} (cells: ${texts.join(' | ')})`);
+        const texts = counts.map(c => c.text + (c.title ? ' [' + c.title + ']' : ''));
+        for (const [want, exact] of [['108k', '108,000'], ['98.8k', '98,765'], ['87.7k', '87,654']]) {
+            check(counts.some(c => c.text === want && c.title === exact),
+                `a cell reads ${want} with title ${exact} (cells: ${texts.join(' | ')})`);
         }
+        check(counts.some(c => c.text === '0.87'), 'the score cell reads 0.87');
         check(counts.every(c => !c.clipped), 'no count cell is clipped');
 
-        // ---- §3 name tooltip, path + size in the detail ----
-        console.log('\n§3 tooltip and detail');
+        // ---- §3 name width, tooltip, selection, detail ----
+        console.log('\n§3 name, tooltip and detail');
         const detail = await page.evaluate(() => {
-            const nameRow = document.querySelectorAll('#videosTable tbody tr.video-name-row')[3];
-            const nameTd = nameRow.querySelector('td');
-            // Clicking the COUNTS row selects the video too, and both rows light up.
-            nameRow.nextElementSibling.click();
+            const rows = document.querySelectorAll('#videosTable tbody tr');
+            const short = rows[0].querySelector('td.video-name');
+            const long = rows[3].querySelector('td.video-name');
+            rows[3].click();
             return {
-                title: nameTd.title, detail: document.getElementById('videoDetail').textContent,
-                nameShown: nameTd.scrollWidth <= nameTd.clientWidth + 1,
-                bothSelected: nameRow.classList.contains('selected')
-                    && nameRow.nextElementSibling.classList.contains('selected'),
-                selectedCount: document.querySelectorAll('#videosTable tbody tr.selected').length,
+                nameWidth: short.getBoundingClientRect().width,
+                tableWidth: document.getElementById('videosTable').getBoundingClientRect().width,
+                widest: Math.max(...[...rows[0].children].map(td => td.getBoundingClientRect().width)),
+                shortShown: short.scrollWidth <= short.clientWidth + 1,
+                longTitle: long.title,
+                detail: document.getElementById('videoDetail').textContent,
+                selected: [...document.querySelectorAll('#videosTable tbody tr.selected')].indexOf(rows[3]) === 0
+                    && document.querySelectorAll('#videosTable tbody tr.selected').length === 1,
             };
         });
-        check(detail.nameShown, 'a realistic name (Camera3_backCorner) is shown whole, not ellipsized');
-        check(detail.title.includes('Camera3_backCorner'), 'the name cell\'s title carries the full name');
-        check(detail.bothSelected && detail.selectedCount === 2, 'clicking a video selects its name and counts rows, only those');
+        console.log(`  (Name column ${detail.nameWidth.toFixed(0)}px of ${detail.tableWidth.toFixed(0)}px)`);
+        // Font-independent: Name is the widest column and has a third of the
+        // table. Whether a given name fits depends on the platform's fonts
+        // (CI's Linux fonts are wider), so that is reported, not asserted.
+        check(detail.nameWidth >= detail.widest - 0.5 && detail.nameWidth >= detail.tableWidth / 3,
+            'Name is the widest column, with at least a third of the table');
+        console.log('  ' + (detail.shortShown ? '(Camera0_sideR shows whole here)' : '(Camera0_sideR is ellipsized with these fonts)'));
+        check(detail.longTitle.includes('Camera3_backCorner') && detail.longTitle.includes('/0.mp4'),
+            'a name cell\'s title carries the full name and the path');
+        check(detail.selected, 'clicking a row selects that row only');
         check(detail.detail.includes('Camera3_backCorner/0.mp4'), 'the selected-video detail shows the path');
         check(detail.detail.includes('1280 x 1024'), 'the selected-video detail shows the resolution');
         const detailOverflow = await page.evaluate(() => {
