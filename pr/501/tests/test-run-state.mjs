@@ -11,16 +11,11 @@
  *   - The witness: a removed or changed witness is replaced by another group,
  *     and once nothing holds the run is forgotten and the session is not
  *     walked again.
- *   - Marked as it goes: `markTriangulatedGroups` per frame, then
- *     `noteTriangulateRunMarked` (what the whole-project runs do, so their last
- *     task does not walk ~540k groups) marks exactly what `noteTriangulateRun`
- *     does, and the note itself walks nothing.
  *
  * Run: node tests/test-run-state.mjs
  */
 import {
     noteTrackRun, noteTriangulateRun, carryTriangulateMark, hasTrackResult, hasTriangulateResult,
-    markTriangulatedGroups, noteTriangulateRunMarked,
 } from '../pose/run-state.js';
 import { InstanceGroup, makePoints3d, setPoint3d } from '../pose/pose-data.js';
 
@@ -140,45 +135,6 @@ group('Triangulate: stands while some group holds 3D the run marked');
     for (const [, list] of empty.instanceGroups) list.forEach(x => { x.points3d = makePoints3d(2); });   // all-NaN
     noteTriangulateRun(empty, null);
     eq(hasTriangulateResult(empty), false, 'groups without any valid 3D are not marked');
-}
-
-group('marked as it goes = marked at the end');
-{
-    // Same data twice: one session noted at the end, one marked frame by frame.
-    // Frame 1: no solve method; frame 3: all-NaN 3D; frame 4: no groups.
-    const build = () => {
-        const m = makeSession(6, 2, null, 'ba');
-        m.session.instanceGroups.get(1)[0].triangulationMethod = undefined;
-        m.session.instanceGroups.get(3).forEach(x => { x.points3d = makePoints3d(2); });
-        m.session.instanceGroups.set(4, []);
-        return m;
-    };
-    const atEnd = build(), asGoes = build();
-    noteTriangulateRun(atEnd.session, null);
-    const w0 = asGoes.walks();
-    for (const f of [0, 1, 2, 3, 4, 5]) markTriangulatedGroups(asGoes.session.instanceGroups.get(f));
-    markTriangulatedGroups(undefined);   // a frame without a list
-    noteTriangulateRunMarked(asGoes.session);
-    eq(asGoes.walks(), w0, 'marking per frame and noting walk no session');
-    // Which groups count, group by group: replace every array but one, in turn.
-    const holds = (s, f, a) => {
-        const keep = s.instanceGroups.get(f)[a];
-        const saved = [];
-        for (const [, list] of s.instanceGroups) for (const g of list) if (g !== keep) { saved.push([g, g.points3d]); g.points3d = makePoints3d(2); }
-        noteTriangulateRunMarked(s);   // a grey answer forgets the run: re-note it (marks nothing)
-        const r = hasTriangulateResult(s);
-        for (const [g, p] of saved) g.points3d = p;
-        return r;
-    };
-    let same = true, blue = 0;
-    for (const f of [0, 1, 2, 3, 5]) for (const a of [0, 1]) {
-        const x = holds(atEnd.session, f, a), y = holds(asGoes.session, f, a);
-        if (x !== y) same = false;
-        if (y) blue++;
-    }
-    ok(same, 'every group counts the same either way');
-    eq(blue, 7, 'groups that count: 10 minus the unsolved one and frame 3\'s two all-NaN ones');
-    noteTriangulateRunMarked(null);   // no session: no throw
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

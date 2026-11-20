@@ -10,11 +10,7 @@
  *     bytes are kept in memory for this page;
  *   - a URL or Hugging Face repo id (`loadModelPackageFromUrl`): only the
  *     manifest is fetched up front; transformers.js fetches the weights on first
- *     use and the browser caches them like the built-in model. Every file the
- *     manifest lists a SHA-256 for is checked as it downloads (`verifiedResponse`):
- *     a file that does not match fails the load before transformers.js caches it,
- *     and a copy already in the cache is checked once per page before a load
- *     (`checkCachedPackageFiles`) and deleted when wrong, so it is downloaded again.
+ *     use and the browser caches them like the built-in model.
  *
  * transformers.js asks for every file by URL through `env.fetch`
  * (`https://huggingface.co/<repo>/resolve/main/<path>`). A package is given the
@@ -31,8 +27,8 @@
 import {
     parseModelManifest, modelKeyMaterial, hexOf, packageBaseUrl,
     MODEL_MANIFEST_NAME, MODEL_FP32_PATH, MODEL_FP16_PATH, MODEL_CONFIG_PATH,
-} from '../pose/image-model-manifest.js?v=4b6f57689ef7';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=4b6f57689ef7';
+} from '../pose/image-model-manifest.js?v=e60cb084ca10';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=e60cb084ca10';
 
 /** Repo-id prefix of packages, as transformers.js sees them. */
 export const PACKAGE_REPO_PREFIX = 'lucid-pkg/';
@@ -50,15 +46,9 @@ async function sha256Hex(data) {
     return hexOf(await crypto.subtle.digest('SHA-256', buf));
 }
 
-/** What a realm needs to serve `pkg`'s files: its Blobs, or its base URL and the SHA-256 each file must have. */
-function servedSource(pkg) {
-    return pkg.source.kind === 'files' ? { kind: 'files', files: pkg.source.files }
-        : { kind: 'url', base: pkg.source.base, sha256: Object.assign({}, (pkg.manifest && pkg.manifest.sha256) || {}) };
-}
-
 function register(pkg) {
     _packages.set(pkg.key, pkg);
-    serveModelPackage(pkg.id, servedSource(pkg));
+    serveModelPackage(pkg.id, pkg.source.kind === 'files' ? { kind: 'files', files: pkg.source.files } : { kind: 'url', base: pkg.source.base });
     return pkg;
 }
 
@@ -69,18 +59,15 @@ export function registeredModelPackage(key) { return _packages.get(key) || null;
 export function registeredModelPackages() { return Array.from(_packages.values()); }
 
 /** Forget every loaded package (tests). */
-export function clearModelPackages() { _packages.clear(); _served.clear(); _cacheChecked.clear(); }
+export function clearModelPackages() { _packages.clear(); _served.clear(); }
 
 /** Let this realm serve `repo`'s files (a worker calls it with what `modelPackageTransfer` sent). */
 export function serveModelPackage(repo, source) { _served.set(repo, source); }
 
-/**
- * What a CPU worker needs to serve a package: its repo id and its files (Blobs clone without copying), or its
- * base URL and the files' SHA-256 (so the worker checks what it downloads, as the page does).
- */
+/** What a CPU worker needs to serve a package: its repo id and its files (Blobs clone without copying) or base URL. */
 export function modelPackageTransfer(pkg) {
     if (!pkg || pkg.builtin) return null;
-    return { repo: pkg.id, source: servedSource(pkg) };
+    return { repo: pkg.id, source: pkg.source.kind === 'files' ? { kind: 'files', files: pkg.source.files } : { kind: 'url', base: pkg.source.base } };
 }
 
 function makePackage(manifest, key, source, sizes) {
@@ -176,55 +163,10 @@ export function packageFileOf(url) {
     return m ? { repo: m[1], path: decodeURIComponent(m[2]) } : null;
 }
 
-/** The error a URL package's file gets when its bytes are not the manifest's. */
-export function hashMismatchMessage(path, base) {
-    return path + ' from ' + base + ' does not match the SHA-256 in ' + MODEL_MANIFEST_NAME +
-        ': the files there changed after the manifest was written, or the download was damaged. Nothing was kept; ' +
-        'fix the package (re-run make_image_model_package.py) or load it from its folder.';
-}
-
-/**
- * `resp` with its body checked against `expected` (SHA-256 hex) as it streams: the bytes pass through
- * unchanged (transformers.js's progress still counts them), and at the end a mismatch ERRORS the stream, so
- * the read fails and transformers.js, which caches a file only once it has read all of it, keeps nothing.
- * Responses that are not a whole file (a Range request's 206, an error status, a bodiless HEAD) pass as they are.
- * Chrome's `Response.arrayBuffer()` reports ANY stream error as a bare "Failed to fetch" (measured: the read
- * transformers.js does without a progress callback, e.g. the WebNN load), so the returned Response's
- * `arrayBuffer` rethrows the mismatch itself; a reader (`getReader`, the progress path) gets it as is.
- */
-export function verifiedResponse(resp, expected, path, base) {
-    if (!expected || !resp || resp.status !== 200 || !resp.body) return resp;
-    const len = parseInt(resp.headers.get('content-length'), 10);
-    let buf = len > 0 ? new Uint8Array(len) : null, parts = buf ? null : [], at = 0, mismatch = null;
-    const check = new TransformStream({
-        transform: function (chunk, ctrl) {
-            if (buf && at + chunk.length <= buf.length) buf.set(chunk, at);
-            else {                                  // no or a wrong content-length (e.g. a compressed transfer)
-                if (buf) { parts = [buf.subarray(0, at)]; buf = null; }
-                parts.push(chunk);
-            }
-            at += chunk.length;
-            ctrl.enqueue(chunk);
-        },
-        flush: async function () {
-            const bytes = buf ? buf.subarray(0, at) : new Uint8Array(await new Blob(parts).arrayBuffer());
-            buf = null; parts = null;
-            if (await sha256Hex(bytes) !== expected) throw (mismatch = new Error(hashMismatchMessage(path, base)));
-        },
-    });
-    const out = new Response(resp.body.pipeThrough(check), { status: resp.status, statusText: resp.statusText, headers: resp.headers });
-    const whole = out.arrayBuffer.bind(out);
-    out.arrayBuffer = function () { return whole().catch(function (e) { throw mismatch || e; }); };
-    return out;
-}
-
 function answer(url, init, orig) {
     const f = packageFileOf(url), src = f && _served.get(f.repo);
     if (!src) return orig(url, init);
-    if (src.kind === 'url') {
-        const expected = src.sha256 && src.sha256[f.path];
-        return Promise.resolve(orig(src.base + f.path, init)).then(function (resp) { return verifiedResponse(resp, expected, f.path, src.base); });
-    }
+    if (src.kind === 'url') return orig(src.base + f.path, init);
     const blob = src.files[f.path];
     if (!blob) return Promise.resolve(new Response('', { status: 404, statusText: 'Not Found' }));
     return Promise.resolve(new Response(blob, { status: 200, headers: { 'content-length': String(blob.size), 'content-type': 'application/octet-stream' } }));
@@ -242,63 +184,12 @@ export function installModelPackageFetch(T) {
     env.__lucidPackages = true;
 }
 
-/** transformers.js's own defaults for what `packageCacheUrl` / `checkCachedPackageFiles` read (4.3.0). */
-const TRANSFORMERS_ENV_DEFAULTS = { remoteHost: 'https://huggingface.co/', remotePathTemplate: '{model}/resolve/{revision}/', cacheKey: 'transformers-cache', useBrowserCache: true };
-
-/**
- * The Cache Storage URL transformers.js keeps `repo`'s file `path` under (its `remoteURL`, revision `main`).
- * `T` is the runtime (its `env`), or null for transformers.js's defaults, which the app never changes.
- */
-export function packageCacheUrl(T, repo, path) {
-    const env = (T && T.env) || TRANSFORMERS_ENV_DEFAULTS;
-    const host = String(env.remoteHost || 'https://huggingface.co/').replace(/\/+$/, '');
-    const tpl = String(env.remotePathTemplate || '{model}/resolve/{revision}/').replaceAll('{model}', repo).replaceAll('{revision}', 'main');
-    return host + '/' + tpl.replace(/^\/+|\/+$/g, '') + '/' + path;
-}
-
-const _cacheChecked = new Set();             // cache URL + hash already found right on this page
-
-/**
- * Check, once per page, the copies of a URL package's files already in transformers.js's Cache Storage
- * against the manifest's SHA-256 (a copy cached before downloads were checked, or by an older LUCID, was
- * never checked). A wrong copy is deleted, so the load downloads it again through `verifiedResponse`.
- * Resolves to the paths deleted. Nothing to do without a browser cache, for the built-in model or a folder.
- * The page checks before it starts the CPU model workers (which share the cache), so they do not repeat it.
- */
-export async function checkCachedPackageFiles(T, pkg) {
-    const deleted = [];
-    const env = (T && T.env) || TRANSFORMERS_ENV_DEFAULTS;
-    if (!pkg || pkg.builtin || !pkg.source || pkg.source.kind !== 'url' || !env.useBrowserCache) return deleted;
-    if (typeof caches === 'undefined') return deleted;
-    const sha = (pkg.manifest && pkg.manifest.sha256) || {};
-    let cache;
-    try { cache = await caches.open(env.cacheKey || 'transformers-cache'); } catch (e) { return deleted; }
-    for (const path of Object.keys(sha)) {
-        const url = packageCacheUrl(T, pkg.id, path), memo = url + '#' + sha[path];
-        if (_cacheChecked.has(memo)) continue;
-        const hit = await cache.match(url);
-        if (hit) {
-            const got = await sha256Hex(new Uint8Array(await hit.arrayBuffer()));
-            if (got !== sha[path]) {
-                await cache.delete(url);
-                deleted.push(path);
-                console.warn('[image model] the cached ' + path + ' of "' + pkg.name + '" does not match its SHA-256: deleted, to download again');
-                continue;
-            }
-        }
-        _cacheChecked.add(memo);             // right, or absent: a download from here on is checked as it streams
-    }
-    return deleted;
-}
-
 /**
  * Run `load` (a from_pretrained call) for `pkg` with the browser cache OFF when
  * its files are local: they are already in memory, and transformers.js would
- * otherwise copy them into Cache Storage under the package's made-up URL. For a
- * URL package, the cached copies of its files are checked first (`checkCachedPackageFiles`).
+ * otherwise copy them into Cache Storage under the package's made-up URL.
  */
 export async function withPackageCachePolicy(T, pkg, load) {
-    if (pkg && !pkg.builtin && pkg.source.kind === 'url') await checkCachedPackageFiles(T, pkg);
     if (!pkg || pkg.builtin || pkg.source.kind !== 'files' || !T.env.useBrowserCache) return load();
     T.env.useBrowserCache = false;
     try { return await load(); } finally { T.env.useBrowserCache = true; }

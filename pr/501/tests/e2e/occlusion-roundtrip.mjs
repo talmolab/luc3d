@@ -26,11 +26,12 @@
  *
  * How to run (see tests/e2e/README.md):
  *   1. cd tests/e2e && npm install
- *   2. node tests/e2e/occlusion-roundtrip.mjs   (serves the app itself; BASE= to use another server)
+ *   2. from the repo root: python3 -m http.server 8080
+ *   3. node tests/e2e/occlusion-roundtrip.mjs
  *
  * Exit code 0 = all assertions pass, 1 = a regression (or driver error).
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import os from 'os';
@@ -38,8 +39,7 @@ import path from 'path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..', '..');
-// BASE= points at an app already being served; otherwise serve this checkout.
-const BASE = process.env.BASE || (await startServer(REPO)).url;
+const BASE = process.env.BASE || 'http://localhost:8080';
 
 const CAM_ORDER = ['side', 'back', 'mid'];
 const OCCLUDED_NODE = 1;                        // "neck" — it HAS a real position
@@ -191,7 +191,7 @@ async function runScenario(browser, label, mode) {
 }
 
 async function main() {
-    const browser = await launchBrowser({ headless: true });
+    const browser = await chromium.launch({ headless: true });
     try {
         await runScenario(browser, 'A', 'grouped');
         await runScenario(browser, 'B', 'unlinked');

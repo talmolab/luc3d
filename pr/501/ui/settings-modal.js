@@ -42,20 +42,19 @@ import {
     getCameraWeight,
     setCameraWeights,
     getTrackingThresholdDefs,
-    ID_SWITCH_SETTING_IDS,
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=4b6f57689ef7';
-import { getActiveSession, state, timeline } from './app-state.js?v=4b6f57689ef7';
-import { drawAllOverlays } from './rendering.js?v=4b6f57689ef7';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=4b6f57689ef7';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=4b6f57689ef7';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=4b6f57689ef7';
-import { installModalGeometry } from './modal-geometry.js?v=4b6f57689ef7';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=4b6f57689ef7';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=4b6f57689ef7';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=4b6f57689ef7';
+} from './settings.js?v=e60cb084ca10';
+import { getActiveSession, state, timeline } from './app-state.js?v=e60cb084ca10';
+import { drawAllOverlays } from './rendering.js?v=e60cb084ca10';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=e60cb084ca10';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=e60cb084ca10';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=e60cb084ca10';
+import { installModalGeometry } from './modal-geometry.js?v=e60cb084ca10';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=e60cb084ca10';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=e60cb084ca10';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=e60cb084ca10';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -242,15 +241,9 @@ export function showSettingsModal(initialPanel) {
         ? initialPanel
         : (readLastPanel() || SETTINGS_PANELS[0]);
 
-    // Enforce a single instance. Retire the open one through its own teardown:
-    // removing its overlay alone left its key handler on the document and its
-    // geometry watcher live, which then saved the detached card's zero size as
-    // the size the user had chosen (Settings reopened at its minimum).
+    // Enforce a single instance.
     const existing = document.querySelector('.settings-overlay');
-    if (existing) {
-        if (typeof existing._lucidTeardown === 'function') existing._lucidTeardown();
-        else existing.remove();
-    }
+    if (existing) existing.remove();
 
     // Set once the footer exists: every write to `working` repaints its buttons.
     let onWorkingEdit = function () {};
@@ -316,6 +309,7 @@ export function showSettingsModal(initialPanel) {
     // --- Build DOM --------------------------------------------------------
     const overlay = document.createElement('div');
     overlay.className = 'settings-overlay';
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
 
     const card = document.createElement('div');
     card.className = 'settings-modal';
@@ -720,11 +714,7 @@ export function showSettingsModal(initialPanel) {
     // or an on/off switch for a `kind: 'toggle'` setting, with an inline
     // description. Edits mutate working.thresholds; numbers are clamped to the
     // catalog range on blur and on Apply.
-    // The ID-switch checks' settings get their own section after this one (ID_SWITCH_SETTING_IDS).
-    const idSwitchDefs = ID_SWITCH_SETTING_IDS.map(function (id) { return thresholdDefs.find(function (d) { return d.id === id; }); })
-        .filter(Boolean);
-    const trackerDefs = thresholdDefs.filter(function (d) { return ID_SWITCH_SETTING_IDS.indexOf(d.id) < 0; });
-    const thSection = buildSection('Tracking Thresholds', trackerDefs.length || null);
+    const thSection = buildSection('Tracking Thresholds', thresholdDefs.length || null);
     wizPanel.appendChild(thSection.root);
 
     const thHint = document.createElement('div');
@@ -735,35 +725,17 @@ export function showSettingsModal(initialPanel) {
         'Defaults are tuned values — change them only if tracking under/over-matches. Changes apply when you click Apply.';
     thSection.body.appendChild(thHint);
 
-    // One setting's row (buildParamRow: a labelled number field, or a switch for a `kind: 'toggle'`) into `body`.
-    function renderThresholdRow(def, body) {
+    thresholdDefs.forEach(function (def) {
         const isFilter = def.id === 'filterMinVisibleNodes' || def.id === 'filterMinInstanceScore' ||
             def.id === 'filterMinMeanNodeScore';
         const onEdit = isFilter ? function () { filterPreview.update(); }
             : def.id === 'reprojErrorThreshold'
                 ? function () { triFigure.update({ threshold: working.thresholds.reprojErrorThreshold }); }
                 : null;
-        const row = buildParamRow(def, working.thresholds, onEdit);
-        row.dataset.setting = def.id;
-        body.appendChild(row);
+        thSection.body.appendChild(buildParamRow(def, working.thresholds, onEdit));
         // The readout goes right under the last of the three filter fields.
-        if (def.id === 'filterMinMeanNodeScore') body.appendChild(filterPreview.root);
-    }
-    trackerDefs.forEach(function (def) { renderThresholdRow(def, thSection.body); });
-
-    // ID Switches: the checks that run after Track All / Track Frame Range, and the image check's options.
-    if (idSwitchDefs.length) {
-        const idSection = buildSection('ID Switches', idSwitchDefs.length);
-        idSection.root.classList.add('settings-section-id-switches');
-        wizPanel.appendChild(idSection.root);
-        const idHint = document.createElement('div');
-        idHint.className = 'settings-kbd-hint';
-        idHint.style.marginTop = '0';
-        idHint.style.marginBottom = '8px';
-        idHint.textContent = 'Checks for identity switches after Track All or Track Frame Range. Changes apply when you click Apply.';
-        idSection.body.appendChild(idHint);
-        idSwitchDefs.forEach(function (def) { renderThresholdRow(def, idSection.body); });
-    }
+        if (def.id === 'filterMinMeanNodeScore') thSection.body.appendChild(filterPreview.root);
+    });
 
     // Docs link at the bottom of the thresholds.
     const docsNote = document.createElement('div');
@@ -984,7 +956,6 @@ export function showSettingsModal(initialPanel) {
     let disposeGeometry = null;
 
     function teardown() {
-        overlay._lucidTeardown = null;
         document.removeEventListener('keydown', onDocKeyDown, true);
         filterPreview.dispose();
         thrExamples.dispose();
@@ -996,7 +967,6 @@ export function showSettingsModal(initialPanel) {
         // Discard pending edits — just remove the overlay.
         teardown();
     }
-    overlay._lucidTeardown = teardown;
 
     function commit() {
         setDefaultTriangulationMethod(working.method);

@@ -24,15 +24,15 @@
  * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
  */
 
-import { state, getActiveSession } from './app-state.js?v=4b6f57689ef7';
-import { setStatus } from '../import-export/save-load.js?v=4b6f57689ef7';
-import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=4b6f57689ef7';
-import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=4b6f57689ef7';
+import { state, getActiveSession } from './app-state.js?v=e60cb084ca10';
+import { setStatus } from '../import-export/save-load.js?v=e60cb084ca10';
+import { getNodeWeight, updateNodeWeights, getTrackingThresholdDefs, updateTrackingThresholds } from './settings.js?v=e60cb084ca10';
+import { buildNodeWeightFields, buildImageCheckFields, IMAGE_CHECK_IDS } from './track-setup-modal.js?v=e60cb084ca10';
 import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
-} from '../pose/tracker.js?v=4b6f57689ef7';
-import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=4b6f57689ef7';
+} from '../pose/tracker.js?v=e60cb084ca10';
+import { hasRealCalibration } from '../pose/placeholder-cameras.js?v=e60cb084ca10';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a
@@ -106,6 +106,7 @@ export function showTrackRangeModal(opts) {
 
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
     var modal = document.createElement('div');
     modal.className = 'multi-frame-modal track-range-modal';
     modal.innerHTML =

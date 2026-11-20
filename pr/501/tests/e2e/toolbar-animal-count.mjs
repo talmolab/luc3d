@@ -47,18 +47,21 @@
  * "e" is read as auto-detect and §4 and §5 fail; with `numAnimals` dropped
  * from the metadata writer §10 fails (the reopened session asks).
  *
- * Run: node tests/e2e/toolbar-animal-count.mjs   (serves the app itself)
+ * Run: node tests/e2e/toolbar-animal-count.mjs   (spawns its own http.server)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8343);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
+
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
 
 const NF = 30;
 
@@ -176,7 +179,7 @@ async function trackAllAnimalsRow(page) {
 
 let browser;
 try {
-    browser = await launchBrowser();
+    browser = await chromium.launch();
 
     // ------------------------------------------------------------ 1. placement
     const A = await openApp(browser, ['4']);

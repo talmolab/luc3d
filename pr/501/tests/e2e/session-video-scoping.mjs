@@ -10,19 +10,19 @@
  *
  * How to run (see tests/e2e/README.md):
  *   1. cd tests/e2e && npm install        # installs playwright + chromium
- *   2. node tests/e2e/session-video-scoping.mjs   (serves the app itself)
- *      # or, against a server already running: BASE=http://localhost:8080 node tests/e2e/session-video-scoping.mjs
+ *   2. from the repo root: python3 -m http.server 8080
+ *   3. node tests/e2e/session-video-scoping.mjs
+ *      # or: BASE=http://localhost:8080 node tests/e2e/session-video-scoping.mjs
  *
  * Exit code 0 = all scenarios pass, 1 = a leak (or driver error) was detected.
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..', '..');
-// BASE= points at an app already being served; otherwise serve this checkout.
-const BASE = process.env.BASE || (await startServer(REPO)).url;
+const BASE = process.env.BASE || 'http://localhost:8080';
 const BACK = [path.join(REPO, 'sample_session', 'back.mp4')];
 const MID = [path.join(REPO, 'sample_session', 'mid.mp4')];
 
@@ -88,7 +88,7 @@ function assertIsolated(st, si, expectedView) {
 }
 
 async function main() {
-    const browser = await launchBrowser({ headless: true });
+    const browser = await chromium.launch({ headless: true });
     try {
         // Scenario A: + load(back), + load(mid) — then switch back and forth.
         console.log('  Scenario A: +load back, +load mid, switch s0<->s1');

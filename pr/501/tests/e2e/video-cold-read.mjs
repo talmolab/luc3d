@@ -25,21 +25,24 @@
  * same clip read cleanly; the negative control is mediabunny's own BlobSource
  * (`fromBlob`, the old path) under the same faults.
  *
- * Run: node tests/e2e/video-cold-read.mjs   (serves the app itself; PORT=)
+ * Run: node tests/e2e/video-cold-read.mjs   (spawns its own http.server; PORT=)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8577);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 try {
-    const browser = await launchBrowser();
+    const browser = await chromium.launch();
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     const warnings = [];

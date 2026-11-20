@@ -1428,6 +1428,10 @@
     // =========================================================================
 
     describe('Track change propagation via info panel dropdown', function () {
+        // Simulates what the info panel dropdown handler should do:
+        // call swapAssignTrack for each camera in the group, then
+        // verify all future frames are updated.
+
         function makeMultiFrameSession() {
             var cams = [
                 new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
@@ -1448,10 +1452,76 @@
             return session;
         }
 
-        // swapAssignTrack (the Track dropdown: swap, carry forward, this camera
-        // only) is tested in tests/e2e/track-reassign-carries-forward.mjs. It
-        // cannot be tested here: ui/identity-assignment.js imports app.js, which
-        // this runner does not load, so the tests that were here never ran.
+        it('swapAssignTrack propagates track change to future frames', function () {
+            if (typeof swapAssignTrack !== 'function') return;
+            var session = makeMultiFrameSession();
+            // On frame 1, change track_0 instance to track_2 in cam1
+            var fg1 = session.getFrameGroup(1);
+            var cam1Insts = fg1.getInstances('cam1');
+            var instToChange = null;
+            for (var i = 0; i < cam1Insts.length; i++) {
+                if (cam1Insts[i].trackIdx === 0) { instToChange = cam1Insts[i]; break; }
+            }
+            assertNotNull(instToChange, 'should find track_0 instance');
+
+            var propagated = swapAssignTrack(1, 'cam1', instToChange, 2, session);
+
+            // Frame 1: instance should now be track_2
+            assertEqual(instToChange.trackIdx, 2, 'current frame instance is track_2');
+
+            // Frames 2-4: all cam1 instances that were track_0 should now be track_2
+            for (var f = 2; f < 5; f++) {
+                var fg = session.getFrameGroup(f);
+                var insts = fg.getInstances('cam1');
+                var hasTrack2 = false;
+                for (var j = 0; j < insts.length; j++) {
+                    if (insts[j].trackIdx === 2) hasTrack2 = true;
+                }
+                assertTrue(hasTrack2, 'frame ' + f + ' cam1 should have track_2 after propagation');
+            }
+
+            // Frame 0 should be unaffected
+            var fg0 = session.getFrameGroup(0);
+            var f0Insts = fg0.getInstances('cam1');
+            var f0HasTrack0 = false;
+            for (var k = 0; k < f0Insts.length; k++) {
+                if (f0Insts[k].trackIdx === 0) f0HasTrack0 = true;
+            }
+            assertTrue(f0HasTrack0, 'frame 0 cam1 should still have track_0');
+        });
+
+        it('swapAssignTrack swaps conflicting tracks', function () {
+            if (typeof swapAssignTrack !== 'function') return;
+            var session = makeMultiFrameSession();
+            // On frame 1, change track_0 → track_1 (which already exists)
+            var fg1 = session.getFrameGroup(1);
+            var cam1Insts = fg1.getInstances('cam1');
+            var inst0 = null, inst1 = null;
+            for (var i = 0; i < cam1Insts.length; i++) {
+                if (cam1Insts[i].trackIdx === 0) inst0 = cam1Insts[i];
+                if (cam1Insts[i].trackIdx === 1) inst1 = cam1Insts[i];
+            }
+            assertNotNull(inst0, 'should find track_0');
+            assertNotNull(inst1, 'should find track_1');
+
+            swapAssignTrack(1, 'cam1', inst0, 1, session);
+
+            // Frame 1: inst0 is now track_1, inst1 swapped to track_0
+            assertEqual(inst0.trackIdx, 1, 'inst0 should be track_1');
+            assertEqual(inst1.trackIdx, 0, 'inst1 should swap to track_0');
+
+            // Future frames should also be swapped
+            for (var f = 2; f < 5; f++) {
+                var fg = session.getFrameGroup(f);
+                var insts = fg.getInstances('cam1');
+                var tracks = {};
+                for (var j = 0; j < insts.length; j++) {
+                    tracks[insts[j].trackIdx] = true;
+                }
+                assertTrue(tracks[0] && tracks[1],
+                    'frame ' + f + ' should still have both tracks 0 and 1 (swapped)');
+            }
+        });
 
         it('identity change via propagateIdentity updates all future frames', function () {
             var session = makeMultiFrameSession();

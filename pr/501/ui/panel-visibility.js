@@ -89,9 +89,8 @@ export function collapseViewport3D(viewport3d) {
 // is a stateless full rebuild from current `state`, so one call on re-show
 // restores the panel no matter how many were skipped. This flag records
 // whether ANY were, so re-showing a panel that never went stale doesn't pay
-// for a redundant rebuild (`populateVideosTable` walks every frame and group
-// member of the session while the Videos section is open, so that rebuild is
-// not cheap).
+// for a redundant rebuild (`populateVideosTable` walks every frame of the
+// session, so that rebuild is not cheap).
 
 let infoPanelStale = false;
 

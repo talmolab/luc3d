@@ -25,14 +25,14 @@
  *
  * Run: node tests/e2e/alt-wheel-rotate-instance.mjs
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8271);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
@@ -41,8 +41,11 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
 const PIVOT = [200, 200];
 const ARM = [280, 200];
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 try {
-    const browser = await launchBrowser();
+    const browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));

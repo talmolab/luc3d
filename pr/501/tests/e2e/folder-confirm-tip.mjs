@@ -24,19 +24,22 @@
  *     needs it), with an untrusted click as the negative control.
  *  6. NEGATIVE CONTROLS: Windows, and an automated macOS browser, never see it.
  *
- * Run: node tests/e2e/folder-confirm-tip.mjs   (serves the app itself)
+ * Run: node tests/e2e/folder-confirm-tip.mjs   (spawns its own http.server)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8347);
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
+
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
 
 /** A page on `platform`, optionally still flagged as automated. */
 async function open(browser, platform, automated) {
@@ -85,7 +88,7 @@ const settle = (page) => page.waitForTimeout(250);
 
 let browser;
 try {
-    browser = await launchBrowser();
+    browser = await chromium.launch();
 
     console.log('\n--- 1. macOS: the menu item opens the tip first ---');
     const mac = await open(browser, 'macOS', false);

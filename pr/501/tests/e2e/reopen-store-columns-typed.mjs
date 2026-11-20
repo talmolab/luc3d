@@ -27,30 +27,18 @@
  * exactly why it needs a test rather than a benchmark: it would only resurface as
  * an OOM on a multi-hundred-MB project.
  *
- * NARROW COLUMNS (LUCID local patch (narrow columns)). The columns are not all
- * Float64Array any more: each is the narrowest typed array that holds every value
- * exactly (`LUCID_NARROW_COLUMNS` / `lucidNarrowKindW`): x/y/score Float32Array,
- * visible/complete/instance_type/skeleton Uint8Array, point_id_start/end
- * Uint32Array; the columns LUCID writes into a loaded store (track,
- * from_predicted, every frames column) and instance_id/frame_id stay
- * Float64Array. Asserted here on both builders: the LUCID-written flat matrices
- * (`normalizeStructData`) and a Python-written compound file
- * (`tests/fixtures/slp-compound/sleap-compound-small.slp`, the worker's
- * `readCompoundColumnsWorker`), whose every column must equal h5wasm's own
- * `Dataset.value`, value for value (`Object.is`, so NaN and -0 count).
- *
- * Re-run after any sleap-io.js re-vendor (`grep -n 'luc3d #193\|narrow columns' lib/sleap-io/`).
+ * Re-run after any sleap-io.js re-vendor (`grep -n 'luc3d #193' lib/sleap-io/`).
  *
  * Run: node tests/e2e/reopen-store-columns-typed.mjs
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8198);
 
 let fails = 0;
 const check = (msg, cond, extra) => {
@@ -58,9 +46,12 @@ const check = (msg, cond, extra) => {
     if (!cond) fails++;
 };
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 let browser;
 try {
-    browser = await launchBrowser({ headless: true });
+    browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('[pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => { if (m.type() === 'error') console.log('[console.error]', m.text().slice(0, 200)); });
@@ -155,29 +146,12 @@ try {
     check('EVERY store column is a typed-array view (luc3d #193)', notView.length === 0,
         notView.map(t => `${t.table}.${t.col}=${t.ctor}`));
 
-    // Never f32: `point_id_start/end` exceed f32's exact range (2^24) on real
-    // projects — the sleap-io.js#231 failure class. Uint32Array is exact.
+    // The columns must be f64: `point_id_start/end` exceed f32's exact range
+    // (2^24) on real projects — the sleap-io.js#231 failure class.
     const idCols = res.tables.filter(t => /^(point_id_start|point_id_end|instance_id|frame_id)$/.test(t.col));
-    check(`id/index columns are Float64Array or Uint32Array (${idCols.length} checked)`,
-        idCols.length > 0 && idCols.every(t => t.ctor === 'Float64Array' ||
-            (t.ctor === 'Uint32Array' && /^point_id_/.test(t.col))),
+    check(`id/index columns are Float64Array (${idCols.length} checked)`,
+        idCols.length > 0 && idCols.every(t => t.ctor === 'Float64Array'),
         idCols.map(t => `${t.col}=${t.ctor}`));
-
-    // Narrow columns: what this all-fitting project's store holds, column by column.
-    const want = (table, col) => {
-        if (table === 'framesData') return 'Float64Array';
-        if (/^(x|y|score|tracking_score)$/.test(col)) return 'Float32Array';
-        if (/^(visible|complete|instance_type|skeleton)$/.test(col)) return 'Uint8Array';
-        if (/^point_id_(start|end)$/.test(col)) return 'Uint32Array';
-        return 'Float64Array';
-    };
-    const wrongType = res.tables.filter(t => t.len > 0 && t.ctor !== want(t.table, t.col));
-    check('LUCID-written store: every column has its narrow type (narrow columns)', wrongType.length === 0,
-        wrongType.map(t => `${t.table}.${t.col}=${t.ctor} (want ${want(t.table, t.col)})`));
-    const written = res.tables.filter(t => /^(track|from_predicted)$/.test(t.col) || t.table === 'framesData');
-    check(`columns LUCID writes into stay Float64Array (${written.length} checked)`,
-        written.length > 0 && written.every(t => t.ctor === 'Float64Array'),
-        written.filter(t => t.ctor !== 'Float64Array').map(t => `${t.table}.${t.col}=${t.ctor}`));
 
     if (res.sample) {
         const e = res.expect, s = res.sample;
@@ -187,51 +161,6 @@ try {
     } else {
         check('point coordinates available to spot-check', false);
     }
-
-    // ---- A Python-written compound .slp: the worker's builder. Every store
-    // column must equal h5wasm's Dataset.value for that member, value for value.
-    const cmp = await page.evaluate(async () => {
-        const bytes = new Uint8Array(await (await fetch('/tests/fixtures/slp-compound/sleap-compound-small.slp')).arrayBuffer());
-        const labels = await window.SleapIO.readSlpStreaming(new File([bytes], 'sleap-compound-small.slp'),
-            { lazy: true, openVideos: false });
-        const store = labels._lazyDataStore;
-        window.h5wasm.FS.writeFile('/_narrow_cols.slp', bytes);
-        const h5 = new window.h5wasm.File('/_narrow_cols.slp', 'r');
-        const out = { tables: [], diffs: [], compound: 0 };
-        try {
-            const map = { frames: 'framesData', instances: 'instancesData', points: 'pointsData', pred_points: 'predPointsData' };
-            for (const [ds, key] of Object.entries(map)) {
-                const d = h5.get(ds);
-                const members = d && d.metadata && d.metadata.compound_type && d.metadata.compound_type.members;
-                if (!members) continue;
-                out.compound++;
-                const rows = d.value;
-                members.forEach((m, mi) => {
-                    const col = store[key][m.name];
-                    out.tables.push({ table: key, col: m.name, ctor: col ? col.constructor.name : String(col),
-                        len: col ? col.length : -1, fileType: (m.type === 1 ? 'f' : 'i') + m.size });
-                    if (!col || col.length !== rows.length) { out.diffs.push(`${key}.${m.name}: length`); return; }
-                    for (let i = 0; i < rows.length; i++) {
-                        const v = Number(rows[i][mi]);
-                        if (!Object.is(col[i], v)) { out.diffs.push(`${key}.${m.name}[${i}] ${col[i]} != ${v}`); return; }
-                    }
-                });
-            }
-        } finally { h5.close(); window.h5wasm.FS.unlink('/_narrow_cols.slp'); }
-        return out;
-    });
-    console.log('  compound fixture columns: ' + cmp.tables.filter(t => t.len > 0)
-        .map(t => `${t.table.replace('Data', '')}.${t.col}(${t.fileType})=${t.ctor.replace('Array', '')}`).join(' '));
-    check(`compound fixture: four compound tables read (${cmp.compound})`, cmp.compound === 4);
-    check('compound fixture: every store column equals Dataset.value, value for value', cmp.diffs.length === 0,
-        cmp.diffs.slice(0, 5));
-    const cWritten = cmp.tables.filter(t => /^(track|from_predicted)$/.test(t.col) || t.table === 'framesData');
-    check('compound fixture: columns LUCID writes into stay Float64Array',
-        cWritten.length > 0 && cWritten.every(t => t.ctor === 'Float64Array'),
-        cWritten.filter(t => t.ctor !== 'Float64Array').map(t => `${t.table}.${t.col}=${t.ctor}`));
-    const cFlags = cmp.tables.filter(t => t.len > 0 && /^(visible|complete)$/.test(t.col));
-    check('compound fixture: visible/complete are Uint8Array', cFlags.length >= 4 &&
-        cFlags.every(t => t.ctor === 'Uint8Array'), cFlags.map(t => `${t.table}.${t.col}=${t.ctor}`));
 } catch (err) {
     console.log('FATAL ' + String(err).slice(0, 500));
     fails++;

@@ -35,10 +35,11 @@
  *      per view, saves every pose, and the saved project reopened through the
  *      same loader keeps 3D off (its embedded cameras are placeholders).
  *
- * Run: node tests/e2e/nocalib-folder-save-reopen.mjs   (serves the app itself)
+ * Run: node tests/e2e/nocalib-folder-save-reopen.mjs   (spawns its own http.server)
  *      KEEP_SLP=/tmp/nocal.slp keeps scenario 1's saved project.
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,8 +47,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8296);
 const VIDEO = path.join(repoRoot, 'tests', 'fixtures', 'barcode-60', 'barcode-60.mp4');
 const ROOT = 'nocal';
 const CAMS = ['cam1', 'cam2', 'cam3'];
@@ -175,7 +175,9 @@ for (const cn of CAMS) {
     fs.copyFileSync(VIDEO, path.join(fixtureDir, cn, 'video.mp4'));
 }
 
-const browser = await launchBrowser();
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+const browser = await chromium.launch();
 
 try {
     // ---------------------------------------------------------------- 1 --

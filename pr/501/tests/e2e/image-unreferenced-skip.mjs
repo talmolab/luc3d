@@ -21,8 +21,8 @@
  * Needs ffmpeg (libx264); skipped with a note if absent.
  * Run: node tests/e2e/image-unreferenced-skip.mjs
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
-import { spawnSync } from 'node:child_process';
+import { chromium } from 'playwright';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,8 +30,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8278);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -49,10 +48,13 @@ const pyramid = make('b-pyramid.mp4', ['-c:v', 'libx264', '-bf', '3', '-b_strate
 const ponly = make('p-only.mp4', ['-c:v', 'libx264', '-bf', '0', ...GOP]);
 const hevc = make('hevc.mp4', ['-c:v', 'libx265', '-tag:v', 'hvc1', '-x265-params', 'log-level=error:keyint=250:min-keyint=250:scenecut=0']);
 if (!flat || !pyramid || !ponly) {
-    console.log('SKIP — ffmpeg with libx264 is not installed');
+    console.log('  (ffmpeg with libx264 unavailable — skipped)');
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(0);
 }
+
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
 
 const open = async (browser) => {
     const page = await browser.newPage();
@@ -124,7 +126,7 @@ const report = (r, expectSkips) => {
 
 let browser;
 try {
-    browser = await launchBrowser();
+    browser = await chromium.launch();
     const page = await open(browser);
     console.log('\n• H.264, B-frames, no B-pyramid (every B-frame unreferenced)');
     const rf = await run(page, flat);
@@ -141,7 +143,7 @@ try {
     console.log('\n• HEVC, libx265 defaults (open GOP, B-frames — the SLAP recordings\' encoder)');
     if (!hevc) console.log('  (ffmpeg without libx265 — skipped)');
     else {
-        try { browser = await launchBrowser({ channel: 'chrome' }); } catch (e) { browser = null; }
+        try { browser = await chromium.launch({ channel: 'chrome' }); } catch (e) { browser = null; }
         if (!browser) console.log('  (Google Chrome not installed — HEVC needs it; skipped)');
         else {
             const p2 = await open(browser);

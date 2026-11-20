@@ -16,19 +16,22 @@
  *
  * Run: node tests/e2e/settings-modal-geometry.mjs
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8257);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 try {
-    const browser = await launchBrowser();
+    const browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -122,24 +125,11 @@ try {
             open: d.open,
             tag: d.tagName,
         })));
-    check(sections.length === 4 && sections.every(s => s.tag === 'DETAILS' && s.open),
-        `the wizard has four <details> sections, all open by default (${JSON.stringify(sections.map(s => [s.title, s.open]))})`);
-    check(sections.length === 4 &&
+    check(sections.length === 3 && sections.every(s => s.tag === 'DETAILS' && s.open),
+        `the wizard has three <details> sections, all open by default (${JSON.stringify(sections.map(s => [s.title, s.open]))})`);
+    check(sections.length === 3 &&
         sections[0].count === String(NODE_COUNT) && sections[1].count === '8',
         `each carries its row count (${JSON.stringify(sections.map(s => s.count))})`);
-    // the ID-switch checks' settings have their own section after Tracking Thresholds, and are not in it
-    const idSec = await page.evaluate(async () => {
-        const S = await import('/ui/settings.js');
-        const d = [...document.querySelectorAll('.settings-section')].map(x => ({
-            title: x.querySelector('.settings-section-title').textContent,
-            ids: [...x.querySelectorAll('.settings-threshold-row')].map(r => r.dataset.setting) }));
-        return { titles: d.map(x => x.title), th: d.find(x => x.title === 'Tracking Thresholds'), id: d.find(x => x.title === 'ID Switches'), want: S.ID_SWITCH_SETTING_IDS };
-    });
-    check(idSec.titles[2] === 'Tracking Thresholds' && idSec.titles[3] === 'ID Switches' &&
-        JSON.stringify(idSec.id.ids) === JSON.stringify(idSec.want) && sections[3].count === String(idSec.want.length),
-        `an "ID Switches" section after Tracking Thresholds holds the ${idSec.want.length} ID-switch settings, in order (${idSec.id && idSec.id.ids.join(', ')})`);
-    check(idSec.th.ids.length > 0 && !idSec.th.ids.some(id => idSec.want.includes(id)) && sections[2].count === String(idSec.th.ids.length),
-        `…and Tracking Thresholds no longer lists them (${idSec.th.ids.length} rows: ${idSec.th.ids.join(', ')})`);
 
     const folded = await page.evaluate(async () => {
         const panel = document.querySelector('.settings-panel-container');
@@ -446,31 +436,6 @@ try {
     tall = await rect();
     check(tall.h === 700, `and does not follow the window (${tall.h})`);
     await closeModal();
-
-    // ---- 9. An instance that goes without being closed saves nothing --------
-    // Settings opened while it is open (its shortcut, twice) used to remove the
-    // old overlay without its teardown: its geometry watcher saw the detached
-    // card measure 0 x 0, took that for a resize, and 200 ms later saved it as
-    // the chosen size (Settings then reopened at its minimum; under load the
-    // stray save also landed in a later check).
-    const saved = { x: 300, y: 100, w: 1000, h: 800, sized: true };
-    const storedAfter = async (act) => {
-        await page.evaluate((r) => localStorage.setItem('lucid.modalGeometry.v1', JSON.stringify({ settings: r })), saved);
-        await act();
-        await page.waitForTimeout(400);   // past the 200 ms save delay
-        return page.evaluate(() => JSON.parse(localStorage.getItem('lucid.modalGeometry.v1')).settings);
-    };
-    const notZeroed = (g) => g.w > 0 && g.h > 0 && !g.heightChosen && !g.widthChosen;
-    let g = await storedAfter(async () => { await openModal(); await openModal(); });
-    check(notZeroed(g), `opening Settings while it is open does not save a 0 x 0 "chosen" size (${JSON.stringify(g)})`);
-    check(await page.evaluate(() => document.querySelectorAll('.settings-overlay').length) === 1, 'and leaves exactly one open');
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(60);
-    check(await page.evaluate(() => document.querySelectorAll('.settings-overlay').length) === 0,
-        'Esc then closes it (no handler left behind by the one it replaced)');
-    await openModal();
-    g = await storedAfter(() => page.evaluate(() => document.querySelector('.settings-overlay').remove()));
-    check(notZeroed(g), `a modal removed without closing saves nothing either (${JSON.stringify(g)})`);
 
     check(errs.length === 0, `no page/console errors (got ${JSON.stringify(errs)})`);
 

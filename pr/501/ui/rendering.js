@@ -6,37 +6,37 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked, videoController } from './app-state.js?v=4b6f57689ef7';
-import { planOverlayWindow, overlayPlanCovers } from './overlay-window.js?v=4b6f57689ef7';
-import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=4b6f57689ef7';
+import { state, interactionManager, timeline, isViewDocked, videoController } from './app-state.js?v=e60cb084ca10';
+import { planOverlayWindow, overlayPlanCovers } from './overlay-window.js?v=e60cb084ca10';
+import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=e60cb084ca10';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=4b6f57689ef7';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=4b6f57689ef7';
-import { drawFrameOverlays } from './overlays.js?v=4b6f57689ef7';
-import { syncViewLegends } from './view-legend.js?v=4b6f57689ef7';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=4b6f57689ef7';
+} from '../pose/triangulation.js?v=e60cb084ca10';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=e60cb084ca10';
+import { drawFrameOverlays } from './overlays.js?v=e60cb084ca10';
+import { syncViewLegends } from './view-legend.js?v=e60cb084ca10';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=e60cb084ca10';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=4b6f57689ef7';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=e60cb084ca10';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=4b6f57689ef7';
-import { syncTailMarkField } from './tail-mark-field.js?v=4b6f57689ef7';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=4b6f57689ef7';
-import { syncSmoothingButton } from './smoothing-button.js?v=4b6f57689ef7';
-import { syncRunButtons } from './run-buttons.js?v=4b6f57689ef7';
+import { syncAnimalCountField } from './animal-count-field.js?v=e60cb084ca10';
+import { syncTailMarkField } from './tail-mark-field.js?v=e60cb084ca10';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=e60cb084ca10';
+import { syncSmoothingButton } from './smoothing-button.js?v=e60cb084ca10';
+import { syncRunButtons } from './run-buttons.js?v=e60cb084ca10';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=4b6f57689ef7';
-import { updateFrameInfo } from './info-panel.js?v=4b6f57689ef7';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=e60cb084ca10';
+import { updateFrameInfo } from './info-panel.js?v=e60cb084ca10';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=4b6f57689ef7';
+} from './frame-counters.js?v=e60cb084ca10';
 
 // ============================================
 // Reproj/Error visibility
@@ -72,8 +72,7 @@ export function setReprojErrorVisible(visible, opts) {
  * the reprojections and hide what competes with them — User, Predicted and
  * Errors off, Reprojections on (the toolbar checkboxes). Each change fires the
  * checkbox's own `change` event, exactly as a click would, so the existing
- * handler deselects an instance whose type just got hidden — but does NOT
- * redraw: the caller redraws once afterwards (see `setToolbarLayers`).
+ * handler deselects an instance whose type just got hidden and redraws.
  *
  * Pair it with `setReprojErrorVisible(true, { checkBoxes: false })` so the
  * boxes are compared with what the USER had, not with Errors just re-ticked.
@@ -92,8 +91,7 @@ export var REPROJ_ONLY_NOTE = ' · showing Reprojections only (toolbar)';
  * After Track Frame / Track Frame Range / Track All: the run's product is the
  * tracked PREDICTIONS (now colored by identity), so show only those — Predictions
  * on; User, Reprojections and Errors off. Same mechanics as `showReprojectionsOnly`
- * (each box fires its own `change` event; the caller redraws). Returns whether
- * anything changed.
+ * (each box fires its own `change` event). Returns whether anything changed.
  */
 export function showPredictedOnly() {
     return setToolbarLayers([['visUser', false], ['visPredicted', true], ['visReprojections', false], ['visErrors', false]]);
@@ -102,48 +100,17 @@ export function showPredictedOnly() {
 // Suffix for a tracking status line when `showPredictedOnly` changed anything.
 export var PREDICTED_ONLY_NOTE = ' · showing Predictions only (toolbar)';
 
-/**
- * While `depth` is above 0, `drawAllOverlays` returns at once and counts the
- * call in `held` (`holdOverlayDraws`). Exported for tests.
- */
-export var overlayDrawHold = { depth: 0, held: 0 };
-
-/**
- * Run `fn` with `drawAllOverlays` held: every redraw asked for meanwhile is
- * skipped, and the CALLER redraws once afterwards. For a run's end, where
- * several view switches (layer boxes, Color by ID, trails) each redraw every
- * view and each redraw forces a layout of the page the previous one changed
- * (the info panel's tables): at the end of a Triangulate All on an 8-camera
- * project, four redraws in a row, 23 ms, 14 ms of it layout. Only the overlay
- * redraw is held; the switches' other work (deselecting, menus, 3D, timeline)
- * still runs. Returns `fn`'s result.
- */
-export function holdOverlayDraws(fn) {
-    overlayDrawHold.depth++;
-    try {
-        return fn();
-    } finally {
-        overlayDrawHold.depth--;
-    }
-}
-
-/**
- * Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if
- * any changed. Their redraws are held (`holdOverlayDraws`): every caller of
- * `showReprojectionsOnly` / `showPredictedOnly` calls `drawAllOverlays` next.
- */
+/** Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if any changed. */
 function setToolbarLayers(want) {
-    return holdOverlayDraws(function () {
-        var changed = false;
-        for (var i = 0; i < want.length; i++) {
-            var el = document.getElementById(want[i][0]);
-            if (!el || el.checked === want[i][1]) continue;
-            el.checked = want[i][1];
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            changed = true;
-        }
-        return changed;
-    });
+    var changed = false;
+    for (var i = 0; i < want.length; i++) {
+        var el = document.getElementById(want[i][0]);
+        if (!el || el.checked === want[i][1]) continue;
+        el.checked = want[i][1];
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        changed = true;
+    }
+    return changed;
 }
 
 // ============================================
@@ -448,7 +415,6 @@ export function noteOverlayViewTransform(view) {
  *   `frameIdx` (seek / step / edits).
  */
 export function drawAllOverlays(frameIdx, viewFrames) {
-    if (overlayDrawHold.depth > 0) { overlayDrawHold.held++; return; }
     if (!state.session) return;
 
     // A node tooltip names a node on the frame it was hovered on; on any other

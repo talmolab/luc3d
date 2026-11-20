@@ -31,7 +31,7 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=4b6f57689ef7';
+import { unionTrackNames } from './track-union.js?v=e60cb084ca10';
 
 /**
  * A store skeleton's node name → column, as `skel.nodeNames.indexOf(name)`
@@ -66,17 +66,6 @@ function storeNodeColumn(skel, nodeName) {
  * loop wins once runs get short and numerous.
  */
 var DELETE_RUN_COPY_MAX = 4096;
-
-/**
- * Workers reading a project `.slp`'s big tables side by side
- * (`lucidReadWorkers`, the vendored reader's column reads): one column each,
- * `pred_points` has five. One core is left for the page.
- */
-var PROJECT_READ_WORKERS_MAX = 5;
-function projectReadWorkers() {
-    var cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
-    return Math.max(1, Math.min(PROJECT_READ_WORKERS_MAX, cores - 1));
-}
 
 /**
  * Adapt a materialized sleap-io.js typed Instance/PredictedInstance into the flat
@@ -234,7 +223,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=4b6f57689ef7', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=e60cb084ca10', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -468,7 +457,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=4b6f57689ef7', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=e60cb084ca10', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -478,10 +467,6 @@ export class SioLazyLoader {
                 ? function (n, total, msg) { onProgress(msg || ('Reading ' + n + '/' + total)); }
                 : undefined,
             onReadBytes: onReadBytes || undefined,
-            // Read the big tables' columns side by side on this many workers
-            // (the vendored reader's LUCID local patch, column reads). Only
-            // here: a per-camera folder load already reads its files at once.
-            lucidReadWorkers: projectReadWorkers(),
         });
         this._projectLabels = labels;
         // A single project `.slp` interleaves every camera in ONE store, so all

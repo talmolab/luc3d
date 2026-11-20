@@ -16,8 +16,8 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=4b6f57689ef7';
-import { jacobiEigen } from './plane-fit.js?v=4b6f57689ef7';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=e60cb084ca10';
+import { jacobiEigen } from './plane-fit.js?v=e60cb084ca10';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -573,59 +573,6 @@ export function triangulatePoints(allObservations, projectionMatrices) {
 }
 
 /**
- * Clear (to all-NaN) each keypoint of `points3d` that is behind EVERY camera
- * whose observation solved it, and return `points3d`.
- *
- * DLT is linear in homogeneous coordinates, so it cannot tell a point in front
- * of a camera from its mirror image behind it: both satisfy x ≅ P·X. When two
- * rays diverge (one view on the wrong animal or the wrong tail), their
- * "intersection" is behind both cameras — metres to kilometres from the
- * animal — and it reprojects onto the detections, so it can even pass the
- * reprojection-error threshold. No real point is there. A point behind only
- * SOME of its cameras is kept: on the 5 held-out SLAP sessions of 2022-10-07
- * that rule refused everyday keypoints too, while this one refused only
- * keypoints more than 1 m off (8 cameras with the 12 px threshold: RMSE 75.5 →
- * 29.9 mm, worst 18.5 → 3.2 m; 4 cameras, no threshold: worst 920 → 39 m),
- * and none of the 79,970 within 1 m changed.
- *
- * Depth in a view is sign(det M)·(P[2]·X), M = P's left 3×3, so it holds for
- * any scaling of P. A camera whose P is degenerate (det M = 0 or not finite)
- * cannot say, and counts as "in front".
- *
- * @param {Float64Array} points3d - Flat [X,Y,Z] per keypoint (all-NaN = none); edited in place
- * @param {(number[]|null)[][]} allObservations - per keypoint, per camera; null = not used
- * @param {number[][][]} projectionMatrices - one 3x4 P per camera
- * @returns {Float64Array} `points3d`
- */
-export function clearPointsBehindEveryView(points3d, allObservations, projectionMatrices) {
-    const signs = new Float64Array(projectionMatrices.length);
-    for (let c = 0; c < projectionMatrices.length; c++) {
-        const P = projectionMatrices[c];
-        if (!P) continue;
-        const det = P[0][0] * (P[1][1] * P[2][2] - P[1][2] * P[2][1])
-            - P[0][1] * (P[1][0] * P[2][2] - P[1][2] * P[2][0])
-            + P[0][2] * (P[1][0] * P[2][1] - P[1][1] * P[2][0]);
-        signs[c] = (det !== 0 && isFinite(det)) ? Math.sign(det) : 0;
-    }
-    const X = [0, 0, 0];
-    for (let k = 0; k < allObservations.length; k++) {
-        if (!readPoint3d(points3d, k, X)) continue;
-        const obs = allObservations[k];
-        let used = 0, inFront = false;
-        for (let c = 0; c < obs.length && !inFront; c++) {
-            const P = projectionMatrices[c];
-            if (obs[c] == null || !P) continue;
-            used++;
-            if (signs[c] === 0) { inFront = true; break; }
-            const w = P[2][0] * X[0] + P[2][1] * X[1] + P[2][2] * X[2] + P[2][3];
-            if (!(w * signs[c] <= 0)) inFront = true;
-        }
-        if (used >= 2 && !inFront) clearPoint3d(points3d, k);
-    }
-    return points3d;
-}
-
-/**
  * One keypoint's DLT system, kept so it can be solved again on many SUBSETS of
  * its views — the tracker's reprojection check (`checkedPoints3d` in
  * `pose/cross-view-tracker.js`) leaves one view out at a time, up to V solves
@@ -805,53 +752,6 @@ export class DltViewSystem {
  * `slap-triangulate` re-exposes as `--reproj_error_threshold 15.0`).
  */
 export const BA_ROBUST_SCALE_PX = 15;
-
-/**
- * How many times deeper than its DLT seed Refined may put a point, in each
- * camera that sees the seed (see "Where Refined may go" in
- * {@link triangulatePointBA}).
- */
-export const BA_MAX_DEPTH_GROWTH = 4;
-
-/**
- * Cache of each camera's distortion fold, keyed on the Camera object and
- * re-derived whenever its `dist` values change.
- * @private
- */
-const _foldCache = new WeakMap();
-
-/**
- * The squared normalized radius r² at which a camera's radial distortion
- * folds back: the first positive root of d(r·radial)/dr = 1 + 3k1 r² +
- * 5k2 r⁴ + 7k3 r⁶ (tangential terms ignored; they are tiny next to it).
- * Beyond it a ray further off-axis lands CLOSER to the image centre, so a
- * point far outside the field of view can project onto any detection.
- * Infinity when the radial term never folds (no or pincushion distortion).
- * @private
- */
-function _distortionFoldR2(camera) {
-    const d = camera && camera.dist;
-    if (!d) return Infinity;
-    const k1 = d[0] || 0, k2 = d[1] || 0, k3 = d.length > 4 ? (d[4] || 0) : 0;
-    const hit = _foldCache.get(camera);
-    if (hit && hit.k1 === k1 && hit.k2 === k2 && hit.k3 === k3) return hit.u;
-    const f = function (u) { return 1 + 3 * k1 * u + 5 * k2 * u * u + 7 * k3 * u * u * u; };
-    let u = Infinity;
-    if (k1 < 0 || k2 < 0 || k3 < 0) {
-        // Bracket the first sign change on a geometric grid, then bisect.
-        let lo = 0, hi = 1e-4;
-        while (hi < 1e8 && f(hi) > 0) { lo = hi; hi *= 1.5; }
-        if (hi < 1e8) {
-            for (let it = 0; it < 80; it++) {
-                const mid = 0.5 * (lo + hi);
-                if (f(mid) > 0) lo = mid; else hi = mid;
-            }
-            u = lo;
-        }
-    }
-    _foldCache.set(camera, { k1: k1, k2: k2, k3: k3, u: u });
-    return u;
-}
 
 /**
  * Jacobian of the Brown–Conrady distortion map with respect to the ideal
@@ -1073,49 +973,16 @@ function _projectAndJacobianCameraInto(point, camera, out) {
  * initialization if no fraction of the step is non-worsening. Only the
  * native-space metric is guarded; see the guard's own comment for why.
  *
- * ### Where Refined may go
- * Every step stays where the camera model means something, and near the seed.
- * The first two hold in each used view where the seed itself satisfies them:
- * - **in front of the camera.** Behind a camera, P·X still yields a
- *   pixel — the mirror image — so the pixel error alone can pull a point
- *   there;
- * - **inside the camera's distortion fold** ({@link _distortionFoldR2}).
- *   With barrel distortion (k1 < 0) a ray far enough off-axis projects back
- *   into the image, so a point tens of metres away can fit a stray detection;
- * - **at most {@link BA_MAX_DEPTH_GROWTH} × the seed's depth.** When the
- *   views disagree — one on the wrong animal or the wrong tail — two nearly
- *   parallel rays can "meet" tens of metres away, and the pixel error there
- *   really is lower, so no pixel test can refuse it. Refined is a local
- *   refinement of DLT; a point four times deeper is a different answer.
- *   (A cap on the step instead clipped real rescues: a DLT seed dragged
- *   toward a camera by one stray view, pulled back by more than its depth.)
- * A view the seed is behind (or folded in) is left free: it is usually the
- * stray view that dragged DLT there, and Refined is what pulls the point
- * back. A seed with no such view (DLT behind both cameras of two diverging
- * rays) is refined freely and kept only if it ends in front of and unfolded
- * in every used view; otherwise DLT's answer is returned — or null when the
- * seed is behind every camera that sees it, since no real point is there.
- * Each is a half-space or a cone per view, so the region is convex and holds
- * the seed. On the 5 held-out SLAP sessions of 2022-10-07 (8 cameras, 79,970
- * keypoints) Refined used to move one keypoint from 8.6 m to 351 m off (behind
- * a camera, past six folds) and another from 2.2 m to 36 m; with these rules
- * only 3 of the keypoints it had put within 50 mm of the truth change
- * (tests/test-refined-far-points.mjs has both real cases).
- *
  * @param {(number[]|null)[]} observations - 2D points [[x1,y1], ...],
  *   null where the point is not visible in that camera. Raw/native when
  *   `options.cameras` is given, otherwise undistorted.
  * @param {number[][][]} projectionMatrices - 3x4 projection matrices, one per camera.
  * @param {number[]|null} [initial] - Initial [X,Y,Z] guess. If null, DLT is used.
  * @param {{maxIterations?:number, tol?:number, robustScale?:number,
- *          cameras?:Camera[], guard?:boolean, polish?:boolean,
- *          maxDepthGrowth?:number}} [options]
- *   `maxDepthGrowth` (default {@link BA_MAX_DEPTH_GROWTH}; `Infinity` = no
- *   bound) caps the depth growth; the in-front / fold region always holds.
+ *          cameras?:Camera[], guard?:boolean, polish?:boolean}} [options]
  *   `robustScale: Infinity` + `polish: false` + `guard: false` reproduces the
  *   pre-#113 plain-least-squares behavior, which the tests use as a baseline.
- * @returns {number[]|null} Refined [X, Y, Z], or null if < 2 valid observations
- *   or the seed is behind every used camera and refinement cannot bring it out.
+ * @returns {number[]|null} Refined [X, Y, Z], or null if < 2 valid observations.
  */
 export function triangulatePointBA(observations, projectionMatrices, initial, options) {
     options = options || {};
@@ -1159,99 +1026,6 @@ export function triangulatePointBA(observations, projectionMatrices, initial, op
     if (init == null) return null;
     let p = [init[0], init[1], init[2]];
 
-    // ---- Where Refined may go (header, "Where Refined may go") -------------
-    // Per used view: its P (the one `projectView` uses), the factor turning
-    // P[2]·X into metric depth (sign(det M) / ‖m3‖, so any scaling of P
-    // works), and its distortion fold in ideal normalized coordinates.
-    const nViews = validIndices.length;
-    const regP = new Array(nViews);
-    const regDepthScale = new Float64Array(nViews);
-    const regFold = new Float64Array(nViews);
-    const regK = new Float64Array(4 * nViews);
-    for (let k = 0; k < nViews; k++) {
-        const idx = validIndices[k];
-        const cam = cameras && cameras[idx];
-        const P = cam ? cam.projectionMatrix : projectionMatrices[idx];
-        regP[k] = P;
-        const det = P[0][0] * (P[1][1] * P[2][2] - P[1][2] * P[2][1])
-            - P[0][1] * (P[1][0] * P[2][2] - P[1][2] * P[2][0])
-            + P[0][2] * (P[1][0] * P[2][1] - P[1][1] * P[2][0]);
-        const m3 = Math.hypot(P[2][0], P[2][1], P[2][2]);
-        regDepthScale[k] = (det !== 0 && m3 > 0 && isFinite(det) && isFinite(m3)) ? Math.sign(det) / m3 : NaN;
-        regFold[k] = Infinity;
-        if (cam && cam.matrix) {
-            regFold[k] = _distortionFoldR2(cam);
-            regK[4 * k] = cam.matrix[0][0]; regK[4 * k + 1] = cam.matrix[1][1];
-            regK[4 * k + 2] = cam.matrix[0][2]; regK[4 * k + 3] = cam.matrix[1][2];
-        }
-    }
-    /** Metric depth of `pt` in used view k (NaN if P is degenerate). */
-    function depthIn(pt, k) {
-        const P = regP[k];
-        return (P[2][0] * pt[0] + P[2][1] * pt[1] + P[2][2] * pt[2] + P[2][3]) * regDepthScale[k];
-    }
-    /**
-     * `pt` is in front of used view k, inside its distortion fold, and no
-     * deeper than `maxDepth`.
-     */
-    function viewHolds(pt, k, maxDepth) {
-        const P = regP[k];
-        const den = P[2][0] * pt[0] + P[2][1] * pt[1] + P[2][2] * pt[2] + P[2][3];
-        const d = den * regDepthScale[k];
-        if (!(d > 0) || d > maxDepth) return false;
-        const fold = regFold[k];
-        if (fold === Infinity) return true;
-        const x = ((P[0][0] * pt[0] + P[0][1] * pt[1] + P[0][2] * pt[2] + P[0][3]) / den
-            - regK[4 * k + 2]) / regK[4 * k];
-        const y = ((P[1][0] * pt[0] + P[1][1] * pt[1] + P[1][2] * pt[2] + P[1][3]) / den
-            - regK[4 * k + 3]) / regK[4 * k + 1];
-        return x * x + y * y < fold;
-    }
-    // The region is held only in the views where the SEED already satisfies
-    // it. A view the seed is behind is usually the stray one that dragged DLT
-    // there, and Refined is what pulls the point back; holding the seed would
-    // undo that rescue. A seed that satisfies it in no view (DLT behind both
-    // cameras of two diverging rays) has nothing to anchor a region: it is
-    // refined freely, and the answer is kept only if it ends in front of and
-    // unfolded in every used view (see `finish`).
-    const growth = options.maxDepthGrowth != null ? options.maxDepthGrowth : BA_MAX_DEPTH_GROWTH;
-    const regOn = new Uint8Array(nViews);
-    const regMaxDepth = new Float64Array(nViews);
-    let nOn = 0;
-    for (let k = 0; k < nViews; k++) {
-        if (regDepthScale[k] !== regDepthScale[k]) continue;   // degenerate P: no test
-        if (!viewHolds(init, k, Infinity)) continue;
-        regOn[k] = 1;
-        nOn++;
-        regMaxDepth[k] = growth * depthIn(init, k);              // Infinity: no bound
-    }
-    const free = nOn === 0;
-    /** The region every phase and the guard stay in (convex, holds the seed). */
-    function inRegion(pt) {
-        if (free) return true;
-        for (let k = 0; k < nViews; k++) {
-            if (regOn[k] && !viewHolds(pt, k, regMaxDepth[k])) return false;
-        }
-        return true;
-    }
-    /**
-     * The answer. A freely refined one that ends anywhere invalid gives way to
-     * the seed — or to no answer, when the seed is behind every camera that
-     * sees it: no real point is there, and its mirror image can still pass
-     * the reprojection-error threshold.
-     */
-    function finish(pt) {
-        if (!free) return pt;
-        let valid = true, seedInFront = false;
-        for (let k = 0; k < nViews; k++) {
-            if (regDepthScale[k] !== regDepthScale[k]) continue;
-            if (!viewHolds(pt, k, Infinity)) valid = false;
-            if (depthIn(init, k) > 0) seedInFront = true;
-        }
-        if (valid) return pt;
-        return seedInFront ? init : null;
-    }
-
     // ---- Loss models -------------------------------------------------------
     // Each is expressed on s = ‖r‖² (per view), as {rho, weight}. `weight` is
     // 2·ρ'(s), the IRLS weight that turns Gauss–Newton on Σρ(sᵢ) into a
@@ -1275,13 +1049,8 @@ export function triangulatePointBA(observations, projectionMatrices, initial, op
         weight: function (s) { return 1 / Math.max(Math.sqrt(s), L1_EPS); }
     };
 
-    /**
-     * Total loss at `pt` under `loss`; Infinity if any view degenerates or
-     * `pt` is outside the region above — so no LM step, polish start or guard
-     * candidate can leave it (the region is convex and holds the seed).
-     */
+    /** Total loss at `pt` under `loss`; Infinity if any view degenerates. */
     function costUnder(pt, loss) {
-        if (!inRegion(pt)) return Infinity;
         let sum = 0;
         for (let k = 0; k < validIndices.length; k++) {
             const idx = validIndices[k];
@@ -1387,7 +1156,7 @@ export function triangulatePointBA(observations, projectionMatrices, initial, op
         p = runLM(seed, LOSS_L1);
     }
 
-    if (!guard) return finish(p);
+    if (!guard) return p;
 
     // Monotone guard: a cheap belt-and-braces check on the reported metric, for
     // the cases phase 2 cannot cover (polish disabled, or an LM that stalled on
@@ -1411,7 +1180,7 @@ export function triangulatePointBA(observations, projectionMatrices, initial, op
             init[1] + t * (p[1] - init[1]),
             init[2] + t * (p[2] - init[2])
         ];
-        if (reportedError(cand) <= e0 + eps) return finish(cand);
+        if (reportedError(cand) <= e0 + eps) return cand;
         t *= 0.5;
     }
     return init;
@@ -1741,12 +1510,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             });
             return triangulatePointsBA(rawMasked, projMatrices, dltPoints, baOptions);
         }
-        // DLT's own answer: no point behind every camera that saw it (see
-        // `clearPointsBehindEveryView`). Only here, the 3D a group keeps — not
-        // the seed handed to Refined above (Refined starts from wherever DLT
-        // lands and decides about its own answer), nor the tracker's internal
-        // DLT solves.
-        return clearPointsBehindEveryView(triangulatePoints(obs, projMatrices), obs, projMatrices);
+        return triangulatePoints(obs, projMatrices);
     }
     let points3d = triangulateFrom(allObservations);
 
@@ -2062,7 +1826,6 @@ export const __triangulationKernelsForTest = {
     solveSmallestEigenvector4x4, matMul, matTranspose,
     projectAndJacobianCamera, projectAndJacobian,
     _projectAndJacobianCameraInto, _projectAndJacobianInto,
-    _distortionFoldR2,
 };
 
 
@@ -2235,14 +1998,14 @@ export function cameraCenter(P) {
 }
 
 // Per-projection-matrix memo for the geometry `cameraCenter` and
-// `backProjectToRay(s)` derive from P alone (its null vector, and M⁻¹ with the
-// centre −M⁻¹·p4). Track All asks for the rays once per detection per frame,
-// and recomputing their geometry — then a 4x4 Jacobi eigen-solve plus four
-// matMuls — was ~6.8 s of a 17 s run on HardFight_1kModels. Keyed by the P
-// array itself (`Camera.projectionMatrix` is cached per camera) and VALIDATED
-// on every hit against a snapshot of its 12 entries, so a P mutated in place
-// recomputes rather than returning stale geometry. A hit returns exactly what
-// a fresh computation would.
+// `backProjectToRay(s)` derive from P alone (its null vector, and the
+// pseudo-inverse Pᵀ(PPᵀ)⁻¹). Track All asks for both once per detection per
+// frame, and recomputing them — a 4x4 Jacobi eigen-solve plus four matMuls —
+// was ~6.8 s of a 17 s run on HardFight_1kModels. Keyed by the P array itself
+// (`Camera.projectionMatrix` is cached per camera) and VALIDATED on every hit
+// against a snapshot of its 12 entries, so a P mutated in place recomputes
+// rather than returning stale geometry. The cached values are produced by the
+// exact same code as before, so results are bit-identical.
 var _pGeomCache = new WeakMap();
 function _pGeometry(P) {
     var e = _pGeomCache.get(P);
@@ -2257,48 +2020,20 @@ function _pGeometry(P) {
     }
     var snapNew = new Float64Array(12);
     for (var r2 = 0, k2 = 0; r2 < 3; r2++) for (var c2 = 0; c2 < 4; c2++, k2++) snapNew[k2] = P[r2][c2];
-    e = { snap: snapNew, center: null, ray: undefined };
+    e = { snap: snapNew, center: null, pinv: null };
     _pGeomCache.set(P, e);
     return e;
 }
 
-// The rays through P = [M | p4]: M⁻¹ and the centre −M⁻¹·p4, memoized per P
-// (see `_pGeometry`); null when M is singular (a camera with no finite centre).
-// Read-only.
-//
-// NOT the line from the centre to the pseudo-inverse point P⁺·(u, v, 1), as
-// these functions used to cast it: that point lies at infinity when the camera
-// sits at the world origin (P = [M | 0] makes P⁺'s 4th row zero), so every
-// direction came out NaN and Track All's 3D term silently dropped that camera.
-function _rayBasis(P) {
+/** Pseudo-inverse Pᵀ(PPᵀ)⁻¹ (4x3) of P, memoized per P. Read-only. */
+function _pseudoInverse(P) {
     var e = _pGeometry(P);
-    if (e.ray !== undefined) return e.ray;
-    var Mi = invert3x3([
-        [P[0][0], P[0][1], P[0][2]],
-        [P[1][0], P[1][1], P[1][2]],
-        [P[2][0], P[2][1], P[2][2]]
-    ]);
-    if (!Mi) return (e.ray = null);
-    var tx = P[0][3], ty = P[1][3], tz = P[2][3];
-    e.ray = {
-        Mi: Mi,
-        origin: [
-            -(Mi[0][0] * tx + Mi[0][1] * ty + Mi[0][2] * tz),
-            -(Mi[1][0] * tx + Mi[1][1] * ty + Mi[1][2] * tz),
-            -(Mi[2][0] * tx + Mi[2][1] * ty + Mi[2][2] * tz)
-        ]
-    };
-    return e.ray;
-}
-
-// Unit M⁻¹·(u, v, 1): the direction the camera sees (u, v) in, pointing in
-// front of it for a P = K·[R | t]. Never zero, since M⁻¹ is invertible.
-function _rayDirection(Mi, u, v) {
-    var dx = Mi[0][0] * u + Mi[0][1] * v + Mi[0][2];
-    var dy = Mi[1][0] * u + Mi[1][1] * v + Mi[1][2];
-    var dz = Mi[2][0] * u + Mi[2][1] * v + Mi[2][2];
-    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    return [dx / len, dy / len, dz / len];
+    if (e.pinv) return e.pinv;
+    var PT = matTranspose(P);
+    var PPT = matMul(P, PT);
+    var PPTinv = invert3x3(PPT);
+    e.pinv = matMul(PT, PPTinv);
+    return e.pinv;
 }
 
 /**
@@ -2306,33 +2041,80 @@ function _rayDirection(Mi, u, v) {
  *
  * @param {number[]} point2d - [u, v] pixel coordinates
  * @param {number[][]} P - 3x4 projection matrix
- * @returns {{origin: number[], direction: (number[]|null)}} Ray origin (the
- *   camera centre) and unit direction; NaN origin and null direction when P
- *   has no finite centre (singular left 3x3)
+ * @returns {{origin: number[], direction: number[]}} Ray origin and unit direction
  */
 export function backProjectToRay(point2d, P) {
-    var b = _rayBasis(P);
-    if (!b) return { origin: [NaN, NaN, NaN], direction: null };
-    return { origin: b.origin.slice(), direction: _rayDirection(b.Mi, point2d[0], point2d[1]) };
+    var origin = cameraCenter(P);
+
+    // Pseudo-inverse pinv(P) = P^T * inv(P * P^T), memoized per P.
+    var pinvP = _pseudoInverse(P); // 4x3
+
+    // Back-project: homogeneous 3D point = pinv(P) * [u, v, 1]^T
+    var u = point2d[0], v = point2d[1];
+    var hx = pinvP[0][0] * u + pinvP[0][1] * v + pinvP[0][2];
+    var hy = pinvP[1][0] * u + pinvP[1][1] * v + pinvP[1][2];
+    var hz = pinvP[2][0] * u + pinvP[2][1] * v + pinvP[2][2];
+    var hw = pinvP[3][0] * u + pinvP[3][1] * v + pinvP[3][2];
+
+    // Dehomogenize
+    var px = hx / hw;
+    var py = hy / hw;
+    var pz = hz / hw;
+
+    // Direction = backprojected point - origin, normalized
+    var dx = px - origin[0];
+    var dy = py - origin[1];
+    var dz = pz - origin[2];
+    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-15) {
+        return { origin: origin, direction: [0, 0, 1] };
+    }
+
+    return { origin: origin, direction: [dx / len, dy / len, dz / len] };
 }
 
 /**
  * Batch back-project multiple 2D points to 3D rays.
- * Computes the ray geometry once per P (memoized).
+ * Computes camera center and pseudo-inverse once for efficiency.
  *
  * @param {(number[]|null)[]} points2d - Array of [u,v] or null
  * @param {number[][]} P - 3x4 projection matrix
- * @returns {{origin: number[], directions: (number[]|null)[]}} Ray origin and
- *   directions; every direction null when P has no finite centre
+ * @returns {{origin: number[], directions: (number[]|null)[]}} Ray origin and directions
  */
 export function backProjectToRays(points2d, P) {
-    var b = _rayBasis(P);
+    var origin = cameraCenter(P);
+
+    // Pseudo-inverse, memoized per P (see `_pGeometry`).
+    var pinvP = _pseudoInverse(P);
+
     var directions = [];
     for (var i = 0; i < points2d.length; i++) {
-        var p = points2d[i];
-        directions.push(p == null || !b ? null : _rayDirection(b.Mi, p[0], p[1]));
+        if (points2d[i] == null) {
+            directions.push(null);
+            continue;
+        }
+        var u = points2d[i][0], v = points2d[i][1];
+        var hx = pinvP[0][0] * u + pinvP[0][1] * v + pinvP[0][2];
+        var hy = pinvP[1][0] * u + pinvP[1][1] * v + pinvP[1][2];
+        var hz = pinvP[2][0] * u + pinvP[2][1] * v + pinvP[2][2];
+        var hw = pinvP[3][0] * u + pinvP[3][1] * v + pinvP[3][2];
+
+        var px = hx / hw;
+        var py = hy / hw;
+        var pz = hz / hw;
+
+        var dx = px - origin[0];
+        var dy = py - origin[1];
+        var dz = pz - origin[2];
+        var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-15) {
+            directions.push([0, 0, 1]);
+        } else {
+            directions.push([dx / len, dy / len, dz / len]);
+        }
     }
-    return { origin: b ? b.origin.slice() : [NaN, NaN, NaN], directions: directions };
+
+    return { origin: origin, directions: directions };
 }
 
 /**

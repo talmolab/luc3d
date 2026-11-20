@@ -79,7 +79,6 @@ export function setReprojErrorVisible() {}
 export function showReprojectionsOnly() { return false; }
 export const REPROJ_ONLY_NOTE = '';
 export function showPredictedOnly() { return false; }
-export function holdOverlayDraws(fn) { return fn(); }
 export const PREDICTED_ONLY_NOTE = '';
 `;
 

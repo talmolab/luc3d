@@ -121,49 +121,6 @@ group('Clean labels — no possible switches flagged');
     ok(res.encounters.every(e => e.score > 0), `every contact scores positive: each animal keeps its size across it (min ${Math.min(...res.encounters.map(e => e.score)).toFixed(2)})`);
 }
 
-group('Size check scored from a copied grid (what the worker gets) = scored in place');
-{
-    const { session } = buildSession([3, 10]);
-    const here = await SC.checkSizeSwitches(session, { fps: 60 });
-    let handed = null;
-    const viaHook = await SC.checkSizeSwitches(session, { fps: 60, scoreGrid: async (grid, o) => {
-        handed = { grid, o };
-        // what postMessage does to the data: a structured clone, then the worker's side
-        const msg = structuredClone(SC.sizeGridMessage(grid)), opts = structuredClone(SC.sizeScoreOptions(o));
-        return SC.scoreSizeGrid(SC.gridFromMessage(msg), opts);
-    } });
-    ok(handed && handed.grid.G && handed.o.fps === 60, 'scoreGrid is handed the sampled grid and the options');
-    ok(here.ok && here.encounters.length > 0 && here.flags.length > 0, `precondition: the check scores contacts and flags the swaps (${here.encounters.length} contacts, ${here.flags.length} flags)`);
-    ok(JSON.stringify(viaHook) === JSON.stringify(here), 'the copied grid gives the same result, value for value');
-    const opts = SC.sizeScoreOptions({ fps: 60, threshold: -1, name: 'x', on: true, none: null, signal: new AbortController().signal, onProgress: () => {}, scoreGrid: () => {} });
-    eq(JSON.stringify(opts), '{"fps":60,"threshold":-1,"name":"x","on":true,"none":null}', 'sizeScoreOptions keeps numbers, strings, booleans and nulls only');
-    const g = SC.gridFromMessage(structuredClone(SC.sizeGridMessage(handed.grid)));
-    ok(g.G === null && [0, 1, 5, 100].every(i => [0, 1, 2].every(k => g.hasCen(i, k) === handed.grid.hasCen(i, k)))
-        && [0.5, 3, 10].every(sec => g.secToSamples(sec) === handed.grid.secToSamples(sec)), 'gridFromMessage rebuilds hasCen and secToSamples as buildGrid has them, and no G');
-}
-
-group('Sampling in slices (buildGridAsync) = sampling at once');
-{
-    const { session } = buildSession([3, 10]);
-    const o = Object.assign({}, SC.SIZE_CHECK_DEFAULTS, { fps: 60 });
-    const whole = SC.buildGrid(session, o, true);
-    let pauses = 0;
-    const sliced = await SC.buildGridAsync(session, o, true, async () => { pauses++; await null; }, 1e-6);   // a pause every 256 samples
-    const same = (a, b) => a.length === b.length && Array.prototype.every.call(a, (v, i) => Object.is(v, b[i]));
-    ok(pauses >= Math.floor((whole.T - 1) / 256), `it paused every 256 samples (${pauses} pauses for ${whole.T} samples)`);
-    ok(same(sliced.X, whole.X) && same(sliced.C, whole.C) && same(sliced.G, whole.G) && same(sliced.frames, whole.frames)
-        && Object.is(sliced.sep, whole.sep) && JSON.stringify(sliced.tl) === JSON.stringify(whole.tl), 'the same grid, value for value');
-    let none = 0;
-    await SC.buildGridAsync(session, o, true, async () => { none++; }, 60000);
-    eq(none, 0, 'no pause when a slice is long enough for all of it');
-    const here = await SC.checkSizeSwitches(session, { fps: 60 });
-    let checkPauses = 0;
-    const slicedCheck = await SC.checkSizeSwitches(session, { fps: 60, pauseSampling: async () => { checkPauses++; }, samplingSliceMs: 1e-6 });
-    ok(checkPauses > 0 && JSON.stringify(slicedCheck) === JSON.stringify(here), `checkSizeSwitches with pauseSampling: the same result (${checkPauses} pauses)`);
-    const fail = await SC.buildGridAsync(session, Object.assign({}, o, { fps: 0 }), true, async () => {});
-    ok(fail.fail && /frame rate/.test(fail.fail), 'a refusal comes back the same way (' + fail.fail + ')');
-}
-
 async function switchCase(SWAP) {
     const { session, events, encounterEnds } = buildSession(SWAP);
     const res = await SC.checkSizeSwitches(session, { fps: 60 });
@@ -608,13 +565,6 @@ group('Image check — embeds only the samples the scoring reads (planImageSampl
     };
     const full = SC.contactChangeScores(grid, (i, k) => FEAT.get(i * K + k) || null, o, every);
     const same = (a, b) => a.length === b.length && a.every((e, i) => e.frame === b[i].frame && e.identityA === b[i].identityA && e.score === b[i].score);
-    // `has` answers "does it have features?" (scoreContacts' rowHas): the same scores, and feat()
-    // is then asked only for the features it averages, not for every sample it looks at
-    let featCalls = 0, featCallsHas = 0;
-    const plain = SC.contactChangeScores(grid, (i, k) => { featCalls++; return FEAT.get(i * K + k) || null; }, o, every);
-    const viaHas = SC.contactChangeScores(grid, (i, k) => { featCallsHas++; return FEAT.get(i * K + k) || null; }, o, every, (i, k) => FEAT.has(i * K + k));
-    ok(same(viaHas, plain) && JSON.stringify(viaHas) === JSON.stringify(plain), `contactChangeScores with has(): the same scored contacts (${plain.length})`);
-    ok(featCallsHas > 0 && featCallsHas < featCalls, `…asking feat() for fewer samples (${featCallsHas} instead of ${featCalls})`);
 
     const st = newState(), plan = SC.planImageSamples(grid, o, every, st);
     plan.forEach(i => { st.embedded[i] = 1; for (let k = 0; k < K; k++) if (FEAT.has(i * K + k)) st.got[i * K + k] = 1; });
@@ -741,52 +691,6 @@ group('fitPCA — recovers the dominant direction');
     const v = pca.project(Float64Array.from(dir)), u = pca.project(new Float64Array(D));
     const along = Math.abs(v[0] - u[0]), across = Math.abs(v[1] - u[1]);
     ok(along > 3 && across < 0.3 * along, `first component follows the planted direction (|pc1| ${along.toFixed(2)}, |pc2| ${across.toFixed(2)})`);
-}
-
-group('fitPCA keeping every direction = centring only; the identity metric does not care about a rotation');
-{
-    // The size check asks for metricPcaDims (64) of at most 16 bone lengths: every
-    // direction is kept, so the PCA basis could only rotate the centred rows. It
-    // now just centres them. That is safe only because learnIdentityMetric's
-    // answers (cosines between projected rows) are the same for rotated rows.
-    const r = rng(9), n = 240, D = 6, X = new Float64Array(n * D), stretch = new Int32Array(n), sample = new Int32Array(n);
-    const proto = [0, 1, 2].map(() => Float64Array.from({ length: D }, () => 2 * gauss(r)));
-    for (let i = 0; i < n; i++) {
-        const a = i % 3;
-        for (let d = 0; d < D; d++) X[i * D + d] = proto[a][d] + 0.7 * gauss(r);
-        stretch[i] = a * 10 + Math.floor(i / 40); sample[i] = Math.floor(i / 3);
-    }
-    const w = Float64Array.from({ length: n }, (_, i) => 1 + (i % 4));
-    const pca = SC.fitPCA(X, n, D, 64, { weights: w });
-    const mean = new Float64Array(D); let W = 0;
-    for (let i = 0; i < n; i++) { W += w[i]; for (let d = 0; d < D; d++) mean[d] += w[i] * X[i * D + d]; }
-    for (let d = 0; d < D; d++) mean[d] /= W;
-    const probe = Float64Array.from({ length: D }, () => gauss(r));
-    const p = pca.project(probe);
-    ok(pca.dims === D && p.every((v, d) => v === probe[d] - mean[d]), 'k ≥ D: project = the row minus the (weighted) mean, every dimension kept');
-    const into = pca.projectInto(probe, new Float64Array(D + 3), 3);
-    ok(p.every((v, d) => v === into[3 + d]), 'projectInto writes the same values at the offset');
-    // A random rotation R: rows x -> R x
-    const R = new Float64Array(D * D);
-    for (let c = 0; c < D; c++) {
-        const v = Float64Array.from({ length: D }, () => gauss(r));
-        for (let c2 = 0; c2 < c; c2++) { let dot = 0; for (let d = 0; d < D; d++) dot += v[d] * R[d * D + c2]; for (let d = 0; d < D; d++) v[d] -= dot * R[d * D + c2]; }
-        let nn = 0; for (let d = 0; d < D; d++) nn += v[d] * v[d]; nn = Math.sqrt(nn);
-        for (let d = 0; d < D; d++) R[d * D + c] = v[d] / nn;
-    }
-    const rot = (x) => { const y = new Float64Array(D); for (let i = 0; i < D; i++) { let s = 0; for (let j = 0; j < D; j++) s += R[i * D + j] * x[j]; y[i] = s; } return y; };
-    const XR = new Float64Array(n * D);
-    for (let i = 0; i < n; i++) XR.set(rot(X.subarray(i * D, (i + 1) * D)), i * D);
-    const o = { metricPcaDims: 64, metricDims: 3, metricReg: 0.1 };
-    const m = SC.learnIdentityMetric(X, n, D, stretch, sample, o, w), mR = SC.learnIdentityMetric(XR, n, D, stretch, sample, o, w);
-    const cos = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };   // unit vectors
-    let worst = 0;
-    for (let t = 0; t < 20; t++) {
-        const a = X.subarray((t * 11) * D, (t * 11 + 1) * D), b = X.subarray((t * 7 + 3) * D, (t * 7 + 4) * D);
-        const d = Math.abs(cos(m.project(a), m.project(b)) - cos(mR.project(rot(a)), mR.project(rot(b))));
-        if (!(d <= worst)) worst = d;
-    }
-    ok(worst < 1e-9, `rotated rows give the same cosines between projected rows (worst difference ${worst.toExponential(1)})`);
 }
 
 group('Crop geometry (ui/image-embedder.js)');

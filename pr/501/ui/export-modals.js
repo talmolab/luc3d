@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=4b6f57689ef7';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=4b6f57689ef7';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=4b6f57689ef7';
+import { noteProgress } from './progress-delta.js?v=e60cb084ca10';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=e60cb084ca10';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=e60cb084ca10';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,14 +26,14 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=4b6f57689ef7';
-import { Viewport3D } from './viewport3d.js?v=4b6f57689ef7';
-import { getTrackColor, getGroupColor } from './overlays.js?v=4b6f57689ef7';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=4b6f57689ef7';
-import { updateInfoPanel } from './info-panel.js?v=4b6f57689ef7';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=4b6f57689ef7';
-import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=4b6f57689ef7';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=4b6f57689ef7';
+} from '../pose/triangulation.js?v=e60cb084ca10';
+import { Viewport3D } from './viewport3d.js?v=e60cb084ca10';
+import { getTrackColor, getGroupColor } from './overlays.js?v=e60cb084ca10';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=e60cb084ca10';
+import { updateInfoPanel } from './info-panel.js?v=e60cb084ca10';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=e60cb084ca10';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=e60cb084ca10';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=e60cb084ca10';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
@@ -45,22 +45,23 @@ import {
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=4b6f57689ef7';
+} from '../import-export/file-io.js?v=e60cb084ca10';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=4b6f57689ef7';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=4b6f57689ef7';
-import { fileSystemAccessHint } from './browser-hints.js?v=4b6f57689ef7';
-import { pickExportFolder } from '../loading/folder-picker-start.js?v=4b6f57689ef7';
-import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=4b6f57689ef7';
-import { noteTriangulateRunMarked, markTriangulatedGroups } from '../pose/run-state.js?v=4b6f57689ef7';
+import { update3DViewport } from '../pose/initialization.js?v=e60cb084ca10';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=e60cb084ca10';
+import { fileSystemAccessHint } from './browser-hints.js?v=e60cb084ca10';
+import { pickExportFolder } from '../loading/folder-picker-start.js?v=e60cb084ca10';
+import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=e60cb084ca10';
+import { askConfirm } from './ask.js?v=e60cb084ca10';
+import { noteTriangulateRun } from '../pose/run-state.js?v=e60cb084ca10';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=4b6f57689ef7';
+} from './overlay-export-layout.js?v=e60cb084ca10';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -151,6 +152,7 @@ export function showGroupByTrackModal() {
     // Build modal
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
 
     var modal = document.createElement('div');
     modal.className = 'multi-frame-modal';
@@ -290,21 +292,6 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
 }
 
 /**
- * `onFrame`, then `afterFrame(frameIdx)` on every path out of it (each early
- * return included), for per-frame bookkeeping that must see every visited
- * frame: here, marking the frame's 3D for the Triangulate button as the run
- * goes (`markTriangulatedGroups`, pose/run-state.js) instead of in one walk
- * over every group at the end.
- */
-function withAfterFrame(onFrame, afterFrame) {
-    return function (frameIdx, fg) {
-        var r = onFrame(frameIdx, fg);
-        afterFrame(frameIdx);
-        return r;
-    };
-}
-
-/**
  * Bulk-group by identity, then triangulate every group.
  *
  * @param {'ba'|'dlt'} [explicitMethod] - the method the user explicitly asked
@@ -383,7 +370,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
     var processedFrames;
     try {
-    processedFrames = await sweepTriangulationFrames(session, withAfterFrame(function (frameIdx, fg) {
+    processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
         // `fg` is undefined for a frame that has 3D grouping but no resident 2D
         // (the sweep's contract — see `sweepLazyFrameWindows`). Without this guard
         // the very next line throws a TypeError, which aborts the whole operation
@@ -549,10 +536,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         }
         return gSolver.throttle();
 
-    }, function (frameIdx) {
-        // After the frame's solves land (results apply in submission order).
-        gSolver.mark(function () { markTriangulatedGroups(session.instanceGroups.get(frameIdx)); });
-    }), {
+    }, {
         onLoadProgress: function (done, total) {
             showLoadingProgress('Loading frames', done, total, { step: 1, steps: gSteps });
         },
@@ -565,7 +549,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         },
     });
     await gSolver.finish();
-    noteTriangulateRunMarked(session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they landed
+    noteTriangulateRun(session, null);   // Triangulate turns blue (ui/run-buttons.js)
     } catch (e) {
         gSolver.cancel();
         throw e;
@@ -656,7 +640,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions);
     // also fixes the prior silent-drop (only resident frames were grouped before).
-    await sweepTriangulationFrames(session, withAfterFrame(function (frameIdx, fg) {
+    await sweepTriangulationFrames(session, function (frameIdx, fg) {
         // `fg` is undefined for a frame that has 3D grouping but no 2D (the
         // sweep's contract — see `sweepLazyFrameWindows`). Without this guard the
         // first `fg.instances` below throws, which aborts the whole operation
@@ -822,10 +806,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         if (solvedHere) solvedFrames++;
         if (priorGroups.length > 0 || session.instanceGroups.has(frameIdx)) regroupedFrames.push(frameIdx);
 
-    }, function (frameIdx) {
-        // Solved inline above: the frame's 3D is final.
-        markTriangulatedGroups(session.instanceGroups.get(frameIdx));
-    }), {
+    }, {
         onProgress: function (done, total) {
             showLoadingProgress('Grouping & triangulating', done, total, {
                 detail: triangulationMethodLabel(prefMethodT) + ' · ' +
@@ -835,7 +816,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     });
 
     // Post-triangulation updates — hide loading first so user sees results
-    noteTriangulateRunMarked(session);   // Triangulate turns blue (ui/run-buttons.js); frames marked as they went
+    noteTriangulateRun(session, null);   // Triangulate turns blue (ui/run-buttons.js)
     hideLoading();
     setReprojErrorVisible(true, { checkBoxes: false });
     var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
@@ -2660,6 +2641,7 @@ export function showTriangulateMultiFrameModal() {
 
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
+    overlay.setAttribute('data-allow-playback', '');  // tracking/triangulation: playback keys still work (ui/keyboard-target.js playbackBlockedByModal)
 
     var modal = document.createElement('div');
     modal.className = 'multi-frame-modal';
@@ -2937,10 +2919,11 @@ export async function exportLabels() {
         // No streaming target: the whole document has to be held in memory.
         var BIG = 20000;
         var fsaHintJson = fileSystemAccessHint();
-        if (totalFrames > BIG && !window.confirm(
+        if (totalFrames > BIG && !(await askConfirm(
             'This project has ' + totalFrames.toLocaleString() + ' frames. Without a ' +
             'save-file picker the whole JSON export must be built in memory, which ' +
-            'may crash the tab.' + (fsaHintJson ? '\n\n' + fsaHintJson : '') + '\n\nExport anyway?')) {
+            'may crash the tab.' + (fsaHintJson ? '\n\n' + fsaHintJson : '') + '\n\nExport anyway?',
+            { title: 'Export Labels', okLabel: 'Export Anyway' }))) {
             setStatus('Export cancelled', 'warning');
             return;
         }
@@ -3557,9 +3540,10 @@ export function showExport3DVideoModal() {
                 }
             }
             var fsaHint3d = fileSystemAccessHint();
-            if (!fileHandle && !window.confirm('This clip is about ' + _fmtBytes(estBytes) +
+            if (!fileHandle && !(await askConfirm('This clip is about ' + _fmtBytes(estBytes) +
                 '. Without a save-file picker it must be built entirely in memory, which may ' +
-                'crash the tab.' + (fsaHint3d ? '\n\n' + fsaHint3d : '') + '\n\nExport anyway?')) {
+                'crash the tab.' + (fsaHint3d ? '\n\n' + fsaHint3d : '') + '\n\nExport anyway?',
+                { title: 'Export 3D Video', okLabel: 'Export Anyway' }))) {
                 setStatus('3D video export cancelled', 'warning');
                 exporting = false;
                 cleanup();

@@ -21,9 +21,10 @@
  *  6. The single-SLP folder loader ("Add session folder"), with a project open:
  *     the added recording keeps campy's provenance, the open session its none.
  *
- * Run: node tests/e2e/slp-provenance-roundtrip.mjs   (serves the app itself; PORT=…)
+ * Run: node tests/e2e/slp-provenance-roundtrip.mjs   (spawns its own http.server; PORT=…)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,8 +32,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8197);
 const VIDEO = path.join(repoRoot, 'tests', 'fixtures', 'barcode-60', 'barcode-60.mp4');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-provenance-'));
 
@@ -59,9 +59,12 @@ const CAMPY = {
 };
 const OTHER = { 'campy-live-export': 'E:/rec2/campy-live.log', animalIds: ['m7'], session: { schema: 'campy-session/1' } };
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 let browser;
 try {
-    browser = await launchBrowser({ headless: true });
+    browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => {

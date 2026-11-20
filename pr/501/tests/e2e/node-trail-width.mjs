@@ -15,25 +15,28 @@
  *  3. moving Predictions ▸ Edge Weight moves both together;
  *  4. moving User ▸ Edge Weight leaves a trail of predictions alone.
  *
- * Run: node tests/e2e/node-trail-width.mjs   (serves the app itself)
+ * Run: node tests/e2e/node-trail-width.mjs   (spawns its own http.server)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8299);
 let fails = 0;
 const check = (c, m, extra) => {
     console.log((c ? '  ✓ ' : '  ✗ ') + m + (extra !== undefined && !c ? '  ' + JSON.stringify(extra).slice(0, 600) : ''));
     if (!c) fails++;
 };
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 let browser;
 try {
-    browser = await launchBrowser({ args: ['--disable-dev-shm-usage'] });
+    browser = await chromium.launch({ args: ['--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 1700, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));

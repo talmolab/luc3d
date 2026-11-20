@@ -32,17 +32,17 @@
  * is HEVC — needs CHANNEL=chrome) at the real chunk size and expects
  * RIG_FRAMES (default 1200) frames at RIG_FPS (default 60).
  *
- * Run: node tests/e2e/fragmented-mp4-load.mjs   (serves the app itself)
+ * Run: node tests/e2e/fragmented-mp4-load.mjs   (spawns its own http.server)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8131);
 const CLIP = 'tests/fixtures/fragmented-60/fragmented-60.mp4';
 const REGULAR = 'tests/fixtures/barcode-60/barcode-60.mp4';
 for (const f of [CLIP, REGULAR]) {
@@ -56,8 +56,11 @@ let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const near = (a, b, tol) => typeof a === 'number' && Math.abs(a - b) <= tol;
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 try {
-    const browser = await launchBrowser({ channel: process.env.CHANNEL || undefined });
+    const browser = await chromium.launch({ channel: process.env.CHANNEL || undefined });
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     if (RIG) {

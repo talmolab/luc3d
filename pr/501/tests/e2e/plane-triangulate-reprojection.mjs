@@ -31,24 +31,27 @@
  *     a single-view plane look solvable.
  *  7. A placed view's own annotation is never overwritten.
  *
- * Run: node plane-triangulate-reprojection.mjs   (serves the app itself)
+ * Run: node plane-triangulate-reprojection.mjs   (spawns its own http.server)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8205);
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 let browser;
 try {
-    browser = await launchBrowser();
+    browser = await chromium.launch();
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => {
@@ -99,14 +102,6 @@ try {
             return [
                 r.left + vx * (r.width / v.videoWidth),
                 r.top + vy * (r.height / v.videoHeight),
-            ];
-        };
-        window.__clientToVideo = (viewName, cx, cy) => {
-            const v = AS.state.views.find(x => x.name === viewName);
-            const r = v.overlayCanvas.getBoundingClientRect();
-            return [
-                (cx - r.left) * (v.videoWidth / r.width),
-                (cy - r.top) * (v.videoHeight / r.height),
             ];
         };
     });
@@ -355,16 +350,9 @@ try {
         const [cx1, cy1] = await page.evaluate(
             ([v, x, y]) => window.__videoToClient(v, x, y),
             ['camC', dragTarget.from[0], dragTarget.from[1]]);
-        // Drop on a whole CSS pixel: Chromium delivers the pointer's position
-        // in whole pixels, and in a small pane one pixel is several video
-        // pixels (198 px wide for 640 at 1280x720). Expect the video point that
-        // pixel maps to, so the check stays exact at any pane size.
-        const [cx2f, cy2f] = await page.evaluate(
+        const [cx2, cy2] = await page.evaluate(
             ([v, x, y]) => window.__videoToClient(v, x, y),
             ['camC', dragTarget.to[0], dragTarget.to[1]]);
-        const cx2 = Math.round(cx2f), cy2 = Math.round(cy2f);
-        dragTarget.to = await page.evaluate(
-            ([v, x, y]) => window.__clientToVideo(v, x, y), ['camC', cx2, cy2]);
         await page.mouse.move(cx1, cy1);
         await page.mouse.down();
         await page.mouse.move(cx2, cy2, { steps: 6 });

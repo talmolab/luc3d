@@ -321,20 +321,12 @@ export function installModalGeometry(card, opts) {
         apply(centred && clampGeometry(filled(centred), viewport(), limits()));
     }
 
-    // A card taken out of the page (or not laid out) measures 0 x 0: that is no
-    // size anyone chose, and saving it reopened the modal at its minimum.
-    function laidOut() {
-        if (!card.isConnected) return false;
-        const r = card.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-    }
-
     let persistTimer = 0;
     function persistSoon() {
         if (persistTimer) clearTimeout(persistTimer);
         persistTimer = setTimeout(function () {
             persistTimer = 0;
-            if (laidOut()) writeGeometry(id, current(), o.storage);
+            writeGeometry(id, current(), o.storage);
         }, 200);
     }
 
@@ -379,7 +371,7 @@ export function installModalGeometry(card, opts) {
     let ro = null;
     if (typeof ResizeObserver !== 'undefined') {
         ro = new ResizeObserver(function () {
-            if (drag || !laidOut()) return;
+            if (drag) return;
             const r = card.getBoundingClientRect();
             const heightMoved = Math.abs(r.height - appliedH) > 1;
             const widthMoved = Math.abs(r.width - appliedW) > 1;
@@ -407,7 +399,7 @@ export function installModalGeometry(card, opts) {
         if (persistTimer) { clearTimeout(persistTimer); persistTimer = 0; }
         // Capture the final rect — a resize that ended inside the debounce
         // window would otherwise be lost when the modal closes.
-        if (laidOut()) writeGeometry(id, current(), o.storage);
+        writeGeometry(id, current(), o.storage);
         handle.removeEventListener('pointerdown', onPointerDown);
         handle.removeEventListener('pointermove', onPointerMove);
         handle.removeEventListener('pointerup', onPointerUp);

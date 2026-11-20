@@ -85,6 +85,15 @@
             assertTrue(d.message.indexOf('-c copy -tag:v hvc1') >= 0, 'gives the re-tag command');
             assertTrue(d.message.indexOf('"Camera0_mid.mp4"') >= 0 && d.message.indexOf('Camera0_mid_hvc1.mp4') >= 0, 'with this file\'s names');
             assertTrue(d.message.indexOf('Safari') >= 0, 'names the browser');
+            assertTrue(d.message.indexOf('Chrome or Firefox') >= 0, 'in a browser: suggests another browser');
+        });
+
+        it('desktop app + hev1 (incomplete hvcC, so not re-tagged): ffmpeg advice, no other browser', function () {
+            if (typeof explainUnplayableCodec === 'undefined') return;
+            var d = explainUnplayableCodec('hev1', 'cam.mp4', { canPlayType: SAFARI, isSafari: true, desktop: true });
+            assertEqual(d.kind, 'hevc-hev1-tag', 'kind');
+            assertTrue(d.message.indexOf('-c copy -tag:v hvc1') >= 0, 'keeps the re-tag command');
+            assertTrue(d.message.indexOf('Chrome or Firefox') < 0, 'no "open it in Chrome or Firefox" inside the app: ' + d.message);
         });
 
         it('Safari + AV1: explains the M3 requirement and the alternatives', function () {

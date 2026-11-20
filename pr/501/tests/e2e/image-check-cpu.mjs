@@ -21,22 +21,18 @@
  *     embeds frames, shows a real sample crop and a measured CPU line with the CPU
  *     alone in the load graph, and cancels. (The sample crops are
  *     also checked bit for bit against the inputs embedded, under 2-4.)
- *  6. The CPU cap (`maxCpuPct`, a duty cycle — ui/image-embedder.js `paceRestMs`): at
- *     50% the same workers run, in smaller batches, each followed by an idle as long
- *     as it ran, and the summary says so. (The crop pool's pacing and the GPU cap's
- *     queue: tests/test-image-compute-caps.mjs.)
  *
  * Run: node tests/e2e/image-check-cpu.mjs   (downloads the ~86 MB fp32 model)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8277);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -44,9 +40,12 @@ const url = fs.readFileSync(path.join(repoRoot, 'ui', 'image-embedder.js'), 'utf
 try { const r = await fetch(url, { method: 'HEAD' }); if (!r.ok) throw new Error('HTTP ' + r.status); }
 catch (e) { console.log('SKIP — the model runtime is not reachable (' + e.message + ')'); process.exit(0); }
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 let browser;
 try {
-    browser = await launchBrowser();
+    browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -103,7 +102,7 @@ try {
     const dev = await pick(page);
     check(dev.picked.kind === 'cpu' && (!dev.hasAdapter || dev.fallback), `headless Chromium (${describe(dev)}) runs the model on the CPU — "${dev.picked.why}"`);
     {
-        const b2 = await launchBrowser({ args: ['--enable-unsafe-webgpu'] });
+        const b2 = await chromium.launch({ args: ['--enable-unsafe-webgpu'] });
         try {
             const p2 = await b2.newPage();
             await p2.goto(`http://localhost:${PORT}/tests/test-runner.html`).catch(() => {});
@@ -150,7 +149,7 @@ try {
             E.writeInputTensor(E.cutCrop(window.__bmp, g, others, canvas), data.subarray(keys.length * SZ, (keys.length + 1) * SZ), 0);
             keys.push([ii, cam]); }));
         const T = await import(E.TRANSFORMERS_URL);
-        const ref = await T.AutoModel.from_pretrained(E.IMAGE_MODEL_ID, { revision: E.IMAGE_MODEL_REVISION, device: 'wasm', dtype: 'fp32' });
+        const ref = await T.AutoModel.from_pretrained(E.IMAGE_MODEL_ID, { device: 'wasm', dtype: 'fp32' });
         const res = await ref({ pixel_values: new T.Tensor('float32', data.slice(0, keys.length * SZ), [keys.length, 3, E.INPUT, E.INPUT]) });
         const hs = res.last_hidden_state, tok = hs.dims[1], dim = hs.dims[2];
         let minCos = 1, maxAbs = 0, matched = 0;
@@ -184,30 +183,6 @@ try {
     check(emb.samples.every(c => c.pts), 'each sample crop carries its animal\'s keypoints in crop pixels, for the skeleton overlay');
     check(emb.samples.length === 4 && emb.samples.every(c => c.same) && new Set(emb.samples.map(c => c.id + c.camera)).size === 4,
           `one sample crop per frame, each bit-identical to the input embedded, rotating animal/camera (${emb.samples.map(c => 'f' + c.frame + ' id' + c.id + ' ' + c.camera).join(', ')})`);
-
-    // ---- 6. the CPU cap (`imageCheckCpuTimePct`): a duty cycle — the same workers, each idling after its work
-    check(!/capped/.test(emb.timing), 'with no caps given the embedder is uncapped (nothing capped in its summary)');
-    const capped = await page.evaluate(async () => {
-        const E = await import('/ui/image-embedder.js'), AS = await import('/ui/app-state.js');
-        const session = AS.state.session, itemsAt = (f) => session.instanceGroups.get(f).map((g, k) => ({ k, group: g }));
-        // the GPU cap is 10% here: on the CPU path it must do nothing, so the idle measured is the CPU cap's
-        const e = await E.createImageEmbedder(session, { cpuWorkers: 2, maxViewsPerAnimal: 0, maxCpuPct: 50, maxGpuPct: 10 });
-        const device = e.device();
-        await Promise.all([0, 4, 8, 12].map(f => e.getEmbeddings(f, itemsAt(f))));
-        e.releaseFrames();
-        const s = e.stats();
-        return { device, s, timing: E.formatEmbedTiming(s), perWorker: E.CPU_CAP_CROPS_PER_WORKER };
-    });
-    check(capped.device.workers === 2, `a 50% CPU cap runs the workers asked for, not fewer (${capped.device.workers})`);
-    check(capped.s.maxBatch <= 2 * capped.perWorker && capped.s.batches >= 2,
-          `…in batches of at most ${capped.perWorker} crops a worker (${capped.s.batches} batches, the largest ${capped.s.maxBatch})`);
-    {
-        const busy = capped.s.submitMs, idle = capped.s.restS * 1000, duty = 100 * busy / (busy + idle);
-        check(duty > 35 && duty < 65,
-              `…each followed by an idle as long as it ran: model busy ${(busy / 1000).toFixed(1)} s, idle ${(idle / 1000).toFixed(1)} s (${duty.toFixed(0)}% duty, the GPU cap's 10% unused)`);
-    }
-    check(/ · CPU time capped at 50%/.test(capped.timing) && !/GPU time capped/.test(capped.timing),
-          `the summary reports the CPU cap alone: "${capped.timing}"`);
 
     // ---- 5. the real dialog, nothing injected: runs on the CPU instead of refusing
     await page.evaluate(async () => {

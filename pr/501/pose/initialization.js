@@ -10,43 +10,42 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
-         hasRealVideo, isViewDocked, VIEW_NAMES } from '../ui/app-state.js?v=4b6f57689ef7';
-import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=4b6f57689ef7';
+         hasRealVideo, isViewDocked, VIEW_NAMES } from '../ui/app-state.js?v=e60cb084ca10';
+import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=e60cb084ca10';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
     reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
-} from './triangulation.js?v=4b6f57689ef7';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=4b6f57689ef7';
-import { rebuildVideoController } from '../loading/session-loader.js?v=4b6f57689ef7';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=4b6f57689ef7';
-import { resetPlaneState } from '../import-export/plane-metadata.js?v=4b6f57689ef7';
-import { createDemoSession } from '../demo-data.js?v=4b6f57689ef7';
-import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel } from '../ui/ui-wiring.js?v=4b6f57689ef7';
-import { setupPanelRail } from '../ui/panel-rail.js?v=4b6f57689ef7';
-import { setupMemoryPanel } from '../ui/memory-panel.js?v=4b6f57689ef7';
-import { setupDemoEntry } from '../ui/demo-entry.js?v=4b6f57689ef7';
-import { installInfoTips } from '../ui/info-tip.js?v=4b6f57689ef7';
-import { installNodeTooltip } from '../ui/node-tooltip.js?v=4b6f57689ef7';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=4b6f57689ef7';
-import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=4b6f57689ef7';
-import { setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=4b6f57689ef7';
-import { setupRecordingInfo } from '../ui/recording-info.js?v=4b6f57689ef7';
+} from './triangulation.js?v=e60cb084ca10';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=e60cb084ca10';
+import { rebuildVideoController } from '../loading/session-loader.js?v=e60cb084ca10';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=e60cb084ca10';
+import { resetPlaneState } from '../import-export/plane-metadata.js?v=e60cb084ca10';
+import { createDemoSession } from '../demo-data.js?v=e60cb084ca10';
+import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel } from '../ui/ui-wiring.js?v=e60cb084ca10';
+import { setupPanelRail } from '../ui/panel-rail.js?v=e60cb084ca10';
+import { installInfoTips } from '../ui/info-tip.js?v=e60cb084ca10';
+import { installNodeTooltip } from '../ui/node-tooltip.js?v=e60cb084ca10';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=e60cb084ca10';
+import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=e60cb084ca10';
+import { setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=e60cb084ca10';
+import { setupRecordingInfo } from '../ui/recording-info.js?v=e60cb084ca10';
 import {
     setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
-} from '../ui/plane-definition.js?v=4b6f57689ef7';
-import { setupSplitHandles } from '../ui/layout-controls.js?v=4b6f57689ef7';
-import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=4b6f57689ef7';
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=4b6f57689ef7';
+} from '../ui/plane-definition.js?v=e60cb084ca10';
+import { setupSplitHandles } from '../ui/layout-controls.js?v=e60cb084ca10';
+import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=e60cb084ca10';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=e60cb084ca10';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
     editGroupState, cancelEditGroup, finishEditGroup, updateEditGroupToast,
     purgeTriangulationDataForGroup,
-} from '../ui/identity-assignment.js?v=4b6f57689ef7';
-import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=4b6f57689ef7';
-import { Viewport3D } from '../ui/viewport3d.js?v=4b6f57689ef7';
-import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=4b6f57689ef7';
-import { Timeline } from '../ui/timeline.js?v=4b6f57689ef7';
-import { InteractionManager } from '../ui/interaction.js?v=4b6f57689ef7';
+} from '../ui/identity-assignment.js?v=e60cb084ca10';
+import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=e60cb084ca10';
+import { Viewport3D } from '../ui/viewport3d.js?v=e60cb084ca10';
+import { viewport3DDisplayOptions } from '../ui/viewport3d-options.js?v=e60cb084ca10';
+import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=e60cb084ca10';
+import { Timeline } from '../ui/timeline.js?v=e60cb084ca10';
+import { InteractionManager } from '../ui/interaction.js?v=e60cb084ca10';
 
 // ============================================
 // Logging
@@ -73,7 +72,6 @@ async function init() {
         setupEmptyVideoController();
         setupUI();
         setupPanelRail({ toggleInfoPanel });
-        setupMemoryPanel();
         setupSkeletonEditing();
         setupVideosTab();
         setupRecordingInfo();
@@ -87,10 +85,23 @@ async function init() {
         setupSplitHandles();
         setupTimeline();
         setupMenus();
+        // The Inference panel: local sleap-nn on the desktop app (when it is in the build), and a
+        // paired SLEAP Connect worker everywhere (the only backend on the web). A literal dynamic
+        // import after the rail exists, so cold start is unchanged; it touches `window.lucidDesktop`
+        // only inside its own desktop checks.
+        const inferencePanelDone = import('../ui/inference-panel.js?v=e60cb084ca10')
+            .then(function (m) { return m.setupInferencePanel(); })
+            .catch(function (e) { console.warn('[inference] panel not added:', e); });
+        // SLEAP Connect (remote GPU workers): the rail's Connect panel, in the
+        // web app and the desktop app. Fetched after the rail exists; failing
+        // to load it leaves the rest of the app untouched. Added after the
+        // Inference panel settles so the rail order is always the same.
+        inferencePanelDone.then(function () { return import('../ui/connect/index.js?v=e60cb084ca10'); })
+            .then(function (m) { return m.setupConnect(); })
+            .catch(function (e) { console.warn('[connect] panel not added:', e); });
 
         hideLoading();
         setStatus('Ready - load session via File menu', 'success');
-        setupDemoEntry();   // last: `?demo` starts loading the demo now
 
     } catch (err) {
         console.error('Initialization failed:', err);
@@ -918,13 +929,7 @@ export function setup3DViewport() {
         console.log('[3D] Creating Viewport3D with', state.session.cameras.length, 'cameras,',
             'skeleton:', state.session.skeleton.nodes.length, 'nodes');
 
-        var _3dLabel = document.getElementById('vis3dLabelSize');
-        var _3dSphere = document.getElementById('vis3dSphereSize');
-        var _3dPyramid = document.getElementById('vis3dPyramidLength');
-        var _3dLabelShow = document.getElementById('vis3dLabelShow');
-        var _3dSphereShow = document.getElementById('vis3dSphereShow');
-        var _3dPyramidShow = document.getElementById('vis3dPyramidShow');
-        setViewport3D(new Viewport3D(container, {
+        setViewport3D(new Viewport3D(container, Object.assign({
             cameras: state.session.cameras,
             skeleton: state.session.skeleton,
             getTrackColor: getTrackColor,
@@ -933,19 +938,7 @@ export function setup3DViewport() {
                 return getGroupColor(group, state.session, useIdentity, state.currentFrame);
             },
             onCameraClicked: highlightVideoCell,
-            cameraLabelSize: _3dLabel ? parseInt(_3dLabel.value) || 28 : 28,
-            cameraSphereSize: _3dSphere ? parseFloat(_3dSphere.value) || 3 : 3,
-            pyramidLength: _3dPyramid ? parseFloat(_3dPyramid.value) || 40 : 40,
-            showCameraLabels: _3dLabelShow ? _3dLabelShow.checked : true,
-            showCameraSpheres: _3dSphereShow ? _3dSphereShow.checked : true,
-            showCameraPyramids: _3dPyramidShow ? _3dPyramidShow.checked : true,
-            skeletonNodeSize: (function() { var e = document.getElementById('vis3dNodeSize'); return e ? parseFloat(e.value) || 2 : 2; })(),
-            skeletonEdgeWeight: (function() { var e = document.getElementById('vis3dEdgeWeight'); return e ? parseFloat(e.value) || 0.8 : 0.8; })(),
-            skeletonBrightness: (function() { var e = document.getElementById('vis3dBrightness'); var v = e ? parseFloat(e.value) : NaN; return isNaN(v) ? 0.5 : Math.min(100, Math.max(0, v)) / 100; })(),
-            skeletonNodeShape: (function() { var e = document.getElementById('vis3dNodeStyle'); return e ? (e.getAttribute('data-value') || 'circle') : 'circle'; })(),
-            showSkeletonNodes: (function() { var e = document.getElementById('vis3dNodeShow'); return e ? e.checked : true; })(),
-            showSkeletonEdges: (function() { var e = document.getElementById('vis3dEdgeShow'); return e ? e.checked : true; })(),
-        }));
+        }, viewport3DDisplayOptions())));
 
         // Wire up "Show Camera View" button
         document.getElementById('btnShowCameraView').addEventListener('click', function (e) {

@@ -26,7 +26,8 @@
  *
  * Run:  node tests/e2e/move-video-lazy-members.mjs
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -34,8 +35,7 @@ import os from 'node:os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8231);
 const FRAMES = 300, CAMS = 4, NODES = 5, MOVED = 'cam3';
 
 let fails = 0;
@@ -44,12 +44,14 @@ const check = (msg, cond, extra) => {
     if (!cond) fails++;
 };
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-move-'));
 const fixturePath = path.join(tmp, 'fixture.slp');
 
 let browser;
 try {
-    browser = await launchBrowser({ headless: true });
+    browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror] ' + String(e).slice(0, 300)); fails++; });
     await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 120000 });

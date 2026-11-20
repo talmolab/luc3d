@@ -30,19 +30,22 @@
  *
  * Run: node tests/e2e/percam-mixed-lazy-eager.mjs
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8271);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 try {
-    const browser = await launchBrowser({ args: ['--disable-dev-shm-usage'] });
+    const browser = await chromium.launch({ args: ['--disable-dev-shm-usage'] });
     const page = await browser.newPage();
     const errs = [];
     page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
@@ -134,12 +137,7 @@ try {
             blobs[cam] = await fio.exportSlpClientSide(s1, cam, false, vf, cam + '_v1.slp', null);
         }
 
-        // One Blob of padding, shared: a File made from an existing Blob refers
-        // to its bytes, while one made from the typed array copied all 151 MB
-        // again for every big file (four of them, ~600 MB of blobs), more than
-        // Chrome keeps for a Playwright context on Linux: the lazy loader's
-        // worker then failed to read the file.
-        const pad = new Blob([new Uint8Array(tri.LAZY_SLP_THRESHOLD + (1 << 20))]);
+        const pad = new Uint8Array(tri.LAZY_SLP_THRESHOLD + (1 << 20));
         const slpFor = (cam, big) => mkFile(
             big ? [blobs[cam], pad] : [blobs[cam]],
             ROOT + '/' + cam + '/' + cam + '_v1.slp', 'application/x-hdf5');

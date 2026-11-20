@@ -25,16 +25,19 @@
  *
  * Run: node tests/e2e/image-check-offline.mjs
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8276);
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
+
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
 
 // A stand-in for transformers.js whose model download goes to huggingface.co (blocked)
 const STUB_RUNTIME = `export const env = {}; export class Tensor {} export const stub = 'runtime-stub';
@@ -45,7 +48,7 @@ export const AutoModel = { from_pretrained: async (id) => {
 
 let browser;
 try {
-    browser = await launchBrowser();
+    browser = await chromium.launch();
     const context = await browser.newContext({ viewport: { width: 1400, height: 860 } });
     // 'open' until the app has booted; then 'blocked' (nothing off localhost) or 'weights' (stub runtime, no weights)
     let mode = 'open';

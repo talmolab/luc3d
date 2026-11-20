@@ -31,9 +31,10 @@
  *     from 1, so the other file's node 1 would land on this project's node 1.
  *     Negative control: `readPlaneMetadata` alone does seat them.
  *
- * Run: node reopen-folder-session-settings.mjs   (serves the app itself)
+ * Run: node reopen-folder-session-settings.mjs   (spawns its own http.server)
  */
-import { startServer, launchBrowser } from './lib/harness.mjs';
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,8 +42,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-const server = await startServer(repoRoot);
-const PORT = server.port;
+const PORT = Number(process.env.PORT || 8218);
 const VIDEO = path.join(repoRoot, 'tests', 'fixtures', 'barcode-60', 'barcode-60.mp4');
 const CAMS = ['camA', 'camB'];
 
@@ -157,10 +157,13 @@ async function settingsOf(sessionIdx) {
     };
 }
 
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-folder-settings-'));
 let browser;
 try {
-    browser = await launchBrowser();
+    browser = await chromium.launch();
     const page = await browser.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
     page.on('console', m => {
