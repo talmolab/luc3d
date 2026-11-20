@@ -17,7 +17,7 @@ import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
          setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
 import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
-import { createVideoTableCounter } from './video-table-counts.js';
+import { createVideoTableCounter, compactCount } from './video-table-counts.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
          setProjectSkeleton, getProjectSkeleton } from './app-state.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
@@ -381,37 +381,30 @@ export function populateVideosTable() {
     const countCells = [];
 
     videoList.forEach(function (vf, i) {
-        // Each video is TWO rows: its name across the full width, then its
-        // counts. Seven columns in one row measured ~550px in the 300px panel,
-        // and a Name column squeezed beside the counts showed "Came…" for
-        // every camera. Path and resolution are in the selected-video detail
-        // (`showVideoFileDetail`); the name row's tooltip carries the path too.
-        const trName = document.createElement('tr');
-        trName.className = 'video-name-row';
+        // One row per video. Seven columns (Name, Path, Frames, Size, ...)
+        // measured ~570px in the 300px panel; path and resolution are in the
+        // selected-video detail (`showVideoFileDetail`), and the counts are
+        // compact (`108k`, exact in each cell's title, `compactCount`) so the
+        // name keeps most of the width. A name still too long ellipsizes; its
+        // title has the full name and the path.
         const tr = document.createElement('tr');
-        tr.className = 'video-counts-row';
-        [trName, tr].forEach(function (row) {
-            row.addEventListener('click', function () {
-                tbody.querySelectorAll('tr').forEach(function (r) { r.classList.remove('selected'); });
-                trName.classList.add('selected');
-                tr.classList.add('selected');
-                selectedVideoFile = vf;
-                document.getElementById('btnRemoveVideo').disabled = false;
-                showVideoFileDetail(vf);
-            });
+        tr.addEventListener('click', function () {
+            tbody.querySelectorAll('tr').forEach(function (r) { r.classList.remove('selected'); });
+            tr.classList.add('selected');
+            selectedVideoFile = vf;
+            document.getElementById('btnRemoveVideo').disabled = false;
+            showVideoFileDetail(vf);
         });
 
         const tdName = document.createElement('td');
         tdName.className = 'video-name';
-        tdName.colSpan = 4;
         tdName.textContent = vf.name;
         tdName.title = vf.videoPath ? vf.name + '\n' + vf.videoPath : vf.name;
-        trName.appendChild(tdName);
 
         const nFrames = vf.frameCount || (vf.decoder ? vf.decoder.samples.length : 0);
         const tdFrames = document.createElement('td');
         tdFrames.className = 'mono';
-        tdFrames.textContent = nFrames ? nFrames.toLocaleString('en-US') : '-';
+        setCountCell(tdFrames, nFrames || null);
 
         // Counts by camera name (assignedCamera or name), filled in by
         // `countVideosInSlices`: '…' while it counts, empty while the section
@@ -430,15 +423,22 @@ export function populateVideosTable() {
         tdScore.textContent = pending;
         countCells.push({ camName: vf.assignedCamera || vf.name, tdLabeled, tdGroups, tdScore });
 
+        tr.appendChild(tdName);
         tr.appendChild(tdFrames);
         tr.appendChild(tdLabeled);
         tr.appendChild(tdGroups);
         tr.appendChild(tdScore);
-        tbody.appendChild(trName);
         tbody.appendChild(tr);
     });
 
     if (showCounts) countVideosInSlices(job, state.session, countCells);
+}
+
+/** A Videos-table count cell: compact text, the exact count as its title. */
+function setCountCell(td, n) {
+    if (n === null || n === undefined) { td.textContent = '-'; td.title = ''; return; }
+    td.textContent = compactCount(n);
+    td.title = n.toLocaleString('en-US');
 }
 
 /**
@@ -456,8 +456,8 @@ function countVideosInSlices(job, session, cells) {
         const counts = counter.result();
         for (const cell of cells) {
             const c = counts.get(cell.camName) || NO_VIDEO_COUNTS;
-            cell.tdLabeled.textContent = c.labeled.toLocaleString('en-US');
-            cell.tdGroups.textContent = c.groups.toLocaleString('en-US');
+            setCountCell(cell.tdLabeled, c.labeled);
+            setCountCell(cell.tdGroups, c.groups);
             cell.tdScore.textContent = c.scoreCount > 0 ? (c.scoreSum / c.scoreCount).toFixed(2) : '-';
         }
     };

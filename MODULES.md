@@ -5197,13 +5197,16 @@ task of a DLT Triangulate All on the 8-camera, 539,852-group project, with the
 section closed (only Instances is open by default). Test:
 `tests/e2e/videos-table-counts.mjs`.
 
-**Layout.** The table fits the 300px panel by stacking:
-each video is a full-width name row (`tr.video-name-row`, tooltip = name +
-path, ellipsizes only past the panel) over a counts row (`tr.video-counts-row`:
-Frames, Labeled, Groups, Score; comma-grouped, never clipped); a click on
-either selects the pair (`#videosTable` rules in `styles.css`). Path and resolution are in the selected-video detail
-(`showVideoFileDetail`), where a path breaks anywhere. Test:
-`tests/e2e/videos-table-fit.mjs` (Chromium + WebKit).
+**Layout.** The table fits the 300px panel in one row per video: Name, then
+Frames, Labeled, Groups and Score right-aligned. Counts are compact
+(`compactCount`: `108k`, `98.8k`) with the exact comma-grouped count as the
+cell's title (`setCountCell`), so Name keeps the widest column (~99 of 268px);
+a longer name ellipsizes, its title = name + path. Headers are sentence case
+here (no uppercase/letter-spacing) and cells pad 3px: the headers, not the
+values, set the count columns' widths. Path and resolution are in the
+selected-video detail (`showVideoFileDetail`), where a path breaks anywhere.
+`#videosTable` rules in `styles.css`. Test: `tests/e2e/videos-table-fit.mjs`
+(Chromium; WebKit where Playwright's WebKit is installed).
 
 **Reprojection Error panel (`updateFrameInfo`).** The headline mean,
 undistorted residual, method label, and per-camera rows are the frame SUMMARY
@@ -14399,8 +14402,12 @@ hence the slices. DOM-free and import-free (Node tests load it).
   `globalThis.__lucidVideoCountSliceFrames` (tests) makes each step count
   exactly that many frames.
 - `videoTableCounts(session)`: the whole count at once.
+- `compactCount(n)`: the table's short count — exact below 1,000, then `k`
+  with one decimal below 100k (`98.8k`, `12k` not `12.0k`), whole `k` below a
+  million (`108k`), then `M`/`B` the same way; rounding into the next unit moves
+  to it (`1M`, never `1000k`); at most 5 characters; NaN/negative → `-`.
 
-**Imported by.** `ui/info-panel.js` (`countVideosInSlices`).
+**Imported by.** `ui/info-panel.js` (`countVideosInSlices`, `setCountCell`).
 
 **Test.** `tests/test-video-table-counts.mjs` (random eager and lazy sessions
 against the old per-camera loops; any slice size gives the one-shot result).

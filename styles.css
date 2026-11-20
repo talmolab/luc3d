@@ -4024,25 +4024,31 @@ button.tri-dropdown-item:disabled {
 }
 
 /* The Videos table (ui/info-panel.js populateVideosTable) fits the 300px
-   panel by stacking: each video is a name row spanning the table, then a row
-   of counts that never clip. The pair hovers and selects as one. A name too
-   long for the panel ellipsizes, with the full name and path in its title.
+   panel in one row per video: the counts are compact (`108k`, exact in the
+   cell's title) and right-aligned, and Name takes the rest of the width
+   (`max-width: 0` + `width: 100%`, the table idiom), ellipsizing past it.
    Path and resolution live in the selected-video detail, where a path breaks
    anywhere. */
+#videosTable thead th,
+#videosTable tbody td {
+  padding-left: 3px;
+  padding-right: 3px;
+}
+#videosTable th.num,
+#videosTable td.mono {
+  text-align: right;
+}
+#videosTable thead th {
+  text-transform: none;
+  letter-spacing: 0;
+}
 #videosTable td.video-name {
   max-width: 0;
-  padding-bottom: 0;
-  border-bottom: none;
-  font-weight: 500;
+  width: 100%;
 }
-#videosTable tr.video-counts-row td {
+#videosTable td.mono {
   max-width: none;
   overflow: visible;
-  padding-top: 2px;
-}
-#videosTable tr.video-name-row:hover + tr.video-counts-row:not(.selected),
-#videosTable tr.video-name-row:not(.selected):has(+ tr.video-counts-row:hover) {
-  background: var(--bg-button);
 }
 #videoDetail .video-path-row {
   gap: 10px;
