@@ -23,7 +23,8 @@
  *     frames 0-9, also written at output_path): Fetch & Load Results is
  *     offered; clicking it downloads through fs.read, merges with Replace:
  *     20 predicted instances per view, the user label untouched, the old
- *     prediction on a re-inferred frame replaced; the jobs are marked fetched.
+ *     prediction on a re-inferred frame replaced; the timeline marks frames
+ *     0-9 as predicted; the jobs are marked fetched.
  *  5. Reload: completed-but-unfetched jobs come back as "Predictions ready"
  *     and Fetch & Load works after a reload; results of another session are
  *     refused with a message.
@@ -293,12 +294,14 @@ await runConnectE2E(9393, async ({ browser, BASE }) => {
             oldPred: all(1, 'cam1').filter((i) => i.type === 'predicted' && i.getPoint(0) && i.getPoint(0)[0] === 1).length,
             fetched: m.useConnectStore.getState().trackedJobs.map((j) => j.fetchedAt != null),
             fetchBtnHidden: document.getElementById('infFetchLoad').hidden,
+            marks: Array.from({ length: 10 }, (_, f) => window.__lucid.timeline._frameMarkers.get(f) || null),
         };
     });
     check(p4.per['cam1:predicted'] === 20 && p4.per['cam2:predicted'] === 20, '20 predicted instances per view', p4.per);
     check(p4.userAt0.length === 1 && JSON.stringify(p4.userAt0[0]) === '[[11,22],[33,44]]', 'the user label is untouched (Replace)', p4.userAt0);
     check(p4.oldPred === 0, 'the old prediction on a re-inferred frame was replaced');
     check(/✓ cam1: 20 predicted instances on 10 frames/.test(p4.log), 'the log reports the merge', p4.log);
+    check(p4.marks.every((m) => m && m.hasPredicted), 'the timeline marks every frame with new predictions (0-9) right after Fetch & Load', p4.marks);
     check(p4.dirty === true, 'the project is dirty');
     check(p4.fetched.length === 2 && p4.fetched.every(Boolean), 'both jobs are marked fetched', p4.fetched);
     check(p4.fetchBtnHidden, 'Fetch & Load is gone once everything is loaded');

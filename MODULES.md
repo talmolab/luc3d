@@ -10484,6 +10484,16 @@ Rows whose camera is excluded from tracking in the Tracking Wizard
 both the gutter label and the occupancy bars — distinct from the
 per-session visibility filter (`_hiddenCameras`), which drops the row entirely.
 
+**Frame markers count ungrouped instances.** `_buildFrameMarkers` (run by
+`setData`) sets a resident frame's `hasUser` / `hasPredicted` from both its
+grouped (`fg.instances`) and ungrouped (`fg.unlinkedInstances`) instances, so
+predictions merged by an inference run (`ui/inference-merge.js`: local sleap-nn
+or Connect's Fetch & Load) or an imported `.slp`, which arrive ungrouped and
+usually untracked (no track row), mark their frames as soon as the merge's
+`setData` runs. Lazy projects: resident frames only, as before. Tests:
+`tests/test-timeline.js` (Data Building), e2e `desktop-inference` §5/§8,
+`connect-inference-merge` §4.
+
 **The canvas is a BAND of the content, not all of it.** Inside the scroll
 wrapper (`_trackScrollEl`), a spacer (`_spacerEl`) carries the timeline's full
 content height — `max(getPreferredHeight(), visible height)` — so the scroll

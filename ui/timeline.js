@@ -2036,7 +2036,9 @@ export class Timeline {
     }
 
     /**
-     * Build cached frame-marker map from the session.
+     * Build cached frame-marker map from the session: per resident frame,
+     * whether it holds a user and/or a predicted instance, grouped
+     * (`fg.instances`) or ungrouped (`fg.unlinkedInstances`).
      *
      * @param {Session} session
      * @private
@@ -2052,6 +2054,20 @@ export class Timeline {
                 for (let i = 0; i < instances.length; i++) {
                     if (instances[i].type === 'user') hasUser = true;
                     else if (instances[i].type === 'predicted') hasPredicted = true;
+                }
+            }
+            // Ungrouped instances count too: predictions merged from an
+            // inference run (`ui/inference-merge.js`) or an imported `.slp`
+            // arrive ungrouped and usually untracked, so without this their
+            // frames had no mark at all (no track row either).
+            if (fg.unlinkedInstances) {
+                for (const [_camName2, ulList] of fg.unlinkedInstances) {
+                    for (let u = 0; u < ulList.length; u++) {
+                        const inst = ulList[u] && ulList[u].instance;
+                        if (!inst) continue;
+                        if (inst.type === 'user') hasUser = true;
+                        else if (inst.type === 'predicted') hasPredicted = true;
+                    }
                 }
             }
 

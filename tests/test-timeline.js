@@ -372,6 +372,28 @@
             cleanup(tl, container);
             tl = null;
         });
+
+        it('setData marks frames that hold only UNGROUPED instances (merged predictions)', function () {
+            var skeleton = new Skeleton('test', ['a'], []);
+            var cameras = [
+                new Camera('cam1', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]),
+            ];
+            var session = new Session(cameras, skeleton, []);
+            // An untracked ungrouped prediction (what an inference merge adds)…
+            session.addUnlinkedInstance(3, 'cam1', new Instance([[50, 50]], null, 'predicted', 0.9));
+            // …and an ungrouped user label on another frame.
+            session.addUnlinkedInstance(7, 'cam1', new Instance([[60, 60]], null, 'user', 1));
+
+            tl.setData(session);
+
+            var m3 = tl._frameMarkers.get(3);
+            assertTrue(!!m3 && m3.hasPredicted && !m3.hasUser, 'frame 3: predicted-only marker');
+            var m7 = tl._frameMarkers.get(7);
+            assertTrue(!!m7 && m7.hasUser && !m7.hasPredicted, 'frame 7: user marker');
+            cleanup(tl, container);
+            tl = null;
+        });
     });
 
     describe('Timeline - Frame Modification Markers', function () {
