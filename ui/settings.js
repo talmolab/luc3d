@@ -96,6 +96,9 @@ const ACTION_CATALOG = [
     { id: 'togglePredicted', label: 'Toggle Predictions', category: 'View', binding: 'p', editable: true, dispatched: true },
     { id: 'toggleReproj', label: 'Toggle Reprojections', category: 'View', binding: 'r', editable: true, dispatched: true },
     { id: 'toggleErrors', label: 'Toggle Errors', category: 'View', binding: 'e', editable: true, dispatched: true },
+    { id: 'toggleOutlines', label: 'Toggle Animal Outlines', category: 'View', binding: 'o', editable: true, dispatched: true },
+    { id: 'flagOutline', label: 'Flag the Outline Under the Pointer', category: 'View', binding: 'Shift+o', editable: true, dispatched: true },
+    { id: 'outlineBrush', label: 'Outline Brush (hold left to draw, right to erase)', category: 'View', binding: 'b', editable: true, dispatched: true },
     { id: 'definePlanes', label: 'Toggle Defining Plane Mode', category: 'View', binding: 'Mod+Shift+P', editable: true, dispatched: true },
 
     // --- Help ---
