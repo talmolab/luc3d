@@ -58,6 +58,46 @@ export function validateSkeletonCompatibility(existing, incoming) {
 }
 
 /**
+ * The video each of an SLP's cameras was predicted on, as the file names it
+ * (`sourceFilename`, else `filename`; a '.' or missing path is left out).
+ * File ▸ Load SLP keeps it on the session (`session.slpVideoByCamera`) so a
+ * later Load SLP of the same video is recognised (`camerasAlreadyInSession`).
+ * @param {{sourceFilename?: string, filename?: string}[]} videos - slpData.videos
+ * @param {Object<number, string>} videoIdxToCameraName
+ * @returns {Object<string, string>} camera name -> video path
+ */
+export function slpVideoByCamera(videos, videoIdxToCameraName) {
+    var out = {};
+    for (var k in videoIdxToCameraName) {
+        var v = videos && videos[k];
+        var p = v ? (v.sourceFilename || v.filename || '') : '';
+        if (p && p !== '.') out[videoIdxToCameraName[k]] = p;
+    }
+    return out;
+}
+
+/**
+ * The incoming cameras the session already has: the same camera name AND the
+ * same video path as when that camera came from an SLP. Load SLP on the same
+ * video again (e.g. to attach the video after continuing without one) must not
+ * add its camera a second time: the renamed copy (`<name>_2`) turned a
+ * one-camera session into a two-camera one, so Track All and the ID Switches
+ * tab took the multi-camera path. Two different videos with the same stem
+ * (campy names every video 0.mp4) differ in their path and are still added; a
+ * camera the session did not get from an SLP has no path and is never matched.
+ * @param {Session} session
+ * @param {Object<string, string>} incoming - `slpVideoByCamera` of the new file
+ * @returns {string[]} camera names
+ */
+export function camerasAlreadyInSession(session, incoming) {
+    var known = (session && session.slpVideoByCamera) || {};
+    var names = ((session && session.cameras) || []).map(function (c) { return c.name; });
+    return Object.keys(incoming).filter(function (cam) {
+        return names.indexOf(cam) >= 0 && known[cam] === incoming[cam];
+    });
+}
+
+/**
  * Merge incoming track names into session, returning a remap table.
  * @param {Session} session
  * @param {string[]} incomingTracks

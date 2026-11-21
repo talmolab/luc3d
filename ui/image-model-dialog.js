@@ -11,7 +11,9 @@
  *
  * The ID Switches tab shows the model in use with a "Change…" button
  * (`imageModelLineHtml` / `wireImageModelLine`), which opens the dialog
- * (`showImageModelDialog`). Esc, Cancel and a backdrop click leave everything
+ * (`showImageModelDialog`). The dialog's "Train a model for this rig" fold
+ * (`trainingHelpHtml`) says how to make a package; the tab's "How to train
+ * one…" (after an image pre-judge on the built-in model) opens it there. Esc, Cancel and a backdrop click leave everything
  * as it was; "Use this model" sets the session's choice and marks the project
  * dirty.
  *
@@ -78,6 +80,16 @@ export function wireImageModelLine(host, session, onChanged) {
     });
 }
 
+/** Wire every "How to train one…" button (`.image-model-train-open`) in `host`: the dialog, its training fold open. */
+export function wireTrainingPrompt(host, session, onChanged) {
+    if (!host) return;
+    host.querySelectorAll('.image-model-train-open').forEach(function (b) {
+        b.addEventListener('click', function () {
+            showImageModelDialog(session, { showTraining: true }).then(function (changed) { if (changed && onChanged) onChanged(); });
+        });
+    });
+}
+
 function describe(pkg) {
     if (pkg.builtin) {
         return [['Model', 'DINOv3 ViT-S/16, frozen (not trained on your recordings)'], ['License', pkg.license],
@@ -96,9 +108,31 @@ function describe(pkg) {
     return rows;
 }
 
+/** Where the training script is (the repository's main branch). */
+export const TRAIN_SCRIPT_URL = 'https://github.com/talmolab/luc3d/blob/main/scripts/train_image_model.py';
+
+/**
+ * The dialog's "Train a model for this rig" fold: how to make a package with
+ * scripts/train_image_model.py from the rig's own tracked recordings (no labels).
+ * Open when `open` (the ID Switches tab's prompt opens the dialog on it).
+ */
+export function trainingHelpHtml(open) {
+    return '<details class="image-model-train"' + (open ? ' open' : '') + '><summary>Train a model for this rig</summary>' +
+        '<ol class="image-model-steps">' +
+        '<li>Track a few recordings from this rig (Track All, then review the list) and save each one with File ▸ Save ' +
+        '(on several cameras, File ▸ Export SLEAP File By Cam). No hand labels are needed, and a few swaps left in the tracks do little harm. ' +
+        'Keep one recording out to see the gain.</li>' +
+        '<li>On a computer with an NVIDIA GPU, run LUC3D\'s <a href="' + TRAIN_SCRIPT_URL + '" target="_blank" rel="noopener">train_image_model.py</a> ' +
+        '(needs torch, transformers, sleap-io, av, opencv-python and onnx); about 6 minutes on a recent GPU:' +
+        '<code class="image-model-cmd">python scripts/train_image_model.py rig-model --labels rec1.slp rec2.slp --holdout rec3.slp --name "My rig"</code></li>' +
+        '<li>Here: <b>Load package folder…</b>, pick the <b>rig-model</b> folder, <b>Use this model</b>, and run the image check again.</li>' +
+        '</ol></details>';
+}
+
 /**
  * The dialog. Resolves true when the session's model changed, false otherwise.
  * `opts.pickFiles` (tests) stands in for the folder picker: returns a Promise of a File list.
+ * `opts.showTraining` opens the "Train a model for this rig" fold.
  */
 export function showImageModelDialog(session, opts) {
     opts = opts || {};
@@ -121,7 +155,7 @@ export function showImageModelDialog(session, opts) {
             '<input type="file" id="imageModelFolderInput" webkitdirectory hidden>' +
             '<input type="text" id="imageModelUrl" placeholder="owner/repo or https://…/package/" aria-label="Package URL or Hugging Face repo">' +
             '<button type="button" class="panel-btn" id="imageModelUrlLoad">Load from URL</button></div>' +
-            '<dl class="image-model-details"></dl>' +
+            '<dl class="image-model-details"></dl>' + trainingHelpHtml(!!opts.showTraining) +
             '<div class="modal-error" id="imageModelError"></div>' +
             '<div class="modal-actions"><button id="imageModelCancel">Cancel</button><button id="imageModelUse" class="primary">Use this model</button></div>';
         overlay.appendChild(modal);
@@ -194,5 +228,6 @@ export function showImageModelDialog(session, opts) {
         render();
         document.body.appendChild(overlay);
         modal.querySelector('#imageModelCancel').focus();
+        if (opts.showTraining) { const t = modal.querySelector('.image-model-train'); if (t && t.scrollIntoView) t.scrollIntoView({ block: 'nearest' }); }
     });
 }

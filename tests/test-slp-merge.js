@@ -10,6 +10,38 @@
 
 describe('SLP Merge Helpers', function () {
 
+    // --- slpVideoByCamera / camerasAlreadyInSession (Load SLP on a video the session has) ---
+
+    describe('camerasAlreadyInSession', function () {
+        var cam = function (n) { return new Camera(n, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]); };
+        var videos = [{ filename: '/data/rec_a/top.mp4' }, { sourceFilename: '/data/rec_a/side.mp4', filename: 'side_embedded.slp' }, { filename: '.' }];
+
+        it('records each camera\'s video path as the file names it', function () {
+            var m = slpVideoByCamera(videos, { 0: 'top', 1: 'side', 2: 'cam_2' });
+            assertDeepEqual(m, { top: '/data/rec_a/top.mp4', side: '/data/rec_a/side.mp4' }, 'sourceFilename first; "." left out');
+        });
+
+        it('matches a camera with the same name AND the same video path', function () {
+            var s = new Session([cam('top')], new Skeleton('s', ['A'], []), []);
+            s.slpVideoByCamera = { top: '/data/rec_a/top.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), ['top']);
+        });
+
+        it('does not match the same name on another video (campy: every video is 0.mp4)', function () {
+            var s = new Session([cam('0')], new Skeleton('s', ['A'], []), []);
+            s.slpVideoByCamera = { 0: '/data/rec/cam_a/0.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { 0: '/data/rec/cam_b/0.mp4' }), []);
+        });
+
+        it('does not match a camera the session did not get from an SLP, or one it no longer has', function () {
+            var s = new Session([cam('top')], new Skeleton('s', ['A'], []), []);
+            assertDeepEqual(s.slpVideoByCamera, {}, 'a new session records nothing');
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), [], 'no recorded path: never matched');
+            s.slpVideoByCamera = { side: '/data/rec_a/side.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { side: '/data/rec_a/side.mp4' }), [], 'recorded, but the camera is gone');
+        });
+    });
+
     // --- validateSkeletonCompatibility ---
 
     describe('validateSkeletonCompatibility', function () {
