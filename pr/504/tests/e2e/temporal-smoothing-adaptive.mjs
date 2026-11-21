@@ -6,7 +6,8 @@
  *   A. Adaptive is the default, except for someone who had set a window (no
  *      method stored); the Smooth menu's Method radio sets Settings ▸
  *      Temporal Smoothing's Method, and the Settings panel shows only the
- *      chosen method's rows (the windows figure only for the windows);
+ *      chosen method's rows; its figure shows both methods, the one not in
+ *      use dimmed;
  *   B. Smooth (all frames) with Adaptive smooths every group, weighing every
  *      point by its views (no fallback), lowers frame-to-frame jitter, and
  *      says so in the status (method, mean window);
@@ -118,21 +119,23 @@ try {
         const p = document.querySelector('.settings-panel[data-panel="smoothing"]');
         const vis = (el) => !!el && el.offsetParent !== null;
         const rows = [...p.querySelectorAll('.settings-threshold-row')];
+        const idle = (s) => p.querySelector(`.smooth-fig [data-stage="${s}"]`).classList.contains('is-idle');
         return {
             select: p.querySelector('select[aria-label="Method"]').value,
             windows: rows.filter(r => r.dataset.smoothMethod === 'windows').map(vis),
             adaptive: rows.filter(r => r.dataset.smoothMethod === 'adaptive').map(vis),
             figure: vis(p.querySelector('.smooth-fig')),
+            idle: { median: idle('median'), adaptive: idle('adaptive') },
         };
     });
     const p1 = await panel();
     check(p1.select === '1' && p1.adaptive.length === 2 && p1.adaptive.every(Boolean) &&
-        p1.windows.length === 4 && !p1.windows.some(Boolean) && !p1.figure,
-        'Settings shows Adaptive: its gate and half-window, not the windows or their figure', p1);
+        p1.windows.length === 4 && !p1.windows.some(Boolean) && p1.figure && p1.idle.median && !p1.idle.adaptive,
+        'Settings shows Adaptive: its gate and half-window rows, and the figure with the window cards dimmed', p1);
     await page.selectOption('.settings-panel[data-panel="smoothing"] select[aria-label="Method"]', '0');
     const p2 = await panel();
-    check(p2.windows.every(Boolean) && !p2.adaptive.some(Boolean) && p2.figure,
-        'switching the select to the windows shows the windows and the figure instead', p2);
+    check(p2.windows.every(Boolean) && !p2.adaptive.some(Boolean) && p2.figure && !p2.idle.median && p2.idle.adaptive,
+        'switching the select to the windows shows their rows, and dims the Adaptive card instead', p2);
     await page.keyboard.press('Escape');
     await page.waitForTimeout(200);
     const after = await page.evaluate(async () => (await import('/ui/settings.js')).getSmoothingParams().smoothMethod);

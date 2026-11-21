@@ -46,16 +46,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=461ad1b76c1e';
-import { getActiveSession, state, timeline } from './app-state.js?v=461ad1b76c1e';
-import { drawAllOverlays } from './rendering.js?v=461ad1b76c1e';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=461ad1b76c1e';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=461ad1b76c1e';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=461ad1b76c1e';
-import { installModalGeometry } from './modal-geometry.js?v=461ad1b76c1e';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=461ad1b76c1e';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=461ad1b76c1e';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=461ad1b76c1e';
+} from './settings.js?v=2ad23d37d359';
+import { getActiveSession, state, timeline } from './app-state.js?v=2ad23d37d359';
+import { drawAllOverlays } from './rendering.js?v=2ad23d37d359';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=2ad23d37d359';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=2ad23d37d359';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=2ad23d37d359';
+import { installModalGeometry } from './modal-geometry.js?v=2ad23d37d359';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=2ad23d37d359';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=2ad23d37d359';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=2ad23d37d359';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -834,23 +834,25 @@ export function showSettingsModal(initialPanel) {
         onParam: function (id, value) {
             working.smoothing[id] = value;
             const def = smoothingDefs.find(function (d) { return d.id === id; });
-            const field = def && smSection.body.querySelector('input[aria-label="' + def.label + '"]');
+            // A number field, or the Method's select.
+            const field = def && smSection.body.querySelector('[aria-label="' + def.label + '"]');
             if (field) field.value = String(value);
+            if (id === 'smoothMethod') showSmoothingMethod();
         },
     });
     smFigure.update(working.smoothing);
     smPanel.appendChild(smFigure.el);
 
     // One section; the method's row first, then only the chosen method's
-    // parameters (`def.method`), shown again as the method changes. The windows
-    // figure belongs to the windows method.
+    // parameters (`def.method`), shown again as the method changes. The figure
+    // shows both methods, dimming the one not in use.
     const smSection = buildSection('Filter Parameters', null);
     smPanel.appendChild(smSection.root);
     const smRows = [];
     function showSmoothingMethod() {
         const method = working.smoothing.smoothMethod === 1 ? 'adaptive' : 'windows';
         smRows.forEach(function (r) { r.row.hidden = !!r.method && r.method !== method; });
-        smFigure.el.hidden = method !== 'windows';
+        smFigure.update(working.smoothing);
     }
     smoothingDefs.forEach(function (def) {
         const row = buildParamRow(def, working.smoothing, function () {
