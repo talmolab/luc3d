@@ -2531,6 +2531,60 @@ load in `pose/tracker-worker.js`. Keep every import of this module worker-safe.
 
 ---
 
+### pose/adaptive-temporal-averaging.js
+
+**Purpose.** The math of Temporal Smoothing's adaptive method: 3D adaptive
+temporal averaging (ATA) of one node's trajectory, and the per-point covariance
+it weighs samples by. A 3D, covariance-aware port of Bartovčak & Vrankić's
+pixel-wise video denoiser (Engineering Review 2012; Prasath 2019), via
+`ata3d.smooth` (olinesn/ata3d, private) / `ata_3d` of the volfuse study
+(`~/svd/mice/volfuse`, 2026-11-21: on DoublePoke's 60 fps mice it never made a
+held-out or hand-label score worse and halved frame-to-frame jitter, where a
+constant-velocity Kalman lagged in fights). DOM-free.
+
+**`ataSmoothSeriesInto(x, cov, T, {k, hmax, from, to}, out, half)`.** `x` T x 3,
+`cov` T x 6 (packed symmetric `[xx, xy, xz, yy, yz, zz]`), NaN = missing. For
+frame t the window grows forward, then backward up to the forward length, one
+frame at a time while `(x_u - x_t)^T (S_t + S_u)^-1 (x_u - x_t) < k^2`; each
+side stops at its first failure, a missing sample, or `hmax`. The window is
+symmetric (both sides the shorter), and the output is the precision-weighted
+mean over it, with ata3d's unit-free ridges (1e-6 of each covariance's mean
+variance before inverting, 1e-9 of the summed precision's before the solve). A
+1-frame window keeps its sample exactly (ata3d moves it by ~1e-9 relative; the
+one difference). Only [from, to) is computed, and t reads only
+[t - hmax, t + hmax], so a slice holding that much gives the whole series'
+value bit for bit (the sums run centre, then t∓1, t∓2, ...). `half[t]` = h
+(window 1 + 2h), -1 where missing.
+
+**`dltPointCovarianceInto(point, cams, us, vs, n, {reprojErrorThreshold, sigma0,
+k0}, out, o)`** — volfuse's `dlt_cov`: S = s² (Σ J_vᵀJ_v + 1e-9 I)⁻¹, J_v the
+native-pixel projection Jacobian of each view at the point
+(`projectAndJacobianCameraInto`, distortion included), s² = (k0 σ0² + RSS) /
+(k0 + max(2n − 3, 0)) with σ0 = 2 px, k0 = 4 (`DLT_COV_SIGMA0_PX`,
+`DLT_COV_PSEUDO_DOF`). With a threshold, the worst view is left out while it
+misses by more and more than 2 views remain (as the solve drops it). Returns s
+(px), or NaN (out untouched) below 2 views.
+
+**`secondDifferenceSigma(x, T)`** — the fallback: per axis
+1.4826 · median |x[t+1] − 2x[t] + x[t−1]| / √6 over consecutive present
+triples, RMS over the axes; NaN below 5 triples or when 0. Constant velocity
+does not inflate it; acceleration does.
+
+**Exports.** `ATA_DEFAULT_K` (3), `ATA_DEFAULT_HMAX` (15), `DLT_COV_SIGMA0_PX`,
+`DLT_COV_PSEUDO_DOF`, `COV_STRIDE` (6), `invertSym3Into`,
+`ataSmoothSeriesInto`, `dltPointCovarianceInto`, `secondDifferenceSigma`.
+
+**Imports.** `pose/triangulation-core.js` (`projectAndJacobianCameraInto`).
+
+**Imported by.** `pose/temporal-smoothing.js`.
+
+**Tests.** `tests/test-adaptive-temporal-averaging.mjs`: windows equal ata3d's
+and outputs within 1e-9 mm on `tests/fixtures/ata3d/reference.json` (still,
+steady and fast series, a jump, a gap, holes; k 3/2/4), slice = whole bit for
+bit, unit invariance, synthetic still/steady/jump, the covariance against a
+numerical Jacobian through `reprojectPointCamera`, the threshold drop. The
+fixture is made by `tests/fixtures/ata3d/make_reference.py` (needs ata3d).
+
 ### pose/temporal-smoothing.js
 
 **Purpose.** Post-triangulation temporal filtering of the 3D tracks — the
@@ -2550,6 +2604,11 @@ rejected because the low-acceleration prior is physically true in 3D and only
 approximately true under perspective projection, and because interpolating a
 missing view fabricates an observation that then votes in triangulation as if
 it were real data.
+
+**Two methods** (`resolveSmoothingParams`' `method`, Settings' `smoothMethod`
+0/1): **adaptive** (Settings' default; see the end of this entry), or the
+windows below (what params without `smoothMethod` resolve to, for direct
+callers and tests).
 
 **Algorithm.** Two independently switchable stages over each node's 1D
 coordinate signals (15 nodes = 45 signals per identity; nodes never enter each
@@ -2609,7 +2668,8 @@ smoothed), and a third value there would erase the solver identity
 `resolveTriangulationMethod` exists to preserve.
 
 **Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
-`smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
+`smoothSignalInto`, `resolveSmoothingParams`, `describeSmoothingConfig`,
+`SMOOTH_METHOD_WINDOWS`, `SMOOTH_METHOD_ADAPTIVE`, `collectTrajectories`,
 `smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `smoothFrame`,
 `unsmoothSession`, `hasSmoothed3d`, `noteSmoothedFrames`, `removeSmoothing`,
 `restoreSmoothing`, `hasRemovedSmoothing`. **Remove / Restore smoothing**:
@@ -2645,14 +2705,46 @@ track; both entry points run the same generators (`smoothTrajectorySteps`,
 `smoothSessionSteps`), so the result and the writes are identical, and nothing
 of a trajectory is written before its last step.
 
+**The adaptive method** (`method: 'adaptive'`, `k` = `smoothAtaK` (3),
+`hmax` = `smoothAtaHmax` (15; 0 = off), `covariance` 'views' | 'sigma' (the
+latter only from `smoothAtaCovariance`, for comparisons)). Per identity
+(`collectTrajectories`, same bucketing) `smoothTrajectoryAtaSteps` gathers the
+pre-smoothing 3D (`gatherTrajectory`), then every sample's covariance
+(`groupCovariancesInto` → `dltPointCovarianceInto`) from the group members' 2D
+where `triangulateAndReproject` would take it: a camera of `session.cameras`
+the solve may use (`cameraIncludedInSolves`, the Camera Views hook), the node
+placed and not nulled, with the reprojection threshold
+(`solveReprojErrorThreshold`) — all read once per run (`ataContext`). A
+released member of a lazy project (`_lazy2d`) is read straight from its store
+row (`SioLazyLoader.storeRowPoints`), so no frame is hydrated; a loader without
+it gets the frame hydrated around the read (`hydrateFrameMembers2d` /
+`releaseFrameMembers2d`). A sample with fewer than 2 views takes its node's
+`secondDifferenceSigma` over the whole trajectory (`fillFallbackCov`, asked only
+when needed). Then each node's series goes through `ataSmoothSeriesInto`, and
+the write-back is the windows' (`writeGroupFrom`, same mark and source).
+`maxGap`/`minSegment` do not apply: a missing sample ends every window. This
+frame (`smoothFrameAta`) gathers [frameIdx − hmax, frameIdx + hmax] and
+computes the centre only, bit for bit the All frames value (a fallback reads
+the whole trajectory, via `collectTrajectories`, only then). Results add
+`points`, `meanWindow` and `fallbackPoints`. `sameSmoothingConfig` compares
+only the chosen method's settings (a windows edit does not stale an adaptive
+Restore). `describeSmoothingConfig(cfg)` is the status text ("adaptive, gate 3
+SD, up to 31 frames" / "median 3 + Gaussian 9").
+
 **Imports.** `pose/pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`,
 `NO_REPROJECTED_INSTANCES`, `pooledPoints3d`, `markPoints3dSmoothed`,
-`isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`) only —
+`isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`),
+`pose/adaptive-temporal-averaging.js` (`ATA_DEFAULT_K`, `ATA_DEFAULT_HMAX`,
+`COV_STRIDE`, `ataSmoothSeriesInto`, `dltPointCovarianceInto`,
+`secondDifferenceSigma`), `pose/triangulation-core.js`
+(`cameraIncludedInSolves`, `solveReprojErrorThreshold`),
+`pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`) —
 no UI imports, so the module stays unit-testable in plain Node.
 
 **Imported by.** `ui/ui-wiring.js` (`smoothSessionAsync`, `smoothFrame`,
 `unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
-`removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
+`removeSmoothing`, `restoreSmoothing`, `describeSmoothingConfig`,
+`SMOOTH_METHOD_ADAPTIVE`), `ui/smoothing-button.js`
 (`hasSmoothed3d`, `hasRemovedSmoothing`),
 `import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`),
 `ui/smoothing-windows-figure.js` (`smoothSignalInto`, `normalizeWindow`,
@@ -2662,7 +2754,12 @@ filter).
 **Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
 for bit against the all-frames pass on every frame of noisy fixtures with
 holes, segment edges, duplicates and unidentified groups, over 270
-configurations); save/reopen in `tests/e2e/smoothing-save-reopen.mjs`. Bench:
+configurations); the adaptive method in `tests/test-temporal-smoothing-adaptive.mjs`
+(This frame = All frames bit for bit with view covariances, the fallback and
+both mixed; store reads = resident 2D; threshold and Camera Views reach the
+covariances; metadata; Remove/Restore) and `tests/e2e/temporal-smoothing-adaptive.mjs`
+(menu, panel, run, toggle, save → reopen); save/reopen in
+`tests/e2e/smoothing-save-reopen.mjs`. Real data: `tests/e2e/_real-smoothing-adaptive.mjs`. Bench:
 `tests/e2e/_bench-smoothing-this-frame.mjs` (Node) and
 `tests/e2e/_bench-smoothing-ui.mjs` (menu click to status, eager + lazy). Verified by
 mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
@@ -3641,6 +3738,11 @@ isCameraTracked, getTrackingThreshold })` — the only app state the pipeline
 reads (unset = every camera included, no threshold; the main thread installs
 them, a worker gets resolved values via `options.includedCameras` /
 `options.reprojErrorThreshold`) — and `__triangulationKernelsForTest`.
+For readers that need a solve's views outside a solve (Temporal Smoothing's
+adaptive method): `cameraIncludedInSolves(name)` and
+`solveReprojErrorThreshold()` (the two hooks' answers, with the same defaults),
+and `projectAndJacobianCameraInto(point, camera, out)` (the refinement's
+allocation-free native-pixel projection + Jacobian, exported).
 
 **`reprojectStoredPoints3d(group, cameras, options?)`** — steps 3-5 of
 `triangulateAndReproject` (reproject, per-camera errors in native and
@@ -10263,7 +10365,18 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   already taken here for DETECTION filtering (`filterMinVisibleNodes`,
   `filterMinInstanceScore`). Same clamp + drop-if-default persistence as the
   thresholds, under `_settings.smoothingParams`. Read by `ui/ui-wiring.js` and
-  passed to `smoothSession` (`pose/temporal-smoothing.js`).
+  passed to `smoothSession` (`pose/temporal-smoothing.js`). The method:
+  `smoothMethod` (`kind: 'choice'`, `options` = `SMOOTH_METHOD_CHOICES`: 1 =
+  Adaptive, the default; 0 = Median + Gaussian windows). With no stored
+  method, a median or Gaussian window stored above 0 (set before the method
+  existed) keeps the windows (`getSmoothingParam`), so nobody's Smooth click
+  changes method unasked; `setSmoothingParams` therefore stores `smoothMethod`
+  even at the default. And the adaptive
+  method's `smoothAtaK` (gate, 3) and `smoothAtaHmax` (longest half-window,
+  15). Each method's own entries carry `method: 'windows' | 'adaptive'`;
+  `getSmoothingParamDefs` passes `kind`, `options` and `method` on.
+  `onSmoothingParamsChange(fn)` is called after every `setSmoothingParams` (the
+  Smooth menu's Method radios follow Settings' Apply).
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
@@ -10437,10 +10550,15 @@ minimum segment fields back through `onParam`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
-pass itself runs from the Triangulate / Triangulate All dropdowns.) Threshold
+pass itself runs from the Triangulate / Triangulate All dropdowns. The Method
+row (`smoothMethod`, a `<select>`) comes first, and only the chosen method's
+rows show (`showSmoothingMethod`, by each row's `data-smooth-method`); the figure
+always shows both methods, re-marking the one in use; a figure card's Use that
+switches the method (`onParam('smoothMethod')`) sets the select and the rows.) Threshold
 and smoothing rows share one `buildParamRow(def, bag, onEdit)` helper (same
 `{ id, label, desc, min, max, step }` catalog shape, clamp on blur, `kind:
-'toggle'` → switch; `onEdit` lets the filter fields re-count the preview).
+'toggle'` → switch, `kind: 'choice'` → `<select>` of `def.options`; `onEdit`
+lets the filter fields re-count the preview).
 Edits mutate a local `working` state only; nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
 `setCameraWeights` + `setTrackingThresholds` + `setSmoothingParams`), which
@@ -11955,7 +12073,9 @@ typing in Animals does not lose it and Tab walks into the items.
   use the default too.
 - **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): also
   has the **Remove smoothing / Restore smoothing** toggle (`#tbSmoothToggle`,
-  `data-scope="toggle"`) after All frames; see below.
+  `data-scope="toggle"`) after All frames; see below. Its Method radios
+  (`tbSmoothMethod`: Windows / Adaptive, `wireSmoothMethodRadios`) show and set
+  Settings' `smoothMethod` and follow its Apply (`onSmoothingParamsChange`).
   Settings… → `'smoothing'`.
 - **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
   their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame
@@ -11990,13 +12110,15 @@ smooths again with the current settings in the removed run's scope (all
 frames, or `smoothFrame` on each removed this-frame run's frames), its status
 ending "— recomputed…". "Nothing is smoothed" if neither applies. Otherwise
 it reads `getSmoothingParams()`; when
-both kernels are off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
+the method is off (both kernels 0, or an adaptive longest half-window of 0) it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
 smoothed, says so and opens Settings ▸ Temporal Smoothing rather than silently
 doing nothing; otherwise All frames runs `smoothSessionAsync`
 (`pose/temporal-smoothing.js`; every run filters the pre-smoothing 3D, so it
 replaces the last) behind the shared progress card, counted in POSES (one per
 animal per frame), shown at once and painted (`yieldToPaint`) before the pass.
-This frame runs `smoothFrame(session, params, state.currentFrame)`
+The status names the run (`describeSmoothingConfig`); an adaptive run adds its
+mean window and, if any, how many points had under 2 views and took their
+node's sigma. This frame runs `smoothFrame(session, params, state.currentFrame)`
 synchronously with no card: it reads only the frames within the filter windows
 of the current one (~1–4 ms on 200,000 frames, vs ~1.3 s when it filtered whole
 trajectories) and writes the values an All frames run gives that frame. Then it
@@ -12007,7 +12129,8 @@ frame), and runs `markDirty` + `drawAllOverlays` + `update3DViewport(state.curre
 (the frame matters: without it the 3D view got no groups and went blank) +
 `updateInfoPanel`, setting the summary status last. Both-windows-0 restores
 pass `writeFrames: new Set([state.currentFrame])` for This frame. It touches only `points3d` on the
-already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
+already-resident `session.instanceGroups`, hydrating no 2D (the adaptive
+method reads members' 2D, resident or from the store). The button is blue
 while smoothing is applied, and the menu lights only the last run's scope
 (`ui/smoothing-button.js`, synced on every overlay draw).
 
@@ -12738,7 +12861,8 @@ last in the threshold card and told what is being tried); `thresholdPasses` and 
 ### ui/smoothing-windows-figure.js
 
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
-Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
+Median window and the Gaussian window each do, as two cards (stage 1, stage 2),
+and beside them a third card for the Adaptive method (see below).
 Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
 solid white line under everything else that ends low, with one fast real move
 up and back, tall enough that a Gaussian visibly damps it, plus jitter and one
@@ -12792,6 +12916,25 @@ short to smooth) and the segments as bars. Its Max gap and Min segment sliders
 (0–15, 1–15; the text boxes go further) try values the same way; its Use button
 sets both through `onParam`.
 
+**The Adaptive card** (`data-stage="adaptive"`, violet) runs
+`ataSmoothSeriesInto` (`pose/adaptive-temporal-averaging.js`) on the same raw
+trace, as one coordinate of a 3D series with every point weighed by the trace's
+own jitter (sd 14/√6 mm; in LUC3D each point's comes from its views). It draws
+the output, the window around the picked frame (its own 1 + 2h), and the test
+that grew it (`gateTrials`): each frame tried on either side as a stem as tall as
+its distance from the picked frame in standard deviations (scale to 6 SD), under
+a dashed line labelled gate. In the window: violet; the first over the gate,
+which stops that side: red; passed but cut so both sides match: grey. It starts
+on frame 27 (index 26), where the fast move stops the left side and the right is
+cut. Its sliders (Gate 0.5–10 SD, Up to 0–30 frames each way with the box to 100,
+Frame, ▶) try values; Use sets `smoothAtaK`, `smoothAtaHmax` and switches the
+method to Adaptive; Turn off sets the half-window to 0. Its text says it does not
+remove a spike (its own window is 1 frame; on this trace frames 10, 12 and 13
+still take it in). **Method in use:** the cards of the method not chosen
+(`smoothMethod`; median, Gaussian and gaps for the windows) get `.is-idle`
+(dimmed) and a note by their setting row, and any card's Use also switches the
+method to its own (`useMethod`, through `onParam('smoothMethod', …)`).
+
 **Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`;
 `stageSketch(stage, window, { medianWindow, frame })` → `{ svg, keys, truth, raw, medOut, out }`,
 one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian, maxGap, minSegment })`
@@ -12799,7 +12942,9 @@ one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian,
 draws the docs' step figures from them.
 
 **Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
-`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`,
+`sigmaForWindow`, `buildSegments`), `pose/adaptive-temporal-averaging.js`
+(`ataSmoothSeriesInto`, `ATA_DEFAULT_K`, `ATA_DEFAULT_HMAX`),
+`ui/figure-try-controls.js`. **Imported by** `ui/settings-modal.js`,
 `scripts/smoothing-wiki-figures.mjs`.
 
 **Tests.** `tests/e2e/smoothing-windows-figure.mjs`; `tests/test-smoothing-figure-steps.mjs`
@@ -14146,7 +14291,12 @@ skeleton's name → column map is cached per skeleton (module-level
 `storeNodeColumn`, a `WeakMap`; first match, as `nodeNames.indexOf`), rebuilt
 if its `nodes` array is replaced or resized or a lookup misses or no longer
 names its node — sleap-io.js's `nodeNames` getter builds a new array per read,
-which was the hottest call of By Cam's per-frame pass.
+which was the hottest call of By Cam's per-frame pass. **`storeRowPoints(camName,
+frameIdx, offsetInFrame)`** returns one store row's 2D straight from the
+columns, `{x, y, start, end}` (node k at `x[start + k]` while `start + k <
+end`; the user or predicted table by `instance_type`), nothing materialized —
+what `hydrateFrameMembers2d` would give a released member back. Temporal
+Smoothing's adaptive method reads released members' 2D through it.
 
 **Imports.** `./track-union.js` (`unionTrackNames`);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
@@ -15151,8 +15301,10 @@ project saves byte-identically — `save-golden-digest.mjs`):
   has one (LUCID local patch (smoothing source)); the vendored reader returns
   it per group (all-NaN rows = none) and `adoptSmoothingSource` re-marks it;
 - per session, `metadata.lucid.temporalSmoothing` = `{scope, medianWindow,
-  gaussianWindow, maxGap, minSegment}` of the last run (the windows are
-  informational; a re-run uses the current Settings).
+  gaussianWindow, maxGap, minSegment}` of the last windows run (no `method`
+  key, as before the adaptive method), or `{scope, method: 'adaptive', k,
+  hmax}` (+ `covariance: 'sigma'` only for a sigma-only run) of an adaptive one
+  (the settings are informational; a re-run uses the current Settings).
 
 A full copy, not "re-triangulate on demand": the source is not reproducible from
 the 2D when the 3D was imported (campy-live), the triangulation settings or the
