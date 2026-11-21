@@ -4745,11 +4745,14 @@ input[type="range"]::-moz-range-track {
 /* Determinate progress bar (ui/loading-overlay.js), the image check's bar: a
    track that clips the fill, and a playhead line at the fill's leading edge
    standing proud of it. Both move with `transform`, not `width` / `left`: a
-   transform transition runs on the compositor thread, so the bar keeps gliding
+   transform animation runs on the compositor thread, so the bar keeps gliding
    between the pacer's ~250 ms updates even while the main thread is busy with
-   the next chunk. The transition length matches PROGRESS_INTERVAL_MS. The
-   playhead is a full-width wrapper translated by the fraction (a percentage
-   translate is of its own width, i.e. the bar's), its line at its left edge. */
+   the next chunk. ui/progress-delta.js glides the fill, the playhead and the
+   lit stretch together (one start, one length), and switches these
+   transitions off inline: it only reads the fill's as the longest glide, which
+   matches PROGRESS_INTERVAL_MS. The playhead is a full-width wrapper
+   translated by the fraction (a percentage translate is of its own width, i.e.
+   the bar's), its line at its left edge. */
 .loading-progress { position: relative; height: 6px; margin: 12px 0 0; }
 .loading-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
 .loading-progress-fill {
@@ -4779,8 +4782,8 @@ input[type="range"]::-moz-range-track {
 /* The stretch a progress bar gained on its last update (ui/progress-delta.js),
    on every progress bar: a translucent white tint over the fill, so it is a
    brighter shade of the bar's own colour, and a white flash as it appears. It
-   grows with the fill's own transition (set inline from the fill's computed
-   style) and stays lit until the next update. The flash is an OPACITY
+   grows in the same glide as the fill (its leading edge is the fill's) and
+   stays lit until the next update. The flash is an OPACITY
    animation on a pseudo-element so it runs on the compositor, as the bar's
    own transform does, even while the main thread is busy. */
 .progress-delta {
@@ -8902,7 +8905,7 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-progress-bar { position: relative; height: 6px; }
 .id-switch-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
 .id-switch-progress-fill { height: 100%; width: 0; background: #1f78b4; transition: width 0.2s; }   /* as .loading-progress-fill */
-.id-switch-progress-bar .id-switch-phead { left: 0; transition: left 0.2s; }   /* keep pace with the fill */
+.id-switch-progress-bar .id-switch-phead { left: 0; transition: left 0.2s; }   /* glides with the fill (ui/progress-delta.js) */
 /* .id-switch-progress-pct: one rule with .loading-pct (Loading Overlay, above). */
 /* The percentage and device line on the left, a sample crop on the right, above Cancel. */
 .id-switch-progress-row { display: flex; align-items: flex-start; gap: 16px; }

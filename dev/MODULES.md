@@ -5817,28 +5817,41 @@ after all tasks complete; stays open on error.
 ### ui/progress-delta.js
 
 **Purpose.** Every progress bar lights up the stretch it gained on its last
-update: a `.progress-delta` element in the bar's track, from the previous
-fraction to the new one, drawn over the fill as a translucent white tint (a
-brighter shade of whatever colour the bar is, no colour per bar) with a 700 ms
-white flash as it appears (an opacity animation on `::after`, so it runs on the
-compositor). It stays lit until the next update replaces it, so a glance says
-how far the bar moved on its last step — the way a game's health bar lights up
-the chunk a hit took off. It grows with the fill's OWN transition (duration and
-timing function of the fill's `width` / `transform` transition, read from its
-computed style), so its leading edge moves with the fill's instead of running
-ahead of it. Moving back, a snap (a new stage, a reset) or the first update of
-a bar show nothing. `prefers-reduced-motion` drops the flash, not the tint.
+update: a `.progress-delta` element in the bar's track, drawn over the fill as
+a translucent white tint (a brighter shade of whatever colour the bar is, no
+colour per bar) with a 700 ms white flash as it appears (an opacity animation
+on `::after`, so it runs on the compositor). It stays lit until the next update
+replaces it, so a glance says how far the bar moved on its last step — the way
+a game's health bar lights up the chunk a hit took off. It also MOVES the bar:
+each update starts one glide (Web Animations, linear) for the fill, the tint
+and the playhead (`opts.head`), from where the fill is drawn right now (read
+from the running glide's own clock) to the new fraction, so the three never
+part. The tint covers that same stretch and its leading edge is the fill's.
+The glide lasts the time since the previous update, at least `MIN_GLIDE_MS`
+(50) and at most the fill's own CSS transition (read once from its computed
+style; the fill's and the playhead's transitions are then switched off
+inline, since a transition outranks an animation in the cascade). Before this,
+each part had its own CSS transition and the tint was placed between targets:
+a burst of updates (videos finishing together) left the fill a third of the
+bar behind the percentage, the playhead further behind, and the tint floating
+ahead of both. Each part glides the property its fill uses (`width`/`left`,
+or `scaleX`/`translateX`), so a busy main thread holds all of them or none.
+Moving back, a snap (a new stage, a reset) or the first update of a bar show
+no tint. `prefers-reduced-motion` drops the flash, not the tint.
 Styles: `.progress-delta` in `styles.css` (by the loading overlay's bar).
 
 **Key exports.**
-- `noteProgress(fill, frac, { animate })` — call right after setting a bar's
-  fill to `frac` (0..1). Remembers the fraction on the fill element; `animate:
-  false` means the fill snapped, so no stretch is lit. Works for a `width`
+- `noteProgress(fill, frac, { animate, head })` — call right after setting a
+  bar's fill (and its playhead `head`, if any) to `frac` (0..1). Keeps the glide
+  state on the fill element; an update to the same fraction leaves the glide
+  under way alone; `animate: false` means the fill snapped, so no stretch is
+  lit and any glide stops. Works for a `width`
   fill and for a full-width fill scaled with `transform: scaleX` (the loading
   overlay's). A static track is given `position: relative` once, for the
   absolutely placed tint. A no-op without a real DOM (Node test stubs, stand-in
   elements).
 - `resetProgress(fill)` — forget the last fraction (a bar reused from zero).
+- `MIN_GLIDE_MS` (50) — the shortest glide.
 
 **Callers (every progress bar).** `ui/loading-overlay.js` (`_setFill`: Track
 All, Triangulate All, Save, loading, the body-size check, …), `ui/id-switch-modal.js`
@@ -5855,7 +5868,9 @@ the lit stretch stands out against them.
 
 Tested by `tests/e2e/progress-delta.mjs` (the tint's extent on both kinds of
 fill, its brightness from screenshot pixels, its edge following the fill's
-frame by frame mid-transition, and no tint on a move back, a snap or a hide).
+frame by frame mid-glide, a burst of updates sampled every frame — fill,
+playhead and tint together, the fill near the percentage, at 100% one glide
+after the last update — and no tint on a move back, a snap or a hide).
 
 ### ui/loading-overlay.js
 
@@ -5939,7 +5954,8 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
 - `PROGRESS_INTERVAL_MS` (250), `CPU_SAMPLE_MS` (1000).
 
 **Imports from project modules.** `./progress-delta.js` (`noteProgress` — the
-bar's lit stretch, called from `_setFill`; import-free), `./load-graph.js` (`createLoadMeter`,
+bar's lit stretch and the one glide of fill, playhead and stretch, called from
+`_setFill` with the playhead as `head`; import-free), `./load-graph.js` (`createLoadMeter`,
 `createBusyClock`, `createLoadGraph`, `formatCpuLoad`, `setLoadLine`, `cpuCores` —
 itself import-free and DOM-free at load), `./browser-hints.js`
 (`renderBraveFingerprintingHint`; also import-free and DOM-free at load). Safe under the Node test stubs: every DOM access is
@@ -9375,7 +9391,7 @@ stay): its rows were scored on the fixed labels, so an undo would rename them
 wrongly.
 
 **Imports from project modules.** `ui/progress-delta.js` (`noteProgress`, the
-lit stretch on the image check dialog's bar), `ui/app-state.js` (`state`,
+lit stretch on the image check dialog's bar, gliding its playhead with it), `ui/app-state.js` (`state`,
 `getActiveSession`), `ui/seekbar-markers.js` (`setSeekbarSwitchMarkers`),
 `import-export/save-load.js` (`setStatus`, `markDirty`),
 `ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size
@@ -16145,8 +16161,13 @@ current session, overlay reprojected points3d from H5.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session
-(`adoptCampyRecording`, `loading/session-loader.js`): a camera whose campy video
-was picked loads only that video, views follow campy's camera order, the frame
+(`adoptCampyRecording`, `loading/session-loader.js`), read BEFORE videos are
+placed on cameras: campy's own video for each camera goes first, so it wins the
+first-of-equals picks (`assignFolderVideos`, `preferNonCalibrationVideos`) over
+another video in the same camera folder whatever order the browser listed the
+folder in (read afterwards, that order decided: CI's Linux listing loaded the
+other one). A camera whose campy video was picked loads only that video, views
+follow campy's camera order, the frame
 rate is session.json's, and the final status gains each session's warnings
 (`campyRecordingWarnings`). No calibration hash check here: the calibration
 came from the `.slp`.
