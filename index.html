@@ -895,6 +895,11 @@
                     </div>
                 </div>
 
+                <!-- ==================== Suggestions Tab ====================
+                     Frames suggested for labelling, grouped by camera view. Built
+                     by ui/suggestions-panel.js. -->
+                <div class="panel-tab-content" id="tabSuggestions"></div>
+
                 <!-- ==================== Cameras Tab ==================== -->
                 <div class="panel-tab-content" id="tabCameras">
                     <div class="info-section">
@@ -1561,6 +1566,7 @@
             Camera as SioCamera, CameraGroup, RecordingSession,
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D,
+            SuggestionFrame,
             MediaBunnyVideoBackend
         } from './lib/sleap-io/index.browser.js';
         window.SleapIO = {
@@ -1571,6 +1577,7 @@
             Camera: SioCamera, CameraGroup, RecordingSession,
             InstanceGroup: SioInstanceGroup, FrameGroup: SioFrameGroup,
             Identity: SioIdentity, Instance3D, PredictedInstance3D,
+            SuggestionFrame,
             MediaBunnyVideoBackend
         };
         window.dispatchEvent(new Event('sleapio-ready'));

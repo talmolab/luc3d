@@ -59,6 +59,7 @@ import { writeVisibilityMetadata } from './visibility-metadata.js';
 import { writeFrameIdentityMetadata } from './frame-identity-metadata.js';
 import { writePlaneMetadata } from './plane-metadata.js';
 import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js';
+import { sioSuggestionsForSession } from './suggestions-io.js';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -696,17 +697,24 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
  * must be complete at this point; `openSlpWriter` serializes them
  * synchronously).
  */
-export async function openProjectWriter(ctx, allSioSessions, provenance) {
+export async function openProjectWriter(ctx, allSioSessions, provenance, lucidSessions) {
     var SIO = window.SleapIO;
     if (!SIO || typeof SIO.openSlpWriter !== 'function') {
         throw new Error('sleap-io.js streaming writer (openSlpWriter) not available');
     }
+    // Suggestions panel: `lucidSessions[i]` is the session `allSioSessions[i]`
+    // was built from; each one's (camera, frame) pairs go on its own videos.
+    var suggestions = [];
+    (lucidSessions || []).forEach(function (sess, i) {
+        suggestions = suggestions.concat(sioSuggestionsForSession(SIO, sess, allSioSessions[i]));
+    });
     return await SIO.openSlpWriter({
         skeletons: ctx.allSkeletons,
         videos: ctx.allVideos,
         tracks: ctx.allTracks,
         identities: ctx.allIdentities,
         sessions: allSioSessions,
+        suggestions: suggestions,
         provenance: provenance || { source: 'lucid', exported_at: new Date().toISOString() },
     });
 }
@@ -928,7 +936,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
     var refGraph = await buildSessionRefGraph(session, views, videoFiles, ctx, onProgress);
     _lap('1/4 buildSessionRefGraph');
     if (onProgress) await onProgress('header');
-    var writer = await openProjectWriter(ctx, [refGraph.sioSession], (opts || {}).provenance);
+    var writer = await openProjectWriter(ctx, [refGraph.sioSession], (opts || {}).provenance, [session]);
     _lap('2/4 openProjectWriter (writes /session_data + sessions_json)');
     try {
         await streamSessionIntoWriter(writer, session, refGraph, onProgress);

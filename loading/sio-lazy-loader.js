@@ -993,6 +993,25 @@ export class SioLazyLoader {
     }
 
     /**
+     * The model's score for one PREDICTED instance of the store, by the
+     * `instanceRow` `forEachInstanceRow` hands out — the Suggestions panel's
+     * Mean Score for a frame that is not resident (`ui/suggestions-panel.js`).
+     * @param {string} camName
+     * @param {number} instanceRow
+     * @returns {number} NaN when the row is a user instance or has no score
+     */
+    instanceScore(camName, instanceRow) {
+        var labels = this.labelsByCam.get(camName);
+        var store = labels && labels._lazyDataStore;
+        var idn = store && store.instancesData;
+        if (!idn || !(instanceRow >= 0)) return NaN;
+        var rawType = idn.instance_type ? idn.instance_type[instanceRow] : undefined;
+        if (Number(rawType == null ? 0 : rawType) === 0) return NaN;
+        var s = idn.score ? Number(idn.score[instanceRow]) : NaN;
+        return Number.isFinite(s) ? s : NaN;
+    }
+
+    /**
      * Rewrite every camera's persistent columnar track assignment to match a
      * new identity-derived track list, so the change survives eviction/reload
      * and is picked up natively by SLP export — `appendStore` reads

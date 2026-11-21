@@ -33,6 +33,7 @@ import { syncRunButtons } from './run-buttons.js';
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
 import { editGroupState, finishEditGroup } from './identity-assignment.js';
 import { updateFrameInfo } from './info-panel.js';
+import { refreshSuggestionsPanel } from './suggestions-panel.js';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
@@ -785,6 +786,8 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         _lastAuxUpdate = _auxNow;
         updateFrameInfo(frameIdx, instanceGroups);
         if (timeline) timeline.setCurrentFrame(frameIdx, state.isPlaying ? { playback: true } : undefined);
+        // Suggestions panel: labeled dots and the on-screen row (no-op off screen).
+        refreshSuggestionsPanel();
     }
 }
 
