@@ -10552,8 +10552,9 @@ has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
 pass itself runs from the Triangulate / Triangulate All dropdowns. The Method
 row (`smoothMethod`, a `<select>`) comes first, and only the chosen method's
-rows show (`showSmoothingMethod`, by each row's `data-smooth-method`), the
-windows figure only for the windows.) Threshold
+rows show (`showSmoothingMethod`, by each row's `data-smooth-method`); the figure
+always shows both methods, re-marking the one in use; a figure card's Use that
+switches the method (`onParam('smoothMethod')`) sets the select and the rows.) Threshold
 and smoothing rows share one `buildParamRow(def, bag, onEdit)` helper (same
 `{ id, label, desc, min, max, step }` catalog shape, clamp on blur, `kind:
 'toggle'` → switch, `kind: 'choice'` → `<select>` of `def.options`; `onEdit`
@@ -12860,7 +12861,8 @@ last in the threshold card and told what is being tried); `thresholdPasses` and 
 ### ui/smoothing-windows-figure.js
 
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
-Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
+Median window and the Gaussian window each do, as two cards (stage 1, stage 2),
+and beside them a third card for the Adaptive method (see below).
 Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
 solid white line under everything else that ends low, with one fast real move
 up and back, tall enough that a Gaussian visibly damps it, plus jitter and one
@@ -12914,6 +12916,25 @@ short to smooth) and the segments as bars. Its Max gap and Min segment sliders
 (0–15, 1–15; the text boxes go further) try values the same way; its Use button
 sets both through `onParam`.
 
+**The Adaptive card** (`data-stage="adaptive"`, violet) runs
+`ataSmoothSeriesInto` (`pose/adaptive-temporal-averaging.js`) on the same raw
+trace, as one coordinate of a 3D series with every point weighed by the trace's
+own jitter (sd 14/√6 mm; in LUC3D each point's comes from its views). It draws
+the output, the window around the picked frame (its own 1 + 2h), and the test
+that grew it (`gateTrials`): each frame tried on either side as a stem as tall as
+its distance from the picked frame in standard deviations (scale to 6 SD), under
+a dashed line labelled gate. In the window: violet; the first over the gate,
+which stops that side: red; passed but cut so both sides match: grey. It starts
+on frame 27 (index 26), where the fast move stops the left side and the right is
+cut. Its sliders (Gate 0.5–10 SD, Up to 0–30 frames each way with the box to 100,
+Frame, ▶) try values; Use sets `smoothAtaK`, `smoothAtaHmax` and switches the
+method to Adaptive; Turn off sets the half-window to 0. Its text says it does not
+remove a spike (its own window is 1 frame; on this trace frames 10, 12 and 13
+still take it in). **Method in use:** the cards of the method not chosen
+(`smoothMethod`; median, Gaussian and gaps for the windows) get `.is-idle`
+(dimmed) and a note by their setting row, and any card's Use also switches the
+method to its own (`useMethod`, through `onParam('smoothMethod', …)`).
+
 **Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`;
 `stageSketch(stage, window, { medianWindow, frame })` → `{ svg, keys, truth, raw, medOut, out }`,
 one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian, maxGap, minSegment })`
@@ -12921,7 +12942,9 @@ one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian,
 draws the docs' step figures from them.
 
 **Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
-`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`,
+`sigmaForWindow`, `buildSegments`), `pose/adaptive-temporal-averaging.js`
+(`ataSmoothSeriesInto`, `ATA_DEFAULT_K`, `ATA_DEFAULT_HMAX`),
+`ui/figure-try-controls.js`. **Imported by** `ui/settings-modal.js`,
 `scripts/smoothing-wiki-figures.mjs`.
 
 **Tests.** `tests/e2e/smoothing-windows-figure.mjs`; `tests/test-smoothing-figure-steps.mjs`

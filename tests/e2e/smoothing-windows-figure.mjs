@@ -4,7 +4,7 @@
  * (ui/smoothing-windows-figure.js).
  *
  * Asserted, in the real Settings ▸ Temporal Smoothing:
- *  1. Three cards (median, Gaussian, gaps), each with a chart; with both windows off
+ *  1. Four cards (median, Gaussian, adaptive, gaps), each with a chart; with both windows off
  *     (the default) each says off, in large text, and draws no window and no output.
  *  2. Typing a median window in Filter Parameters relabels its card and widens its
  *     shaded window; the blue line drops the spike (its point at the spike frame
@@ -25,6 +25,14 @@
  *     white; a grey line joins the measurements (broken at the gaps card's
  *     absences); the Gaussian card's input is a line too, green or (median off)
  *     grey; each card has its own legend, naming what it draws.
+ *  9. The Adaptive card (LUC3D's own adaptive averaging on the same trace):
+ *     dimmed with a note while the method is the windows; its window is 1
+ *     frame on the spike and on the fast move and long on the slow stretch;
+ *     the stems show the frames in the window, the one that stopped a side and
+ *     those cut to match; trying a gate redraws only; its Use sets the gate
+ *     and the Adaptive method (the panel's Method select and rows follow) and
+ *     dims the windows' cards; a window card's Use switches back; Close
+ *     without Apply stores nothing.
  *
  * Run: node tests/e2e/smoothing-windows-figure.mjs
  */
@@ -95,7 +103,7 @@ try {
 
     console.log('1. defaults');
     const d = await read();
-    check(d.cards && d.charts === 3, 'three cards with a chart each (median, Gaussian, gaps)');
+    check(d.cards && d.charts === 4, `four cards with a chart each (median, Gaussian, adaptive, gaps) (${d.charts})`);
     check(d.medBig === 'off' && d.gauBig === 'off', `both say off (${d.medBig}, ${d.gauBig})`);
     check(d.bigLarger, 'the value is larger than the card title');
     check(!d.medBand && !d.gauBand, 'off: no shaded window');
@@ -330,6 +338,56 @@ try {
     check(wants(lay.gauKeys, ['true', 'med', 'out', 'band', 'weight']) && !lay.gauKeys.includes('raw'), `Gaussian legend (${lay.gauKeys})`);
     check(wants(lay.gapKeys, ['true', 'raw', 'out-line', 'left', 'hole', 'split', 'seg', 'seg-short']), `gaps legend (${lay.gapKeys})`);
     check(!lay.pickedBefore && lay.pickedAfter, 'the ring is in the legend only while a frame is picked');
+
+    console.log('9. the Adaptive card');
+    await page.evaluate(() => { document.getElementById('menuSettings').click(); document.querySelector('.settings-nav-item[data-panel="smoothing"]').click(); });
+    const ad = await page.evaluate(async () => {
+        const card = (s) => document.querySelector(`.smooth-fig [data-stage="${s}"]`);
+        const set = (el, v) => { el.value = String(v); el.dispatchEvent(new Event('input')); };
+        const panel = document.querySelector('.settings-panel[data-panel="smoothing"]');
+        const a = card('adaptive');
+        const box = (k) => a.querySelector(`[data-try="${k}"] input[type="number"]`);
+        const win = () => a.querySelector('rect.sf-band + text').textContent;
+        const shown = (m) => [...panel.querySelectorAll('.settings-threshold-row')].filter(r => r.dataset.smoothMethod === m).every(r => !r.hidden);
+        const out = {};
+        out.idle = a.classList.contains('is-idle') && !a.querySelector('.sf-idle-note').hidden && !card('median').classList.contains('is-idle');
+        out.chart = !!a.querySelector('path.sf-out-ata') && a.querySelectorAll('circle.sf-ata-node').length === 40;
+        out.start = { win: win(), inWin: a.querySelectorAll('line.sf-gate-in').length, stop: a.querySelectorAll('line.sf-gate-stop').length, cut: a.querySelectorAll('line.sf-gate-cut').length };
+        set(box('pos'), 9); out.spike = win();
+        set(box('pos'), 21); out.fast = win();
+        set(box('pos'), 30); out.slow = win();
+        const mean = () => +(a.querySelector('small').textContent.match(/mean window here ([\d.]+)/) || [0, NaN])[1];
+        out.mean3 = mean();
+        set(box('gate'), 2);
+        out.mean2 = mean();
+        out.gateField = panel.querySelector('input[aria-label="Gate (standard deviations)"]').value;
+        out.useLabel = a.querySelector('.fig-use').textContent;
+        a.querySelector('.fig-use').click();
+        out.afterUse = { select: panel.querySelector('select[aria-label="Method"]').value,
+            gate: panel.querySelector('input[aria-label="Gate (standard deviations)"]').value,
+            rows: shown('adaptive') && !shown('windows'), medIdle: card('median').classList.contains('is-idle'),
+            now: a.querySelector('.fig-setting-now strong').textContent };
+        set(card('median').querySelector('[data-try="size"] input[type="number"]'), 5);
+        card('median').querySelector('.fig-use').click();
+        out.back = { select: panel.querySelector('select[aria-label="Method"]').value, rows: shown('windows'), ataIdle: a.classList.contains('is-idle') };
+        document.querySelector('.settings-modal-close').click();
+        const S = await import('/ui/settings.js');
+        out.stored = [S.getSmoothingParam('smoothMethod'), S.getSmoothingParam('smoothAtaK')];
+        return out;
+    });
+    check(ad.idle, 'with the windows method, the Adaptive card is dimmed with a note and the window cards are not');
+    check(ad.chart, 'it draws the adaptive output, a point per frame');
+    check(ad.start.win === '11 frames' && ad.start.stop >= 1 && ad.start.inWin >= 10 && ad.start.cut >= 1,
+        `at its first frame: an 11-frame window, a side stopped (red) and frames cut to match (${JSON.stringify(ad.start)})`);
+    check(ad.spike === '1 frame' && ad.fast === '1 frame' && parseInt(ad.slow) >= 15,
+        `1 frame on the spike and on the fast move, long on the slow stretch (${ad.spike}, ${ad.fast}, ${ad.slow})`);
+    check(ad.mean2 < ad.mean3, `trying gate 2 shortens the windows (mean ${ad.mean3} -> ${ad.mean2})`);
+    check(ad.gateField === '3', `and leaves the gate field alone (${ad.gateField})`);
+    check(ad.useLabel === 'Use gate 2 SD, up to 31 frames', `offers Use (${ad.useLabel})`);
+    check(ad.afterUse.select === '1' && ad.afterUse.gate === '2' && ad.afterUse.rows && ad.afterUse.medIdle && ad.afterUse.now === 'gate 2 SD, up to 31 frames',
+        `Use sets the gate and the Adaptive method; the rows follow, the window cards dim (${JSON.stringify(ad.afterUse)})`);
+    check(ad.back.select === '0' && ad.back.rows && ad.back.ataIdle, `a window card's Use switches back to the windows (${JSON.stringify(ad.back)})`);
+    check(ad.stored.join() === '0,3', `Close without Apply stores nothing (${ad.stored})`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

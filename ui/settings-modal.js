@@ -834,23 +834,25 @@ export function showSettingsModal(initialPanel) {
         onParam: function (id, value) {
             working.smoothing[id] = value;
             const def = smoothingDefs.find(function (d) { return d.id === id; });
-            const field = def && smSection.body.querySelector('input[aria-label="' + def.label + '"]');
+            // A number field, or the Method's select.
+            const field = def && smSection.body.querySelector('[aria-label="' + def.label + '"]');
             if (field) field.value = String(value);
+            if (id === 'smoothMethod') showSmoothingMethod();
         },
     });
     smFigure.update(working.smoothing);
     smPanel.appendChild(smFigure.el);
 
     // One section; the method's row first, then only the chosen method's
-    // parameters (`def.method`), shown again as the method changes. The windows
-    // figure belongs to the windows method.
+    // parameters (`def.method`), shown again as the method changes. The figure
+    // shows both methods, dimming the one not in use.
     const smSection = buildSection('Filter Parameters', null);
     smPanel.appendChild(smSection.root);
     const smRows = [];
     function showSmoothingMethod() {
         const method = working.smoothing.smoothMethod === 1 ? 'adaptive' : 'windows';
         smRows.forEach(function (r) { r.row.hidden = !!r.method && r.method !== method; });
-        smFigure.el.hidden = method !== 'windows';
+        smFigure.update(working.smoothing);
     }
     smoothingDefs.forEach(function (def) {
         const row = buildParamRow(def, working.smoothing, function () {
