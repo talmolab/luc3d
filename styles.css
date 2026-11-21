@@ -9163,3 +9163,16 @@ div.track-summary-steps { padding-left: 0; }
 .outline-brush-animals > span { color: var(--text-secondary); }
 body.outline-brush-on .overlay-canvas { cursor: crosshair; }
 .outline-flag-where select { background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; padding: 2px 4px; }
+/* The Outlines tab's tables fit a narrow panel: fixed layout, text wraps. */
+.outline-cams, .outline-flag-list, .outline-suspect-list, .outline-edit-list { table-layout: fixed; }
+.outline-cams tbody td, .outline-flag-list tbody td, .outline-suspect-list tbody td, .outline-edit-list tbody td {
+  white-space: normal; overflow-wrap: break-word; max-width: none; vertical-align: top;
+}
+.outline-cams thead th, .outline-flag-list thead th, .outline-suspect-list thead th, .outline-edit-list thead th { white-space: normal; }
+.outline-flag-list th:nth-child(1), .outline-suspect-list th:nth-child(1), .outline-edit-list th:nth-child(1) { width: 44px; }
+.outline-flag-list th:last-child, .outline-edit-list th:last-child { width: 22px; }
+.outline-suspect-list th:last-child { width: 50px; }
+.outline-suspect-list .outline-suspect-flag { padding: 2px 6px; font-size: 11px; white-space: nowrap; }
+.outline-cams th:nth-child(3) { width: 48px; }
+#outlineScanN { width: 64px; }
+.outline-scan-summary { font-size: 12px; color: var(--text-secondary); margin: 2px 0 6px; }

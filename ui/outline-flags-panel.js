@@ -85,7 +85,7 @@ export function refreshOutlinePanel() {
         '</div>' +
         (views.length ? '<table class="data-table outline-cams"><thead><tr><th>Camera</th><th>Empty arena</th>' +
             '<th style="text-align:right;" title="Frames sampled for the empty arena">Frames</th>' +
-            '<th style="text-align:right;" title="Single-animal blob area, px: median ± s.d.">One animal (px)</th></tr></thead><tbody>' + rows + '</tbody></table>'
+            '<th style="text-align:right;" title="Single-animal blob area, px: median ± s.d.">One animal, px</th></tr></thead><tbody>' + rows + '</tbody></table>'
             : '<p class="table-empty">No camera views.</p>') +
         '</details>' +
         '<details class="info-section info-collapsible" id="outlineFlagsSection" open>' +

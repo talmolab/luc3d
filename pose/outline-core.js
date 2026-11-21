@@ -4,7 +4,8 @@
 // runs in `pose/outline-worker.js` and in Node tests.
 //
 // 1. Blobs. Each camera's empty-arena image is the per-pixel median of frames
-//    sampled across the video (`medianImage`). A pixel is foreground when it is
+//    sampled across the video, each frame's animals left out where their poses
+//    say they are (`maskedMedian`, `poseMask`; plain `medianImage` without poses). A pixel is foreground when it is
 //    brighter than that image (animals light on a dark floor), with hysteresis:
 //    pixels more than `thrLow` grey levels brighter, joined to pixels more than
 //    `thrHigh` brighter, so an animal's dim, shadowed parts stay with its bright
@@ -91,6 +92,98 @@ export function medianImage(frames) {
         out[i] = select(a, F, k);
     }
     return out;
+}
+
+/**
+ * The empty arena from frames with the animals masked out: per pixel, the
+ * median over the frames whose `masks[f]` (Uint8Array, 1 = an animal is there;
+ * null = nothing masked) leave it free; a pixel no frame leaves free takes the
+ * median of all. An animal that rests in one place for most of the sampled
+ * frames would otherwise stay in the plain median (idtracker.ai's limit), and
+ * a dim tail in front of it would never count as foreground.
+ */
+export function maskedMedian(frames, masks) {
+    var F = frames.length;
+    if (!F) throw new Error('maskedMedian: no frames');
+    if (!masks || !masks.some(function (m) { return m; })) return medianImage(frames);
+    var n = frames[0].length;
+    var out = new Uint8Array(n);
+    var a = new Uint8Array(F), all = new Uint8Array(F);
+    for (var i = 0; i < n; i++) {
+        var c = 0;
+        for (var f = 0; f < F; f++) {
+            var v = frames[f][i];
+            all[f] = v;
+            if (!(masks[f] && masks[f][i])) a[c++] = v;
+        }
+        out[i] = c ? select(a, c, (c - 1) >> 1) : select(all, F, (F - 1) >> 1);
+    }
+    return out;
+}
+
+/** Convex hull of points [x, y, ...] (monotone chain). -> [x, y, ...] counter-clockwise */
+export function convexHull(pts) {
+    var P = [];
+    for (var i = 0; i + 1 < pts.length; i += 2) if (isFinite(pts[i]) && isFinite(pts[i + 1])) P.push([pts[i], pts[i + 1]]);
+    if (P.length < 3) return P.flat();
+    P.sort(function (p, q) { return p[0] - q[0] || p[1] - q[1]; });
+    var cross = function (o, p, q) { return (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]); };
+    var lo = [], up = [];
+    P.forEach(function (p) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); });
+    for (var j = P.length - 1; j >= 0; j--) { var p = P[j]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+    lo.pop(); up.pop();
+    return lo.concat(up).flat();
+}
+
+/**
+ * Where the animals are, from their poses, as a mask (1 = an animal): per
+ * animal its body keypoints' hull grown by `pad` px (a third of the pose's
+ * extent plus 6 px: fur reaches past the keypoints) and its tail line grown by
+ * `tailPad` px. For the empty arena's median (`maskedMedian`).
+ */
+export function poseMask(w, h, animals, tailPad) {
+    var m = new Uint8Array(w * h);
+    var TP = tailPad == null ? 10 : tailPad;
+    (animals || []).forEach(function (a) {
+        var body = finitePts(a && a.body);
+        if (body.length >= 2) {
+            var hull = convexHull(body);
+            var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+            for (var i = 0; i + 1 < hull.length; i += 2) { x0 = Math.min(x0, hull[i]); x1 = Math.max(x1, hull[i]); y0 = Math.min(y0, hull[i + 1]); y1 = Math.max(y1, hull[i + 1]); }
+            var pad = Math.max(x1 - x0, y1 - y0) / 3 + 6, pad2 = pad * pad;
+            var bx0 = Math.max(0, Math.floor(x0 - pad)), by0 = Math.max(0, Math.floor(y0 - pad));
+            var bx1 = Math.min(w - 1, Math.ceil(x1 + pad)), by1 = Math.min(h - 1, Math.ceil(y1 + pad));
+            for (var y = by0; y <= by1; y++) {
+                for (var x = bx0, p = y * w + bx0; x <= bx1; x++, p++) {
+                    if (m[p]) continue;
+                    var cx = x + 0.5, cy = y + 0.5;
+                    if (hull.length >= 6 && pointInPolygon(hull, cx, cy)) { m[p] = 1; continue; }
+                    var d = Infinity;
+                    if (hull.length === 2) d = (cx - hull[0]) * (cx - hull[0]) + (cy - hull[1]) * (cy - hull[1]);
+                    else for (var j = 0, k = hull.length - 2; j < hull.length; k = j, j += 2) {
+                        var e = segDist2(cx, cy, hull[k], hull[k + 1], hull[j], hull[j + 1]);
+                        if (e < d) d = e;
+                    }
+                    if (d <= pad2) m[p] = 1;
+                }
+            }
+        }
+        var L = a && a.tail ? finitePts(a.tail) : [];
+        if (L.length >= 4) {
+            var tx0 = Infinity, ty0 = Infinity, tx1 = -Infinity, ty1 = -Infinity;
+            for (var t = 0; t + 1 < L.length; t += 2) { tx0 = Math.min(tx0, L[t]); tx1 = Math.max(tx1, L[t]); ty0 = Math.min(ty0, L[t + 1]); ty1 = Math.max(ty1, L[t + 1]); }
+            var T2 = TP * TP;
+            for (var yy = Math.max(0, Math.floor(ty0 - TP)); yy <= Math.min(h - 1, Math.ceil(ty1 + TP)); yy++) {
+                for (var xx = Math.max(0, Math.floor(tx0 - TP)), q = yy * w + xx; xx <= Math.min(w - 1, Math.ceil(tx1 + TP)); xx++, q++) {
+                    if (m[q]) continue;
+                    for (var u = 0; u + 3 < L.length; u += 2) {
+                        if (segDist2(xx + 0.5, yy + 0.5, L[u], L[u + 1], L[u + 2], L[u + 3]) <= T2) { m[q] = 1; break; }
+                    }
+                }
+            }
+        }
+    });
+    return m;
 }
 
 // k-th smallest of a[0..n) (Hoare's selection, in place).
@@ -634,7 +727,7 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
     }
     contours.shift();
     // keypoints the outline misses where the image shows something there
-    var check = keypointCheck(labels, w, h, A, P.keypointReach, gray, bg, P.thrLow);
+    var check = keypointCheck(labels, w, h, A, P.keypointReach, gray, bg, P.thrLow, cores(labels, w, h, A.length, P.coreErode));
     return { labels: labels, blobs: blobInfo, animals: animalsOut, contours: contours, unassigned: unassigned, check: check };
 }
 
@@ -879,10 +972,13 @@ export function animalFromInstance(inst, edges, chain) {
  * empty arena (`gray`, `bg`), a keypoint off every outline counts only where
  * something more than `visThr` over the empty arena lies within `reach` (the
  * part is visible, and the outline missed it); over plain floor it is an
- * occluded part or a wrong keypoint, not the outline's fault. A pose the outline
- * does not follow: a missed tail or limb, or the split given to the wrong animal.
+ * occluded part or a wrong keypoint, not the outline's fault; with `core` (the
+ * animals' masks eroded, `cores`), a tail keypoint deep inside another animal's
+ * body is a tail hidden behind it (side views), not a bad outline. A pose the
+ * outline does not follow: a missed tail or limb, or the split given to the
+ * wrong animal.
  */
-export function keypointCheck(labels, w, h, animals, reach, gray, bg, visThr) {
+export function keypointCheck(labels, w, h, animals, reach, gray, bg, visThr, core) {
     var R = reach == null ? 3 : reach, R2 = R * R;
     var seen = gray && bg ? function (xi, yi) {
         // something brighter than the empty arena within `reach`: the part is visible there
@@ -922,6 +1018,8 @@ export function keypointCheck(labels, w, h, animals, reach, gray, bg, visThr) {
                 // with the image at hand, a keypoint over plain floor (an occluded or unseen part,
                 // or a wrong keypoint) is not the outline's fault: only visible misses count
                 if (!other && seen && !seen(xi, yi)) continue;
+                // a tail keypoint deep in another animal's body (its core) is a tail hidden behind it
+                if (isTail && other && core && core[yi * w + xi] === other) continue;
                 if (isTail) { res.tailOut++; if (other) res.tailOther++; } else { res.bodyOut++; if (other) res.bodyOther++; }
                 res.out.push(x, y, isTail ? 1 : 0, other);
             }

@@ -4,7 +4,8 @@
 //
 // Messages in (each with an `id` the reply echoes):
 //   {type: 'background', cam, frames: ImageBitmap[] | Uint8Array[] (grey),
-//    w, h, nAnimals, params}
+//    w, h, nAnimals, params, poses?: per frame the animals' poses there
+//    ([{body, tail}]), left out of the median}
 //     -> {bg: Uint8Array (a copy, transferred), model, counts: number[] (blobs
 //        per sampled frame), areas: number[][]}. The worker keeps `bg` for `cam`.
 //   {type: 'setBackground', cam, bg, w, h} -> {ok: true}
@@ -19,7 +20,7 @@
 //
 // Depends on: pose/outline-core.js
 
-import { rgbaToGray, medianImage, segmentBlobs, areaModel, computeOutlines } from './outline-core.js';
+import { rgbaToGray, medianImage, maskedMedian, poseMask, segmentBlobs, areaModel, computeOutlines } from './outline-core.js';
 
 /**
  * Grey pixels of `src` (an ImageBitmap/VideoFrame/canvas, or already grey
@@ -47,7 +48,9 @@ export function handleOutlineMessage(msg, store, makeCanvas) {
     if (msg.type === 'background') {
         var grays = (msg.frames || []).map(function (f) { return toGray(f, w, h, makeCanvas, store); });
         if (!grays.length) throw new Error('no frames to build the empty arena from');
-        var bg = medianImage(grays);
+        // each frame's animals (`poses[i]`: their poses there) left out of the median
+        var masks = Array.isArray(msg.poses) ? msg.poses.map(function (an) { return an && an.length ? poseMask(w, h, an) : null; }) : null;
+        var bg = masks ? maskedMedian(grays, masks) : medianImage(grays);
         var counts = [], areas = [];
         for (var i = 0; i < grays.length; i++) {
             var seg = segmentBlobs(grays[i], bg, w, h, msg.params);

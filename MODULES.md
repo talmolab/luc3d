@@ -4355,8 +4355,13 @@ animals by their poses. DOM-free, typed arrays only; runs in
    then close (5 px; OpenCV's `MORPH_ELLIPSE` elements, `ellipseElement`, and its
    border rule), 8-connected components holding a bright pixel, at least
    `minArea` (150) px, holes filled. The empty arena is the per-pixel median of
-   sampled frames (`medianImage`, Hoare selection; the lower median for an even
-   count).
+   sampled frames with each frame's animals left out where their poses say they
+   are (`maskedMedian` over `poseMask`s: each animal's body-keypoint hull grown by
+   a third of its extent + 6 px, and its tail line grown 10 px; a pixel no frame
+   leaves free takes the plain median). Without poses, `medianImage` (Hoare
+   selection; the lower median for an even count). The plain median keeps any
+   animal resting in one place for most of the sampled frames (idtracker.ai's
+   limit): on the HardFight excerpt, ghost mice in the empty arena hid a dim tail.
 2. **Area model** (`areaModel`): median and s.d. of the blob areas in sampled frames
    with exactly as many blobs as animals; a blob over median + `areaSigmas` (4)
    s.d. is a crossing (idtracker.ai's test is one-sided). null with < 3 areas.
@@ -4404,9 +4409,14 @@ and `tailPts`, the tail keypoints alone; missing nodes skipped), `normalizeAnima
 body and tail keypoints no pixel of its own outline comes within `reach` px of,
 and which lie on another animal's; with the frame and empty arena, a keypoint off
 every outline counts only where something over `visThr` lies within `reach`: over
-plain floor it is an occluded part or a wrong keypoint — on HardFight that cut
-the tail suspects from 2,382 of 5,272 camera frames; `computeOutlines` returns it
-as `check`, run in the worker with `thrLow`), `smoothTail(L, k)`, `outlineSuspects(check, areas, names)` (per animal at most
+plain floor it is an occluded part or a wrong keypoint; with `core`, a tail
+keypoint deep inside another animal's body is a tail hidden behind it. On the
+HardFight excerpt (659 frames x 8 cameras) a full Check… went from 2,626 suspects
+(plain median, every miss counted) to 216 (pose-masked empty arena, visible
+misses only, hidden tails skipped). `computeOutlines` returns it as `check`, run
+in the worker with `thrLow` and the final labels' cores),
+`smoothTail(L, k)`, `maskedMedian(frames, masks)`, `poseMask(w, h, animals,
+tailPad)`, `convexHull(pts)`, `outlineSuspects(check, areas, names)` (per animal at most
 one `{animal, reason, detail, weight}`: `missed` (a pose, no outline), `tail` (≥ 2
 tail keypoints off it), `split` (≥ 2 body keypoints on another's), `limb` (≥ 2 on
 none)), `labelImageContours(labels, w, h, n)`
@@ -4425,7 +4435,8 @@ keeps that camera's empty arena (`{bgs: Map}`), so a frame request sends only th
 frame. Frames arrive as ImageBitmaps (transferred) and are turned grey on an
 OffscreenCanvas.
 
-**Messages.** `background` (sampled frames, `nAnimals`) → `{bg (a copy), model,
+**Messages.** `background` (sampled frames, `nAnimals`, and per frame the animals'
+poses there, `poses`, left out of the median) → `{bg (a copy), model,
 counts, areas}`; `setBackground`; `outline` (frame, animals, model, params) →
 `computeOutlines`' result with its buffers transferred; `drop`. Each reply echoes
 `id`; a failure replies `{error}`.
@@ -9831,7 +9842,9 @@ camera and animal (`pose/outline-core.js`), drawn BEHIND the skeletons
   (`sampleFrames`: the keyframe nearest each even spacing, from
   `keyframeIndices`, so each is one decode; evenly spaced frames when there are
   fewer than min(39, 15) keyframes; every frame when asked for at least as many
-  as the video has) read with `decoder.peekFrame` (never the
+  as the video has) read with `decoder.peekFrame`, each with the animals' poses
+  on it (`posesAt`; the active lazy project's frames hydrated first) so the
+  worker leaves them out of the median (never the
   playback path) and sent to the camera's worker. A progress card counts the
   frames; up to 4 cameras at once. The number of animals for the area model is
   `session.numAnimals` when it is a count, else the animals in view on the

@@ -11,7 +11,7 @@
 import {
     OUTLINE_PARAMS, outlineParams, rgbaToGray, medianImage, ellipseElement, morph, components, fillHoles,
     segmentBlobs, areaModel, computeOutlines, traceBoundary, pointInPolygon, tailChain, animalFromInstance, normalizeAnimal,
-    keypointCheck, outlineSuspects, smoothTail,
+    keypointCheck, outlineSuspects, smoothTail, maskedMedian, poseMask, convexHull,
 } from '../pose/outline-core.js';
 
 let passed = 0, failed = 0;
@@ -76,6 +76,25 @@ console.log('\n2. Empty arena: the per-pixel median');
     let off = 0; for (let i = 0; i < W * H; i++) if (med[i] !== BG[i]) off++;
     check(off === 0, `animals that move leave the empty arena behind (${off} pixels off)`);
     check(medianImage([new Uint8Array([1, 9]), new Uint8Array([5, 3])])[0] === 1, 'an even count takes the lower median');
+}
+
+console.log('\n2b. An animal that rests in one place is left out by its poses');
+{
+    // in 7 of 9 frames a mouse rests at (60, 60) (so the plain median keeps it); in 2 it is elsewhere
+    const frames = [], poses = [];
+    for (let i = 0; i < 9; i++) {
+        const cx = i < 7 ? 60 : 160 + 30 * (i - 7);
+        frames.push(frame(ellipse(cx, 60, 26, 12), hline(60, cx - 26, cx - 60)));
+        poses.push([mouse(cx, 60, 1, 40)]);
+    }
+    const plain = medianImage(frames);
+    check(plain[60 * W + 60] === 200, 'the plain median keeps the resting mouse (the ghost)');
+    const masks = poses.map(p => poseMask(W, H, p));
+    check(masks[0][60 * W + 60] === 1 && masks[0][60 * W + 30] === 1 && masks[0][20 * W + 200] === 0, 'the pose mask covers its body and tail, not the floor');
+    const med = maskedMedian(frames, masks);
+    let off = 0; for (let i = 0; i < W * H; i++) if (med[i] !== BG[i]) off++;
+    check(off === 0, `with the poses, the empty arena is the floor everywhere (${off} pixels off)`);
+    check(maskedMedian(frames, [null, null]) .length === W * H && convexHull([0, 0, 2, 0, 1, 1, 2, 2, 0, 2]).length === 8, 'no masks: the plain median; convex hull');
 }
 
 console.log('\n3. Blobs: hysteresis, open/close, minimum area, holes, shadows');
@@ -269,6 +288,9 @@ console.log('\n15. Only visible misses count; a bent tail is followed (smooth cu
     const A2 = mouse(60, 60, 1, 40); A2.tailPts = [205, 110, 225, 110];          // on B's tail: visible, someone else's
     const r2 = computeOutlines(img, BG, W, H, [A2, B], null);
     check(r2.check[0].tailOut === 2 && r2.check[0].tailOther === 2, 'tail keypoints on another animal\'s tail count');
+    const A3h = mouse(60, 60, 1, 40); A3h.tailPts = [165, 110, 175, 110];        // deep in B's body: hidden behind it
+    const r3h = computeOutlines(img, BG, W, H, [A3h, B], null);
+    check(r3h.check[0].tailOut === 0, 'tail keypoints deep inside another animal\'s body are a hidden tail, not counted');
     // five keypoints on a circle (centre (40,36), radius 26, every 40 degrees): between two of
     // them the tail runs 1.6 px outside the straight chord; the smoothed tail stays on it
     const onArc = (deg) => [40 + 26 * Math.cos(deg * Math.PI / 180), 36 + 26 * Math.sin(deg * Math.PI / 180)];

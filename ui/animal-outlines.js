@@ -342,6 +342,22 @@ function viewTotalFrames(view) {
     return state.totalFrames || 0;
 }
 
+// The animals' poses in `cam` on a sampled frame (for leaving them out of the
+// empty arena): what the frame holds, hydrated first on the active lazy project.
+async function posesAt(session, frame, cam) {
+    try {
+        if (session.lazyLoader) {
+            if (session !== state.session) return null;
+            await ensureLazyFrameData(frame);
+        }
+        var groups = session.instanceGroups ? session.instanceGroups.get(frame) || [] : [];
+        var fg = session.getFrameGroup ? session.getFrameGroup(frame) : null;
+        return animalsInView(session, frame, cam, groups, fg).map(function (a) { return { body: a.body, tail: a.tail }; });
+    } catch (e) {
+        return null;
+    }
+}
+
 /**
  * Build the empty arena and area model of `view`'s camera (unless it has one
  * from the same decoder). -> the camera state.
@@ -361,18 +377,18 @@ export async function buildBackground(session, view, onFrame) {
             var kf = null;
             try { kf = await keyframeIndices(d); } catch (e) { kf = null; }
             var frames = sampleFrames(total, kf ? Array.from(kf) : null, BACKGROUND_FRAMES);
-            var bitmaps = [], used = [];
+            var bitmaps = [], used = [], poses = [];
             for (var i = 0; i < frames.length; i++) {
                 var bm = null;
                 try { bm = await d.peekFrame(frames[i], view.videoWidth); } catch (e) { bm = null; }
-                if (bm) { bitmaps.push(bm); used.push(frames[i]); }
+                if (bm) { bitmaps.push(bm); used.push(frames[i]); poses.push(await posesAt(session, frames[i], cam)); }
                 if (onFrame) onFrame(cam, i + 1, frames.length);
             }
             if (!bitmaps.length) throw new Error('no frames decoded');
             var n = outlineAnimalCount(session, cam, state.currentFrame);
             var res = await call(camKey(st, cam), {
                 type: 'background', cam: camKey(st, cam), frames: bitmaps, w: view.videoWidth, h: view.videoHeight,
-                nAnimals: n, params: currentOutlineParams(),
+                nAnimals: n, params: currentOutlineParams(), poses: poses,
             }, bitmaps);
             Object.assign(entry, { status: 'ready', bg: res.bg, model: res.model, areas: res.areas, counts: res.counts, frames: used, nAnimals: n });
         } catch (e) {
