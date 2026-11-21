@@ -25,14 +25,16 @@ import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } 
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
+import { volumeForFrame, volumeChains, sessionVolume } from './volume3d.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
          dropDerivedReprojections, lazyRowInstance, LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
 import { noteTriangulateRun, noteTriangulateRunMarked, markTriangulatedGroups, carryTriangulateMark } from './run-state.js';
-import { skeletonCheckForRun, invalidateSkeletonCheck, groupNeedsSkeletonCheck, framesNeedingSkeletonCheck }
+import { skeletonCheckForRun, invalidateSkeletonCheck, groupNeedsSkeletonCheck, getSkeletonCheckSettings }
     from './skeleton-check-run.js';
+import { chainBadness } from './skeleton-check.js';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -1998,7 +2000,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     var totalGroups = 0;
     var errSum = 0, errN = 0;
     var frames = [];
-    var skeletonCheck = skeletonCheckForRun(session);   // null when off or nothing is measured yet
+    var skeletonCheck = skeletonCheckOption(session);   // null when off
     var skeletonRepaired = 0;
 
     // MEMORY / CORRECTNESS (luc3d #195): sweep the range through
@@ -2019,7 +2021,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
             // Camera-name fixup + >=2-usable-view gate + points3d/usedCameras
             // stores are shared with the other two paths (see
             // `_triangulateGroupStep`).
-            var step = _triangulateGroupStep(group, cameras, method, skeletonCheck);
+            var step = _triangulateGroupStep(group, cameras, method, volumeForFrame(session, f), skeletonCheck);
             if (!step) continue;
             group.markClean();
             totalGroups++;
@@ -2241,8 +2243,14 @@ export function reTriangulateGroup(instanceGroup) {
     // move re-refines consistently (e.g. a BA group stays BA); a group with no
     // recorded method (e.g. 3D loaded from file) takes the user's global default.
     var method = resolveTriangulationMethod(instanceGroup);
-    var result = triangulateAndReproject(instanceGroup, groupCameras, { method: method });
+    // An edit re-solves a group on the shown frame: with that frame's volume when the group is one of its
+    // groups (so editing a fused group does not quietly drop the volume).
+    var shownGroups = state.session.instanceGroups && state.session.instanceGroups.get(state.currentFrame);
+    var volume = (shownGroups && shownGroups.indexOf(instanceGroup) >= 0)
+        ? volumeForFrame(state.session, state.currentFrame) : null;
+    var result = triangulateAndReproject(instanceGroup, groupCameras, { method: method, volume: volume || undefined });
     instanceGroup.triangulationMethod = result.method;
+    instanceGroup.volumeFused = !!result.volume;
     instanceGroup.solveSettings = triangulationSettingsKey(cameras);
 
     // Only update if we got valid results
@@ -2419,7 +2427,7 @@ export function triangulateCurrentFrame(method) {
 
     // Skeleton check (Triangulate ▸ Skeleton check): bones measured from the session's 3D so far; null when off or
     // nothing is measured yet (pose/skeleton-check-run.js).
-    const skeletonCheck = skeletonCheckForRun(session);
+    const skeletonCheck = skeletonCheckOption(session);
     let skeletonRepaired = 0;
     const frameResults = [];
 
@@ -2473,8 +2481,9 @@ export function triangulateCurrentFrame(method) {
             const groupCameras = cameras.filter(c => groupCamNames.indexOf(c.name) >= 0);
 
             const result = triangulateAndReproject(group, groupCameras,
-                { method: method, skeleton: skeletonCheck || undefined });
+                { method: method, volume: volumeForFrame(session, frameIdx) || undefined, skeleton: skeletonCheck || undefined });
             group.triangulationMethod = result.method;
+            group.volumeFused = !!result.volume;
             group.solveSettings = triangulationSettingsKey(cameras);
             group.skeletonRepaired = !!(result.skeleton && result.skeleton.chainsRepaired > 0);
             if (group.skeletonRepaired) skeletonRepaired++;
@@ -2649,11 +2658,11 @@ async function _encourageGC(totalMB) {
  *
  * @returns {{result: Object, groupCameras: Array}|null}
  */
-function _triangulateGroupStep(group, cameras, method, skeletonCheck) {
+function _triangulateGroupStep(group, cameras, method, volume, skeletonCheck) {
     var prep = _prepareGroupStep(group, cameras);
     if (!prep) return null;
     var result = triangulateAndReproject(group, prep.groupCameras,
-        { method: method, skeleton: skeletonCheck || undefined });
+        { method: method, volume: volume || undefined, skeleton: skeletonCheck || undefined });
     _applyGroupStep(group, prep, result);
     return { result: result, groupCameras: prep.groupCameras };
 }
@@ -2708,6 +2717,9 @@ function _prepareGroupStep(group, cameras) {
 /** Store a solve's result on the group (the tail of `_triangulateGroupStep`). */
 function _applyGroupStep(group, prep, result) {
     group.triangulationMethod = result.method;
+    // In memory: this group's 3D came from a solve fused with a volume (pose/volume3d.js), so the display
+    // reprojects it instead of re-solving it without the volume (ui/rendering.js's reprojection fill).
+    group.volumeFused = !!(result && result.volume);
     group.solveSettings = prep.settingsKey;
     group.points3d = pooledPoints3d(result.points3d);   // one slab, not one ArrayBuffer per group
     group.usedCameras = prep.usedCameras;
@@ -3047,9 +3059,12 @@ export function dropAllDerivedTriangulationState(session) {
  */
 async function skeletonCheckPass(session, cameras, method) {
     invalidateSkeletonCheck(session);
-    var sk = skeletonCheckForRun(session);
+    var sk = skeletonCheckOption(session);
     if (!sk) return null;
-    var frames = framesNeedingSkeletonCheck(session, sk);
+    var needs = function (g) { return groupNeedsCheck(session, g, sk); };
+    var frames = [];
+    for (var [cf, cgroups] of session.instanceGroups) if (cgroups && cgroups.some(needs)) frames.push(cf);
+    frames.sort(function (a, b) { return a - b; });
     var stats = { frames: frames.length, groups: 0, repaired: 0 };
     if (!frames.length) return stats;
     showLoadingProgress('Skeleton check', 0, frames.length,
@@ -3061,8 +3076,8 @@ async function skeletonCheckPass(session, cameras, method) {
         var any = false;
         for (var gi = 0; gi < list.length; gi++) {
             var g = list[gi];
-            if (!groupNeedsSkeletonCheck(g, sk)) continue;
-            var step = _triangulateGroupStep(g, cameras, method, sk);
+            if (!needs(g)) continue;
+            var step = _triangulateGroupStep(g, cameras, method, volumeForFrame(session, fi), sk);
             if (!step) continue;
             g.markClean();
             stats.groups++;
@@ -3082,6 +3097,29 @@ async function skeletonCheckPass(session, cameras, method) {
     });
     invalidateSkeletonCheck(session);
     return stats;
+}
+
+/**
+ * The run's `options.skeleton` (Triangulate ▸ Skeleton check), or null when it is off: the skeleton's chains measured
+ * on the session's 3D, or, with nothing measured yet, an empty set when a loaded volume brings chains of its own
+ * (the solve checks the volume's chains on a group that matches a volume animal, pose/triangulation-core.js).
+ */
+function skeletonCheckOption(session) {
+    var sk = skeletonCheckForRun(session);
+    if (sk) return sk;
+    if (!getSkeletonCheckSettings().enabled || !sessionVolume(session) || !volumeChains(session).length) return null;
+    return { chains: [] };
+}
+
+/** Whether a group's stored 3D needs the check pass: a chain of the skeleton's, or of the loaded volume's, outside
+ *  its range (the solve then decides which chains apply). */
+function groupNeedsCheck(session, g, sk) {
+    if (sk.chains.length && groupNeedsSkeletonCheck(g, sk)) return true;
+    var P = g && g.points3d;
+    if (!P || !P.length || !sessionVolume(session)) return false;
+    var vc = volumeChains(session);
+    for (var i = 0; i < vc.length; i++) if (chainBadness(P, vc[i]) > 0) return true;
+    return false;
 }
 
 /** The status line's note on a check pass ('' when it did not run). */
@@ -3125,7 +3163,8 @@ async function sweepTriangulateAllFrames(session, cameras, method) {
             for (var gi = 0; gi < list.length; gi++) {
                 var prep = _prepareGroupStep(list[gi], cameras);
                 if (!prep) { stats.skipped++; continue; }
-                solver.submit(list[gi], prep.groupCameras, applyResult.bind(null, list[gi], prep, frameState));
+                solver.submit(list[gi], prep.groupCameras, applyResult.bind(null, list[gi], prep, frameState),
+                    volumeForFrame(session, fi));
             }
             solver.mark(function () {
                 if (frameState.any) stats.frames++;
@@ -3272,7 +3311,7 @@ export async function triangulateAllFrames(method) {
             var prep = _prepareGroupStep(group, cameras);
             if (!prep) continue;
             solver.submit(group, prep.groupCameras,
-                applyGroupResult.bind(null, group, prep, frameState));
+                applyGroupResult.bind(null, group, prep, frameState), volumeForFrame(state.session, frameIdx));
         }
         solver.mark(function () {
             if (frameState.any) {

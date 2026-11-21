@@ -1190,6 +1190,10 @@ body {
   margin: 0 2px 0 auto;
 }
 
+.tri-dropdown-setting.disabled {
+  opacity: 0.55;
+}
+
 .tri-dropdown-setting input[type="number"] {
   width: 44px;
   height: 22px;
