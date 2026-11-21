@@ -28,8 +28,9 @@ import { groupReprojection, getGroupColor, unlinkedBaseColor, unlinkedDupIndices
 import { keyframeIndices } from './image-embedder.js';
 import { drawAllOverlays } from './rendering.js';
 import { showLoadingProgress, hideLoading } from './loading-overlay.js';
+import { ensureLazyFrameData } from '../pose/triangulation.js';
 import { groupDisplayName } from '../pose/pose-data.js';
-import { tailChain, animalFromInstance, areaModel, outlineParams, pointInPolygon, labelImageContours } from '../pose/outline-core.js';
+import { tailChain, animalFromInstance, areaModel, outlineParams, pointInPolygon, labelImageContours, keypointCheck, outlineSuspects } from '../pose/outline-core.js';
 import { outlineEditAt, rleEncode, rleDecode } from '../pose/outline-edits.js';
 import { handleOutlineMessage } from '../pose/outline-worker.js';
 
@@ -39,6 +40,8 @@ export var BACKGROUND_FRAMES = 39;
 export var OUTLINE_CACHE_SIZE = 64;
 /** A camera frame's outline request is given up after this long (ms). */
 export var JOB_TIMEOUT_MS = 30000;
+/** px: a keypoint this close to its animal's outline is on it. */
+export var KEYPOINT_REACH = 3;
 
 // ---------------------------------------------------------------------------
 // Settings (browser-local display taste: the Visibility tab's controls)
@@ -309,10 +312,11 @@ function poseSignature(animals) {
  * nearest its even spacing when `keyframes` (sorted) are known and there are
  * at least min(n, 15) of them, so each costs one decode; otherwise evenly
  * spaced frames (a short clip: a median of 3 keyframes would keep the animals).
- * Distinct, ascending.
+ * Every frame when n >= total. Distinct, ascending.
  */
 export function sampleFrames(total, keyframes, n) {
     if (!(total > 0) || !(n > 0)) return [];
+    if (n >= total) return Array.from({ length: total }, function (_, i) { return i; });   // every frame
     var picks = [];
     var useKf = !!(keyframes && keyframes.length >= Math.min(n, 15));
     var pool = useKf ? keyframes : null;
@@ -451,6 +455,16 @@ function cachePut(st, key, val) {
     while (st.cache.size > OUTLINE_CACHE_SIZE) st.cache.delete(st.cache.keys().next().value);
 }
 
+var _announce = 0;
+// The Outlines tab lists the suspects on the frame shown: tell it when outlines land.
+function announceSoon() {
+    if (_announce || typeof window === 'undefined') return;
+    _announce = setTimeout(function () {
+        _announce = 0;
+        window.dispatchEvent(new CustomEvent('lucid:outlines-landed'));
+    }, 150);
+}
+
 var _redrawQueued = false;
 function redrawSoon() {
     if (_redrawQueued || typeof requestAnimationFrame === 'undefined') return;
@@ -477,10 +491,14 @@ export async function computeViewOutlines(session, view, frameIdx, animals) {
     if (!bm) return null;
     var res = await call(camKey(st, view.name), {
         type: 'outline', cam: camKey(st, view.name), frame: bm, w: c.w, h: c.h,
-        animals: animals.map(function (a) { return { body: a.body, segments: a.segments, tail: a.tail }; }),
+        animals: animals.map(function (a) { return { body: a.body, segments: a.segments, tail: a.tail, tailPts: a.tailPts }; }),
         model: c.model || null, params: currentOutlineParams(),
     }, [bm]);
     var entry = { frame: frameIdx, cam: view.name, w: c.w, h: c.h, animals: animals, result: res, sig: poseSignature(animals) };
+    // Do the poses agree with the outlines? Keypoints off their own outline, where the
+    // image shows something, make it a suspect (checked in the worker, which has the frame).
+    entry.check = res.check || keypointCheck(res.labels, c.w, c.h, animals, KEYPOINT_REACH);
+    entry.suspects = outlineSuspects(entry.check, res.animals.map(function (a) { return a.area; }), animals.map(function (a) { return a.name; }));
     // Only a camera's newest outline keeps its label image whole (w x h bytes:
     // 1.3 MB at 1280x1024); older ones keep it run-length encoded (a few KB),
     // decoded again when needed (`entryLabels`).
@@ -508,7 +526,7 @@ function pump(session, st, cam) {
         if (typeof console !== 'undefined') console.warn('[outlines] ' + cam + ' frame ' + job.frame + ': ' + (e && e.message || e));
     }).then(function (entry) {
         st.busy.delete(cam);
-        if (entry && state.session === session && !state.isPlaying) redrawSoon();
+        if (entry && state.session === session && !state.isPlaying) { redrawSoon(); announceSoon(); }
         pump(session, st, cam);
     });
 }
@@ -564,7 +582,82 @@ export function drawAnimalOutlines(view, frameIdx, frameGroup, groups, opts) {
     }
     st.lastDrawn.set(view.name, entry);
     paintOutlines(view.overlayCtx, entry, paintOpts);
+    paintSuspectKeypoints(view.overlayCtx, entry, paintOpts);
     if (_afterPaint) _afterPaint(view, frameIdx, entry, paintOpts);
+}
+
+/**
+ * Red rings on the keypoints of each suspect animal (`entry.suspects`) that its
+ * outline misses, over everything: where the pose says the outline is wrong.
+ */
+export function paintSuspectKeypoints(ctx, entry, opts) {
+    if (!entry || !entry.suspects || !entry.suspects.length || !entry.check) return;
+    var sx = ctx.canvas.width / (opts.videoWidth || entry.w), sy = ctx.canvas.height / (opts.videoHeight || entry.h);
+    var s = opts.overlaySizeScale || 1;
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.lineWidth = 2.5 * s;
+    entry.suspects.forEach(function (sus) {
+        var c = entry.check[sus.animal];
+        if (!c) return;
+        for (var j = 0; j < c.out.length; j += 4) {
+            if (sus.reason === 'tail' && c.out[j + 2] !== 1) continue;
+            if (sus.reason !== 'tail' && sus.reason !== 'missed' && c.out[j + 2] === 1) continue;
+            ctx.beginPath();
+            ctx.arc(c.out[j] * sx, c.out[j + 1] * sy, 7 * s, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+            ctx.lineWidth = 4.5 * s;
+            ctx.stroke();
+            ctx.strokeStyle = '#ff3b30';
+            ctx.lineWidth = 2.5 * s;
+            ctx.stroke();
+        }
+    });
+    ctx.restore();
+}
+
+/**
+ * Check the outlines of every camera in `views` on `frames` (ascending) for
+ * keypoints off their outline, computing what is not cached; lazy frames are
+ * hydrated first. `onProgress(done, total)`; `cancelled()` stops between
+ * frames. -> [{frame, camera, animal, identity, track, source, reason, detail,
+ * weight}] (also kept as the session's last scan, `outlineScan`).
+ */
+export async function scanOutlines(session, views, frames, onProgress, cancelled) {
+    var st = sessionState(session);
+    await ensureBackgrounds(session, views);
+    var ready = views.filter(function (v) { var c = st.cams.get(v.name); return c && c.status === 'ready'; });
+    var found = [];
+    for (var i = 0; i < frames.length; i++) {
+        if (cancelled && cancelled()) break;
+        var f = frames[i];
+        if (session.lazyLoader && session === state.session) await ensureLazyFrameData(f);
+        var groups = session.instanceGroups ? session.instanceGroups.get(f) || [] : [];
+        var fg = session.getFrameGroup ? session.getFrameGroup(f) : null;
+        var entries = await Promise.all(ready.map(function (v) {
+            var animals = animalsInView(session, f, v.name, groups, fg);
+            var hit = st.cache.get(cacheKey(v.name, f, poseSignature(animals)));
+            if (hit && hit.suspects) return hit;
+            return computeViewOutlines(session, v, f, animals).catch(function () { return null; });
+        }));
+        entries.forEach(function (e, vi) {
+            if (!e || !e.suspects) return;
+            e.suspects.forEach(function (sus) {
+                var a = e.animals[sus.animal] || {};
+                found.push({ frame: f, camera: ready[vi].name, animal: a.name || null, identity: a.identity, track: a.track, source: a.source,
+                    reason: sus.reason, detail: sus.detail, weight: sus.weight });
+            });
+        });
+        if (onProgress) onProgress(i + 1, frames.length);
+    }
+    st.scan = { frames: frames.length, results: found, at: new Date().toISOString() };
+    return found;
+}
+
+/** The session's last scan (`{frames, results, at}`), or null. */
+export function outlineScan(session) {
+    return session ? sessionState(session).scan || null : null;
 }
 
 // The brush (ui/outline-brush.js) draws its cursor after a view's outlines.

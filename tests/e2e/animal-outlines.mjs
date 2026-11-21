@@ -20,6 +20,9 @@
  *     (its labels match the outline) and preview per flagged camera frame.
  *  §7 Save → reopen (eager and lazy readers; eager and streaming writers)
  *     brings the flags back; a project without flags writes no key.
+ *  §6c Keypoints off their own outline (A's tail keypoints put on B's tail on
+ *     frame 30 in cam0) make a suspect: listed for the frame, found by Check…
+ *     over all 90 frames (and nothing else), flagged with one click.
  *  §6b B turns the brush on: a left stroke from mouse A onto the floor draws A
  *     there, a right stroke erases B under it, Cmd/Ctrl+Z undoes; painting
  *     selects no pose; the camera frame shows its correction; Esc stops.
@@ -137,6 +140,10 @@ try {
         g.addInstance('cam0', bu.instance);
         g.reprojections = { cam1: pose(280 - 2.5 * N, 128, -1, 'cam1') };
         s.instanceGroups.set(N, [g]);
+        // §6c's frame: mouse A's tail keypoints in cam0 lie on mouse B's tail (a bad pose)
+        const ua = s.getFrameGroup(30).getUnlinkedInstances('cam0').find(u => u.instance.trackIdx === 0).instance;
+        const bx = 280 - 2.5 * 30;
+        ua.setPoint(4, bx + 40, 128); ua.setPoint(5, bx + 55, 128);
         window.__lucid.videoController.seekToFrame(10);
     });
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 10, null, { timeout: 15000 });
@@ -284,6 +291,40 @@ try {
     await page.selectOption('#outlineFlagCamera', 'cam1');
     await page.click('input[name="outlineFlagReason"][value="bleed"]');
     await page.click('#outlineFlagOk');
+
+    // ---------------------------------------------------------------- §6c
+    console.log('\n§6c suspect outlines: keypoints off their outline');
+    const f30 = await outlinesAt(30);
+    const sus = await page.evaluate(() => {
+        const d = window.__ao.drawnOutlines(window.__lucid.state.session, 'cam0');
+        const d1 = window.__ao.drawnOutlines(window.__lucid.state.session, 'cam1');
+        return { cam0: d.suspects.map(x => x.reason + ':' + d.animals[x.animal].name + ':' + x.detail), cam1: d1.suspects.length,
+            rows: Array.from(document.querySelectorAll('#outlineSuspectList .outline-suspect-row')).map(r => r.textContent) };
+    });
+    check(sus.cam0.length === 1 && /^tail:A:2 of 2 tail keypoints outside A.s outline \(2 on B.s\)/.test(sus.cam0[0]), 'cam0, frame 30: A\'s tail keypoints are on B\'s tail: ' + sus.cam0.join());
+    check(sus.cam1 === 0, 'cam1 (a good pose) has no suspect');
+    check(sus.rows.length === 1 && /Tail on the wrong animal/.test(sus.rows[0]), 'the Outlines tab lists it for this frame');
+    if (SHOTS) await page.screenshot({ path: path.join(SHOTS, 'suspect.png') });
+    await page.evaluate(() => window.__lucid.videoController.seekToFrame(0));
+    await page.waitForFunction(() => window.__lucid.state.currentFrame === 0);
+    await page.fill('#outlineScanN', '90');
+    await page.click('#outlineScanBtn');
+    await page.waitForFunction(() => document.getElementById('loadingOverlay').classList.contains('hidden') && !document.getElementById('outlineScanBtn').disabled, null, { timeout: 120000 });
+    const scan = await page.evaluate(() => {
+        const sc = window.__ao.outlineScan(window.__lucid.state.session);
+        return { frames: sc && sc.frames, found: sc ? sc.results.map(r => r.frame + ':' + r.camera + ':' + r.reason) : [] };
+    });
+    check(scan.frames === 90 && scan.found.length === 1 && scan.found[0] === '30:cam0:tail', `Check… over every frame finds just that one (${scan.found.join(' ') || 'none'})`);
+    await page.evaluate(() => window.__lucid.videoController.seekToFrame(30));
+    await page.waitForFunction(() => window.__lucid.state.currentFrame === 30 && document.querySelector('#outlineSuspectList .outline-suspect-flag'), null, { timeout: 15000 });
+    const nFlagsBefore = await page.evaluate(() => window.__lucid.state.session.outlineFlags.length);
+    await page.click('#outlineSuspectList .outline-suspect-flag');
+    const fl = await page.evaluate(() => window.__lucid.state.session.outlineFlags.find(f => f.frame === 30));
+    check(fl && fl.camera === 'cam0' && fl.animal === 'A' && fl.reason === 'tail' && /tail keypoints outside/.test(fl.note), 'Flag turns it into a flag, the reason and the finding as its note');
+    check(await page.evaluate(() => document.querySelectorAll('#outlineSuspectList .outline-suspect-flag').length) === 0, 'and the row now reads flagged');
+    // keep §6/§7 counts as they were
+    await page.evaluate(async () => { const of = await import('/pose/outline-flags.js'); of.removeOutlineFlag(window.__lucid.state.session, { frame: 30, camera: 'cam0', animal: 'A' }); });
+    check(await page.evaluate(() => window.__lucid.state.session.outlineFlags.length) === nFlagsBefore, '(flag removed again for the next steps)');
 
     // ---------------------------------------------------------------- §6
     console.log('\n§6 Export… writes a ZIP of the flagged frames and their outlines');
@@ -438,13 +479,16 @@ try {
         const ao = await import('/ui/animal-outlines.js');
         const s = window.__lucid.state.session;
         const before = ao.cachedOutlines ? 0 : 0;
+        // new poses on frame 71 (Check… cached every frame): an outline drawn there must be computed
+        const u = s.getFrameGroup(71).getUnlinkedInstances('cam0')[0].instance;
+        u.setPoint(2, u.getX(2) + 1, u.getY(2));
         window.__lucid.state.isPlaying = true;
-        window.__lucid.state.currentFrame = 70;
-        (await import('/ui/rendering.js')).drawAllOverlays(70);
+        window.__lucid.state.currentFrame = 71;
+        (await import('/ui/rendering.js')).drawAllOverlays(71);
         await new Promise(r => setTimeout(r, 300));
         const d = ao.drawnOutlines(s, 'cam0');
         window.__lucid.state.isPlaying = false;
-        return { drawn70: !!(d && d.frame === 70), before };
+        return { drawn70: !!(d && d.frame === 71), before };
     });
     check(!play.drawn70, 'no outline was computed for a frame shown during playback');
 } catch (e) {

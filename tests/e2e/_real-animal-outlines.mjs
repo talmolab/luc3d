@@ -11,6 +11,7 @@
  *   [FLAG=460:Camera2_topC] [CHROME=1]
  *
  * SOLO: frame:camera pairs also shot alone (single-view mode), whole and cropped.
+ * SCAN=N: Outlines ▸ Check… over N frames first; the suspects it finds are logged.
  *   node tests/e2e/_real-animal-outlines.mjs
  *
  * The videos must be ones the browser decodes (Playwright's Chromium: H.264;
@@ -28,6 +29,7 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const DATA = process.env.DATA, OUT = process.env.OUT || path.join(process.cwd(), 'outline-shots');
 const FRAMES = (process.env.FRAMES || '0').split(',').map(Number);
 const FLAG = process.env.FLAG || '';
+const SCAN = Number(process.env.SCAN || 0);
 const SOLO = (process.env.SOLO || '').split(',').filter(Boolean).map(x => ({ f: Number(x.split(':')[0]), c: x.split(':')[1] }));
 if (!DATA) { console.log('set DATA=<recording folder>'); process.exit(2); }
 fs.mkdirSync(OUT, { recursive: true });
@@ -117,6 +119,17 @@ try {
         }
     }
 
+    if (SCAN) {
+        const t1 = Date.now();
+        const found = await page.evaluate(async (n) => (await import('/ui/outline-flags-panel.js')).checkOutlineFrames(window.__lucid.state.session, n), SCAN);
+        log(`Check… ${SCAN} frames: ${found ? found.length : 'none'} suspects in ${((Date.now() - t1) / 1000).toFixed(1)} s`);
+        const byReason = {};
+        (found || []).forEach(r => { byReason[r.reason] = (byReason[r.reason] || 0) + 1; });
+        log('  by reason: ' + JSON.stringify(byReason));
+        (found || []).slice(0, 40).forEach(r => log(`  frame ${r.frame} ${r.camera} ${r.animal}: ${r.detail}`));
+        fs.writeFileSync(path.join(OUT, 'suspects.json'), JSON.stringify(found, null, 1));
+        await page.screenshot({ path: path.join(OUT, 'suspects_panel.png') });
+    }
     const crop = (c) => page.evaluate((c) => {
         const v = window.__lucid.state.views.find(v => v.name === c);
         const d = window.__ao.drawnOutlines(window.__lucid.state.session, c);

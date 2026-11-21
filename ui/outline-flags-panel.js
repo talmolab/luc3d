@@ -20,6 +20,7 @@ import { state, interactionManager, videoController, isViewDocked } from './app-
 import {
     outlinesEnabled, outlineCameraState, ensureBackgrounds, animalsInView, drawnOutlines, outlineAnimalAt,
     computeViewOutlines, paintOutlines, currentOutlineParams, resetOutlines, BACKGROUND_FRAMES, editedEntry, entryLabels,
+    scanOutlines, outlineScan, sampleFrames,
 } from './animal-outlines.js';
 import { formatFrameNumber } from './frame-readout.js';
 import { setInfoTip } from './info-tip.js';
@@ -34,11 +35,14 @@ import { markDirty, setStatus } from '../import-export/save-load.js';
 import { outlineEdits, outlineEditAt, revertOutlineEdit, BRUSH_MIN, BRUSH_MAX } from '../pose/outline-edits.js';
 import { brushState, setBrushOn, setBrushRadius, setBrushAnimal, onBrushChange } from './outline-brush.js';
 import { drawAllOverlays } from './rendering.js';
+import { keyframeIndices } from './image-embedder.js';
 
 var OUTLINES_INFO = 'An outline per camera and animal, made the idtracker.ai way: pixels brighter than the camera\'s empty arena, ' +
     'grouped into blobs, each blob given to the animal whose pose is in it (split by nearest skeleton where animals touch), tails traced along their keypoints.';
 var BRUSH_INFO = 'Correct an outline by hand: with the brush on, hold the left button over a camera view to draw the animal, the right button to erase. ' +
     'The corrected outline replaces the computed one on that camera frame, is saved with the project and exported as the corrected mask.';
+var SUSPECT_INFO = 'Outlines the poses disagree with: two or more of an animal\'s tail keypoints off its outline, body keypoints on another animal\'s outline or on none, ' +
+    'or a pose with no outline. Red rings mark those keypoints in the views. Check… goes through frames spread over the video.';
 var FLAGS_INFO = 'Hover over a bad outline in a camera view and press Shift+O to flag it. Flags are saved with the project; ' +
     'Export… writes each flagged frame with its outlines for checking or training.';
 
@@ -98,7 +102,7 @@ export function refreshOutlinePanel() {
                     '<td><button class="outline-flag-del" data-del="' + i + '" title="Remove this flag" aria-label="Remove this flag">✕</button></td></tr>';
             }).join('') + '</tbody></table>'
             : '<p class="table-empty" id="outlineFlagsEmpty">No flags. Hover over a bad outline and press Shift+O.</p>') +
-        '</details>' + brushHtml(session);
+        '</details>' + suspectHtml(session) + brushHtml(session);
     var info = host.querySelector('#outlineInfo');
     if (info) { info.innerHTML = ICON_INFO; setInfoTip(info, OUTLINES_INFO); }
     var finfo = host.querySelector('#outlineFlagsInfo');
@@ -117,6 +121,7 @@ export function refreshOutlinePanel() {
     var eb = host.querySelector('#outlineExportBtn');
     if (eb) eb.addEventListener('click', function () { exportOutlineFlags(state.session); });
     wireBrush(host, session);
+    wireSuspects(host, session);
     var list = host.querySelector('#outlineFlagList');
     if (list) list.addEventListener('click', function (e) {
         var del = e.target.closest('[data-del]');
@@ -128,6 +133,148 @@ export function refreshOutlinePanel() {
         var row = e.target.closest('.outline-flag-row');
         if (row) goToFlag(flags[+row.dataset.i]);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Suspect outlines (poses that disagree with their outline)
+// ---------------------------------------------------------------------------
+
+var SCAN_DEFAULT = 100;
+var _scanning = false;
+
+/** Suspects on the frame on screen (every shown camera) and from the last check, deduplicated, by frame. */
+export function suspectRows(session) {
+    var rows = [], seen = new Set();
+    var add = function (r) {
+        var k = r.frame + '|' + r.camera + '|' + r.animal + '|' + r.reason;
+        if (seen.has(k)) return;
+        seen.add(k); rows.push(r);
+    };
+    if (session) {
+        shownViews().forEach(function (v) {
+            var d = drawnOutlines(session, v.name);
+            if (!d || d.edited || d.frame !== state.currentFrame || !d.suspects) return;
+            d.suspects.forEach(function (sus) {
+                var a = d.animals[sus.animal] || {};
+                add({ frame: d.frame, camera: v.name, animal: a.name || null, identity: a.identity, track: a.track, source: a.source, reason: sus.reason, detail: sus.detail, weight: sus.weight });
+            });
+        });
+        var scan = outlineScan(session);
+        if (scan) scan.results.forEach(add);
+    }
+    rows.sort(function (a, b) { return (a.frame - b.frame) || (a.camera < b.camera ? -1 : a.camera > b.camera ? 1 : 0); });
+    return rows;
+}
+
+function isFlagged(session, r) {
+    return outlineFlags(session).some(function (f) { return f.frame === r.frame && f.camera === r.camera && f.animal === r.animal; });
+}
+
+function suspectListHtml(session) {
+    var rows = suspectRows(session);
+    var scan = outlineScan(session);
+    var head = scan ? '<div class="outline-scan-summary">Last check: ' + n(scan.frames) + ' frames, ' + n(scan.results.length) + ' suspect' + (scan.results.length === 1 ? '' : 's') + '.</div>' : '';
+    if (!rows.length) return head + '<p class="table-empty" id="outlineSuspectsEmpty">' + (outlinesEnabled() ? 'None on this frame.' : 'Turn the outlines on to check them.') + '</p>';
+    return head + '<table class="data-table outline-suspect-list"><thead><tr><th style="text-align:right;">Frame</th><th>Camera</th><th>Why</th><th></th></tr></thead><tbody>' +
+        rows.map(function (r, i) {
+            return '<tr class="outline-flag-row outline-suspect-row' + (r.frame === state.currentFrame ? ' is-current' : '') + '" data-s="' + i + '" title="Go to this frame">' +
+                '<td style="text-align:right;">' + formatFrameNumber(r.frame + 1) + '</td><td>' + esc(r.camera) + '</td>' +
+                '<td>' + esc(outlineFlagReasonLabel(r.reason)) + '<div class="outline-flag-note">' + esc(r.detail) + '</div></td>' +
+                '<td>' + (isFlagged(session, r) ? '<span class="outline-src">flagged</span>' : '<button class="panel-btn outline-suspect-flag" data-flag="' + i + '">Flag</button>') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+}
+
+function suspectHtml(session) {
+    var rows = suspectRows(session);
+    return '<details class="info-section info-collapsible" id="outlineSuspectSection" open>' +
+        '<summary><h3>Suspect outlines</h3><button type="button" class="plane-section-info" id="outlineSuspectInfo" aria-label="About suspect outlines"></button>' +
+        '<span class="info-collapsible-count" id="outlineSuspectCount">' + n(rows.length) + '</span></summary>' +
+        '<div class="outline-flag-tools"><label class="outline-brush-size">Check <input type="number" id="outlineScanN" min="1" max="100000" value="' + SCAN_DEFAULT + '"> frames</label>' +
+        '<button class="panel-btn" id="outlineScanBtn"' + (_scanning ? ' disabled' : '') + ' title="Work out the outlines on frames spread over the video and list the ones the poses disagree with">Check…</button>' +
+        '<button class="panel-btn" id="outlineFlagAllBtn"' + (rows.some(function (r) { return !isFlagged(session, r); }) ? '' : ' disabled') + ' title="Flag every suspect listed">Flag all</button></div>' +
+        '<div id="outlineSuspectList">' + suspectListHtml(session) + '</div></details>';
+}
+
+/** Re-render only the suspect list (outlines landed; the frame changed). */
+export function refreshSuspectList() {
+    var host = typeof document !== 'undefined' && document.getElementById('outlineSuspectList');
+    if (!host) return;
+    host.innerHTML = suspectListHtml(state.session);
+    var cnt = document.getElementById('outlineSuspectCount');
+    var rows = suspectRows(state.session);
+    if (cnt) cnt.textContent = n(rows.length);
+    var all = document.getElementById('outlineFlagAllBtn');
+    if (all) all.disabled = !rows.some(function (r) { return !isFlagged(state.session, r); });
+}
+
+function flagSuspect(session, r) {
+    return addOutlineFlag(session, { frame: r.frame, camera: r.camera, animal: r.animal, identity: r.identity, track: r.track, source: r.source, reason: r.reason, note: r.detail });
+}
+
+/** Check `count` frames spread over the video (keyframes when the first camera has enough). -> suspects */
+export async function checkOutlineFrames(session, count) {
+    if (!session || _scanning) return null;
+    var views = shownViews().filter(function (v) { return v.decoder; });
+    if (!views.length) { setStatus('No camera video to check outlines in'); return null; }
+    if (!outlinesEnabled()) setOutlinesShown(true);
+    var total = views[0].decoder.samples ? views[0].decoder.samples.length : state.totalFrames;
+    var kf = null;
+    try { kf = await keyframeIndices(views[0].decoder); } catch (e) { kf = null; }
+    var frames = sampleFrames(total, kf ? Array.from(kf) : null, Math.max(1, Math.min(count | 0, total)));
+    _scanning = true;
+    var stop = false;
+    var onKey = function (e) { if (e.key === 'Escape') { stop = true; e.preventDefault(); e.stopPropagation(); } };
+    document.addEventListener('keydown', onKey, true);
+    refreshOutlinePanel();
+    try {
+        showLoadingProgress('Checking outlines', 0, frames.length, { title: 'Suspect outlines', detail: views.length + ' cameras · Esc stops' });
+        await yieldToPaint();
+        var found = await scanOutlines(session, views, frames, function (d, t) {
+            showLoadingProgress('Checking outlines', d, t, { title: 'Suspect outlines', detail: views.length + ' cameras · Esc stops' });
+        }, function () { return stop; });
+        setStatus('Checked ' + n(frames.length) + ' frames' + (stop ? ' (stopped)' : '') + ': ' + n(found.length) + ' suspect outline' + (found.length === 1 ? '' : 's'));
+        return found;
+    } finally {
+        document.removeEventListener('keydown', onKey, true);
+        _scanning = false;
+        hideLoading();
+        refreshOutlinePanel();
+        if (state.session) drawAllOverlays(state.currentFrame);
+    }
+}
+
+function wireSuspects(host, session) {
+    var info = host.querySelector('#outlineSuspectInfo');
+    if (info) { info.innerHTML = ICON_INFO; setInfoTip(info, SUSPECT_INFO); }
+    var btn = host.querySelector('#outlineScanBtn');
+    if (btn) btn.addEventListener('click', function () {
+        var nIn = host.querySelector('#outlineScanN');
+        checkOutlineFrames(session, nIn ? +nIn.value || SCAN_DEFAULT : SCAN_DEFAULT);
+    });
+    var all = host.querySelector('#outlineFlagAllBtn');
+    if (all) all.addEventListener('click', function () {
+        var k = 0;
+        suspectRows(session).forEach(function (r) { if (!isFlagged(session, r) && flagSuspect(session, r)) k++; });
+        if (k) { markDirty(); setStatus('Flagged ' + n(k) + ' suspect outline' + (k === 1 ? '' : 's')); }
+        refreshOutlinePanel();
+    });
+    var list = host.querySelector('#outlineSuspectList');
+    if (list) list.addEventListener('click', function (e) {
+        var rows = suspectRows(session);
+        var fb = e.target.closest('[data-flag]');
+        if (fb) {
+            var r = rows[+fb.dataset.flag];
+            if (r && flagSuspect(session, r)) { markDirty(); setStatus('Flagged ' + r.camera + ', frame ' + formatFrameNumber(r.frame + 1) + ': ' + r.detail); }
+            refreshOutlinePanel();
+            return;
+        }
+        var row = e.target.closest('.outline-suspect-row');
+        if (row) goToFlag(rows[+row.dataset.s]);
+    });
+}
+
+if (typeof window !== 'undefined') {
+    window.addEventListener('lucid:outlines-landed', function () { refreshSuspectList(); });
 }
 
 // ---------------------------------------------------------------------------

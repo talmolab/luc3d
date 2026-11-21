@@ -11,6 +11,7 @@
 import {
     OUTLINE_PARAMS, outlineParams, rgbaToGray, medianImage, ellipseElement, morph, components, fillHoles,
     segmentBlobs, areaModel, computeOutlines, traceBoundary, pointInPolygon, tailChain, animalFromInstance, normalizeAnimal,
+    keypointCheck, outlineSuspects, smoothTail,
 } from '../pose/outline-core.js';
 
 let passed = 0, failed = 0;
@@ -146,6 +147,19 @@ console.log('\n7. Tail tracing stops at another animal\'s body core (the topC 6,
     check(at(r3, 100, 70) === 1 && at(r3, 95, 70) === 1, 'a tail line over another animal does not take its body');
 }
 
+console.log('\n7b. …and never takes from a blob that is another animal\'s alone (topC 6,250 again)');
+{
+    // A and B apart; A's tail keypoints run across B's upper edge (the keypoints are wrong)
+    const img = frame(ellipse(60, 60, 26, 12), hline(60, 34, 14), ellipse(150, 70, 30, 14));
+    const A = mouse(60, 60, 1, 46);
+    const Awrong = { body: A.body, segments: A.segments, tail: [38, 60, 14, 60, 100, 57, 185, 57] };   // …then on along B's top
+    const r = computeOutlines(img, BG, W, H, [Awrong, mouse(150, 70, -1, 10)], { median: 1100, sd: 60, hi: 1400 });
+    let stolen = 0;
+    for (let y = 50; y < 64; y++) for (let x = 120; x < 181; x++) if (at(r, x, y) === 1) stolen++;
+    check(r.blobs.filter(b => b.kind === 'individual').length === 2 && stolen === 0, `B's upper edge stays B's (${stolen} px taken)`);
+    check(at(r, 20, 60) === 1, 'A\'s own tail is still traced');
+}
+
 console.log('\n8. A stray keypoint does not make a crossing; nobody\'s blob goes to a near animal or nobody');
 {
     const img = frame(ellipse(60, 60, 26, 12), ellipse(170, 110, 26, 12), ellipse(200, 30, 20, 10));
@@ -199,7 +213,71 @@ console.log('\n11. Skeletons: the tail chain and an animal from an instance');
     const a = animalFromInstance(inst, edges, ch);
     check(a.body.length === 12 && a.segments.length === 5 * 4, 'body: 6 points, 5 body edges (none into the tail)');
     check(a.tail.length === 8 && a.tail[0] === 25 && a.tail[6] === 45, 'tail: TTI, Tail_0, Tail_1, TailTip (the missing Tail_2 skipped)');
+    check(a.tailPts.length === 6 && a.tailPts[0] === 30, 'tail keypoints alone (for the check): Tail_0, Tail_1, TailTip');
     check(normalizeAnimal({ body: [1, 2, NaN, 3], segments: [0, 0, 1, NaN], tail: [1, 1] }).body.length === 2, 'normalizeAnimal drops non-finite points, short tails');
+}
+
+console.log('\n12. The DoublePoke skeleton: every tail node hangs off TTI (no tail path)');
+{
+    const dp = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2', 'Shoulder_left', 'Shoulder_right', 'Haunch_left', 'Haunch_right', 'Neck'];
+    const e = [[3, 5], [3, 7], [3, 8], [3, 9], [3, 12], [3, 13], [3, 6], [3, 4], [5, 0], [5, 14], [5, 10], [5, 11], [5, 1], [5, 2]];
+    const ch = tailChain(dp, e);
+    check(ch.tail.map(k => dp[k]).join() === 'TTI,Tail_0,Tail_1,Tail_2,TailTip', 'ordered by name: ' + ch.tail.map(k => dp[k]).join());
+    const ch2 = tailChain(['b', 'tail_tip', 'tail_mid', 'tail_base'], [[0, 1], [0, 2], [0, 3]]);
+    check(ch2.tail.map(k => ['b', 'tail_tip', 'tail_mid', 'tail_base'][k]).join() === 'b,tail_base,tail_mid,tail_tip', 'base, mid, tip by name');
+}
+
+console.log('\n13. A dim tail is still traced (tailThr below the bright level)');
+{
+    // 1 px wide and 17 over the floor: the open drops it from the blob, so only tracing can take it
+    const dimTail = (x, y) => (y === 60 && x >= 6 && x <= 34 ? floor(x, y) + 17 : null);
+    const img = frame(ellipse(60, 60, 26, 12), dimTail);
+    const A = mouse(60, 60, 1, 50);
+    const r = computeOutlines(img, BG, W, H, [A], null);
+    check(at(r, 20, 60) === 1, 'the dim tail is the mouse\'s');
+    const r2 = computeOutlines(img, BG, W, H, [A], null, { tailThr: 22 });
+    check(at(r2, 20, 60) === 0, 'and not at the bright level');
+}
+
+console.log('\n14. Keypoints that disagree with the outline');
+{
+    const img = frame(ellipse(60, 60, 26, 12), ellipse(170, 110, 26, 12));
+    const A = mouse(60, 60, 1, 40), B = mouse(170, 110, -1, 40);
+    const r = computeOutlines(img, BG, W, H, [A, B], null);
+    const animals = [{ body: A.body, tailPts: [30, 60, 20, 60] }, { body: B.body.concat([60, 60, 70, 60]), tailPts: [200, 110] }];
+    const chk = keypointCheck(r.labels, W, H, animals, 3);
+    check(chk[0].tail === 2 && chk[0].tailOut === 2 && chk[0].bodyOut === 0, 'A: its two tail keypoints are off its outline (no tail in the image)');
+    check(chk[1].bodyOther === 2 && chk[1].tailOut === 1, 'B: two body keypoints on A\'s outline; one tail keypoint off');
+    const sus = outlineSuspects(chk, r.animals.map(a => a.area), ['A', 'B']);
+    check(sus.length === 2 && sus[0].reason === 'tail' && /2 of 2 tail keypoints outside A/.test(sus[0].detail), 'A suspect: ' + (sus[0] && sus[0].detail));
+    check(sus[1] && sus[1].reason === 'split' && /on A/.test(sus[1].detail), 'B suspect: ' + (sus[1] && sus[1].detail));
+    const none = outlineSuspects(keypointCheck(r.labels, W, H, [{ body: [60, 60, 70, 60, 50, 60], tailPts: [] }, { body: [], tailPts: [] }], 3), [100, 0], ['A', 'B']);
+    check(none.length === 0, 'a pose its outline covers is no suspect');
+    const miss = outlineSuspects([{ body: 5, bodyOut: 5, bodyOther: 0, tail: 0, tailOut: 0, tailOther: 0, out: [] }], [0], ['C']);
+    check(miss.length === 1 && miss[0].reason === 'missed', 'a pose with no outline: missed animal');
+}
+
+console.log('\n15. Only visible misses count; a bent tail is followed (smooth curve)');
+{
+    const img = frame(ellipse(60, 60, 26, 12), ellipse(170, 110, 26, 12), hline(110, 196, 236));
+    const A = mouse(60, 60, 1, 40), B = mouse(170, 110, -1, 40);
+    A.tailPts = [30, 60, 20, 60];                    // over plain floor: no tail in the image
+    B.tailPts = [205, 110, 225, 110];
+    const r = computeOutlines(img, BG, W, H, [A, B], null);
+    check(r.check && r.check[0].tail === 2 && r.check[0].tailOut === 0, 'tail keypoints over plain floor are not the outline\'s fault');
+    check(r.check[1].tailOut === 0, 'a traced tail covers its keypoints');
+    const A2 = mouse(60, 60, 1, 40); A2.tailPts = [205, 110, 225, 110];          // on B's tail: visible, someone else's
+    const r2 = computeOutlines(img, BG, W, H, [A2, B], null);
+    check(r2.check[0].tailOut === 2 && r2.check[0].tailOther === 2, 'tail keypoints on another animal\'s tail count');
+    // five keypoints on a circle (centre (40,36), radius 26, every 40 degrees): between two of
+    // them the tail runs 1.6 px outside the straight chord; the smoothed tail stays on it
+    const onArc = (deg) => [40 + 26 * Math.cos(deg * Math.PI / 180), 36 + 26 * Math.sin(deg * Math.PI / 180)];
+    const sm = smoothTail([110, 150, 190, 230, 270].map(onArc).flat(), 16);
+    const mid = onArc(170);
+    let near = Infinity;
+    for (let i = 0; i < sm.length; i += 2) near = Math.min(near, Math.hypot(sm[i] - mid[0], sm[i + 1] - mid[1]));
+    check(near < 0.5, `the smoothed tail follows the bend: ${near.toFixed(2)} px from the arc (the chord: 1.57)`);
+    check(smoothTail([0, 0, 10, 0, 20, 0], 4).length === 2 + 2 * 2 * 4, 'smoothTail samples each segment');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

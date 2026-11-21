@@ -4368,11 +4368,20 @@ animals by their poses. DOM-free, typed arrays only; runs in
    animal and nobody near: `oversized`, all of it). Nobody in it: the animal whose
    body keypoints come within `reach` (15 px), `near`; else nobody (`unassigned`,
    listed as polygons when animal-sized, ≥ max(minArea, median/2)).
-4. **Tails**: bright pixels within `tailWidth` (7) px of an animal's tail polyline
-   become its own unless they lie in another animal's body core (its mask eroded
-   by `coreErode`, 4 px). The split never uses tails: a tail lying across another
-   animal would pull that animal's back pixels to it (the topC 6,250 screenshot).
-   Holes are filled BEFORE tracing, so a curled tail encloses no floor.
+4. **Tails**: pixels more than `tailThr` (14) grey levels over the empty arena
+   (tails are thin and dimmer than bodies) within `tailWidth` (7) px of an
+   animal's tail polyline become its own, unless they are another animal's: in
+   its body core (its mask eroded by `coreErode`, 4 px) or anywhere in a blob that
+   is that animal's alone (only a crossing's split can have handed a tail lying
+   alongside to the other animal). The split never uses tails: a tail lying across
+   another animal would pull that animal's back pixels to it (the topC 6,250
+   screenshot). Holes are filled BEFORE tracing, so a curled tail encloses no floor.
+   The polyline is smoothed first (`smoothTail`, centripetal Catmull-Rom): a tail
+   bends between its keypoints and straight segments cut its curves (frame 0 mid).
+   The polyline's node order comes from `tailChain`: along the edges when the tail
+   nodes form one path, else BY NAME — SLAP's DoublePoke skeleton hangs every tail
+   node off TTI (a star), and following edges gave TTI → TailTip → Tail_0 …, a
+   zigzag across the floor.
 5. **Small pieces**: bright pieces under `minArea` within `reattach` (6) px of
    exactly one animal join it (a forepaw the open cut off; exempt from the next
    rule); other pieces of an animal under `minPiece` (60) px go.
@@ -4386,10 +4395,21 @@ animals by their poses. DOM-free, typed arrays only; runs in
 model, params)` → `{labels: Uint8Array (0 = none, k = animals[k-1]), blobs: [{area,
 kind, animals, byArea}], animals: [{area, blobs, tail, reattached, posed}],
 contours: [[Float32Array]], unassigned: [Float32Array]}`, `traceBoundary`,
-`pointInPolygon`, `tailChain(nodeNames, edges)` (nodes named /tail/i, ordered along
-the edges from the body node they hang from: SLAP's TTI → Tail_0 … TailTip),
-`animalFromInstance(inst, edges, chain)` (body points, body edges, tail polyline;
-missing nodes skipped), `normalizeAnimal`, `labelImageContours(labels, w, h, n)`
+`pointInPolygon`, `tailChain(nodeNames, edges)` (nodes named /tail/i; along the
+edges when they form one path from the body, else by name: base/root, numbers,
+mid, unnumbered, tip/end; the body node they hang from first),
+`animalFromInstance(inst, edges, chain)` (body points, body edges, tail polyline,
+and `tailPts`, the tail keypoints alone; missing nodes skipped), `normalizeAnimal`,
+`keypointCheck(labels, w, h, animals, reach, gray?, bg?, visThr?)` (per animal its
+body and tail keypoints no pixel of its own outline comes within `reach` px of,
+and which lie on another animal's; with the frame and empty arena, a keypoint off
+every outline counts only where something over `visThr` lies within `reach`: over
+plain floor it is an occluded part or a wrong keypoint — on HardFight that cut
+the tail suspects from 2,382 of 5,272 camera frames; `computeOutlines` returns it
+as `check`, run in the worker with `thrLow`), `smoothTail(L, k)`, `outlineSuspects(check, areas, names)` (per animal at most
+one `{animal, reason, detail, weight}`: `missed` (a pose, no outline), `tail` (≥ 2
+tail keypoints off it), `split` (≥ 2 body keypoints on another's), `limb` (≥ 2 on
+none)), `labelImageContours(labels, w, h, n)`
 (a hand-painted label image's contours, as `computeOutlines` gives them).
 
 **Speed.** ~80 ms per 1280×1024 camera frame (Node, warm); the 39-frame median ~0.2 s.
@@ -9810,7 +9830,8 @@ camera and animal (`pose/outline-core.js`), drawn BEHIND the skeletons
   session and decoder, `BACKGROUND_FRAMES` (39) frames over the whole video
   (`sampleFrames`: the keyframe nearest each even spacing, from
   `keyframeIndices`, so each is one decode; evenly spaced frames when there are
-  fewer than min(39, 15) keyframes) read with `decoder.peekFrame` (never the
+  fewer than min(39, 15) keyframes; every frame when asked for at least as many
+  as the video has) read with `decoder.peekFrame` (never the
   playback path) and sent to the camera's worker. A progress card counts the
   frames; up to 4 cameras at once. The number of animals for the area model is
   `session.numAnimals` when it is a count, else the animals in view on the
@@ -9841,6 +9862,14 @@ camera and animal (`pose/outline-core.js`), drawn BEHIND the skeletons
   cannot hold its camera's queue.
 - `setOutlinePaintHook(fn)` runs `fn(view, frame, entry, opts)` after a view's
   outlines are painted (the brush's ring).
+- **Suspects**: every computed outline gets `entry.check` (the worker's
+  `keypointCheck`, visible misses only; `KEYPOINT_REACH` 3 px) and
+  `entry.suspects` (`outlineSuspects`); the keypoints
+  behind a suspect get red rings over everything (`paintSuspectKeypoints`).
+  `scanOutlines(session, views, frames, onProgress, cancelled)` works out (or
+  reuses) the outlines of every camera on `frames` and returns every suspect;
+  the last scan is `outlineScan(session)` (in memory). A landed outline fires
+  `lucid:outlines-landed` (debounced) for the tab's suspect list.
 - `outlineAnimalAt(session, cam, x, y)` hit-tests the outline last drawn in a
   camera (label image, then polygons); `drawnOutlines`, `cachedOutlines`,
   `outlineCameraState`, `resetOutlines`, `outlineAnimalCount`, `outlinesEnabled`,
@@ -9908,6 +9937,12 @@ and Rebuild empty arenas; and the flags on bad outlines (`pose/outline-flags.js`
   (`lucid-outline-flags` v1: flags, parameters, area models, per camera frame the
   animals the label image numbers and its blobs). Lazy frames are hydrated first;
   a camera frame without outlines is listed with `missing`.
+- **Suspect outlines**: the outlines the poses disagree with (`entry.suspects`) on
+  the frame shown, plus the last Check… (N frames spread over the video,
+  `sampleFrames` at the first camera's keyframes; Esc stops; progress card):
+  click goes there, Flag makes a flag with the reason and the finding as its note,
+  Flag all flags every listed one (`suspectRows`, `checkOutlineFrames`,
+  `refreshSuspectList` on `lucid:outlines-landed`).
 - **Correct outlines**: the brush's on/off, size, which animal a stroke off every
   animal draws (the last view's animals), and the corrected camera frames (click
   goes there, ✕ throws the correction away, dirty).

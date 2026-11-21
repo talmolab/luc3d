@@ -23,10 +23,13 @@
 //    keypoints come within `reach` px of it, else to nobody. Poses come from
 //    the camera's own 2D detection, else from the animal's 3D projected into it
 //    (the caller supplies whichever it has).
-// 4. Tails, traced: bright pixels within `tailWidth` px of an animal's tail
+// 4. Tails, traced: pixels more than `tailThr` (14) grey levels over the empty
+//    arena (tails are thin and dimmer than bodies) within `tailWidth` px of an animal's tail
 //    polyline (its tail keypoints from the body point they hang from) become
-//    that animal's, unless they lie in another animal's body core (its mask
-//    eroded by `coreErode` px; a tail does not survive that, a body does).
+//    that animal's, unless they are another animal's: in its body core (its
+//    mask eroded by `coreErode` px; a tail does not survive that, a body does),
+//    or anywhere in a blob that is that animal's alone (only a crossing's split
+//    can have handed a tail lying alongside to the other animal).
 // 5. Small bright pieces (a forepaw cut off by the open) within `reattach` px of
 //    exactly one animal join it; pieces of an animal under `minPiece` px go.
 //
@@ -42,6 +45,8 @@ export const OUTLINE_PARAMS = Object.freeze({
     areaSigmas: 4,      // single-animal area model: median + k s.d.
     reach: 15,          // px: a blob nobody is in goes to an animal this close
     tailWidth: 7,       // px each side of a tail polyline
+    tailThr: 14,        // grey levels over the empty arena that a tail pixel needs (tails are thin and dim)
+    keypointReach: 3,   // px: a keypoint this close to its animal's outline is on it
     coreErode: 4,       // px: another animal's body core blocks tail tracing
     reattach: 6,        // px: a small bright piece this close to one animal joins it (0 = off)
     reattachMin: 6,     // px: smaller bright pieces are noise
@@ -408,7 +413,40 @@ export function normalizeAnimal(a) {
         if (isFinite(s[i]) && isFinite(s[i + 1]) && isFinite(s[i + 2]) && isFinite(s[i + 3])) segs.push(s[i], s[i + 1], s[i + 2], s[i + 3]);
     }
     var tail = finitePts(a && a.tail);
-    return { body: body, segments: segs, tail: tail.length >= 4 ? tail : null };
+    return { body: body, segments: segs, tail: tail.length >= 4 ? tail : null, tailPts: finitePts(a && a.tailPts) };
+}
+
+/**
+ * A tail polyline made smooth: a centripetal Catmull-Rom curve through its
+ * points, `k` samples per segment. A tail bends between its keypoints, and the
+ * straight segments cut its curves (frame 0 mid: the tail bows outside them).
+ */
+export function smoothTail(L, k) {
+    var n = L ? L.length >> 1 : 0;
+    if (n < 3) return L;
+    k = k || 8;
+    var P = function (i) { i = Math.max(0, Math.min(n - 1, i)); return [L[2 * i], L[2 * i + 1]]; };
+    var out = [L[0], L[1]];
+    for (var i = 0; i < n - 1; i++) {
+        var p0 = i > 0 ? P(i - 1) : [2 * L[0] - L[2], 2 * L[1] - L[3]];
+        var p1 = P(i), p2 = P(i + 1);
+        var p3 = i + 2 < n ? P(i + 2) : [2 * p2[0] - p1[0], 2 * p2[1] - p1[1]];
+        var d = function (a, b) { return Math.max(1e-6, Math.pow(Math.hypot(b[0] - a[0], b[1] - a[1]), 0.5)); };
+        var t0 = 0, t1 = t0 + d(p0, p1), t2 = t1 + d(p1, p2), t3 = t2 + d(p2, p3);
+        for (var j = 1; j <= k; j++) {
+            var t = t1 + (t2 - t1) * j / k;
+            var A1 = lerp(p0, p1, t0, t1, t), A2 = lerp(p1, p2, t1, t2, t), A3 = lerp(p2, p3, t2, t3, t);
+            var B1 = lerp(A1, A2, t0, t2, t), B2 = lerp(A2, A3, t1, t3, t);
+            var C = lerp(B1, B2, t1, t2, t);
+            out.push(C[0], C[1]);
+        }
+    }
+    return out;
+}
+
+function lerp(a, b, ta, tb, t) {
+    var u = (t - ta) / (tb - ta);
+    return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
 }
 
 /**
@@ -507,9 +545,14 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
     var traced = new Int32Array(A.length + 1);
     if (P.tailWidth > 0 && A.some(function (z) { return z.tail; })) {
         var core = cores(labels, w, h, A.length, P.coreErode);
+        // where a tail may take another animal's pixels: only in a crossing, whose
+        // split by body skeleton may have given a tail lying alongside to the other
+        // animal; never in a blob that is one animal's alone
+        var shared = new Uint8Array(nb + 1);
+        for (var sb = 0; sb < blobInfo.length; sb++) shared[sb + 1] = blobInfo[sb].animals.length > 1 ? 1 : 0;
         var tw2 = P.tailWidth * P.tailWidth;
         for (var t = 0; t < A.length; t++) {
-            var L = A[t].tail;
+            var L = smoothTail(A[t].tail, 8);
             if (!L) continue;
             var tv = t + 1;
             var bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
@@ -521,9 +564,10 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
             var tx1 = Math.min(w - 1, Math.ceil(bx1 + P.tailWidth)), ty1 = Math.min(h - 1, Math.ceil(by1 + P.tailWidth));
             for (var ty = ty0; ty <= ty1; ty++) {
                 for (var tx = tx0, tp = ty * w + tx0; tx <= tx1; tx++, tp++) {
-                    if (!seg.bright[tp] || labels[tp] === tv) continue;
+                    if (gray[tp] - bg[tp] <= P.tailThr || labels[tp] === tv) continue;
                     var cv = core[tp];
                     if (cv && cv !== tv) continue;
+                    if (labels[tp] && blob[tp] && !shared[blob[tp]]) continue;
                     var near = false;
                     for (var sj = 0; sj + 3 < L.length; sj += 2) {
                         if (segDist2(tx, ty, L[sj], L[sj + 1], L[sj + 2], L[sj + 3]) <= tw2) { near = true; break; }
@@ -589,7 +633,9 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
         animalsOut.push({ area: areas[ai + 1], blobs: kinds, tail: traced[ai + 1], reattached: reattached[ai + 1], posed: (A[ai].body.length >> 1) });
     }
     contours.shift();
-    return { labels: labels, blobs: blobInfo, animals: animalsOut, contours: contours, unassigned: unassigned };
+    // keypoints the outline misses where the image shows something there
+    var check = keypointCheck(labels, w, h, A, P.keypointReach, gray, bg, P.thrLow);
+    return { labels: labels, blobs: blobInfo, animals: animalsOut, contours: contours, unassigned: unassigned, check: check };
 }
 
 // Raster-first pixel of label `v` inside its box.
@@ -741,9 +787,13 @@ export function pointInPolygon(poly, x, y) {
 
 /**
  * Which of a skeleton's nodes are the tail, and the tail polyline's node order:
- * nodes named like /tail/i, ordered along the skeleton's edges from the body
- * node they hang from (e.g. TTI → Tail_0 → … → TailTip). -> { tail: number[]
- * (node indices, the body node first when there is one), isTail: boolean[] }.
+ * nodes named like /tail/i, ordered along the skeleton's edges when the tail
+ * nodes form one path from the body (TTI → Tail_0 → … → TailTip), else by
+ * name (base / root first, then by their numbers, mid, unnumbered in skeleton
+ * order, tip / end last): SLAP's DoublePoke skeleton hangs every tail node
+ * straight off TTI, so its edges say nothing about the order. The body node the
+ * tail hangs from comes first when an edge names one. -> { tail: number[] (node
+ * indices, the body node first when there is one), isTail: boolean[] }.
  */
 export function tailChain(nodeNames, edges) {
     var n = nodeNames.length;
@@ -755,27 +805,44 @@ export function tailChain(nodeNames, edges) {
     for (var a = 0; a < n; a++) adj.push([]);
     (edges || []).forEach(function (e) {
         var u = e[0], v = e[1];
-        if (u >= 0 && v >= 0 && u < n && v < n) { adj[u].push(v); adj[v].push(u); }
+        if (u >= 0 && v >= 0 && u < n && v < n && u !== v) { adj[u].push(v); adj[v].push(u); }
     });
-    // start: a tail node touching a body node
-    var base = -1, start = -1;
-    for (var t = 0; t < tailIdx.length && start < 0; t++) {
-        var nb = adj[tailIdx[t]];
-        for (var j = 0; j < nb.length; j++) if (!isTail[nb[j]]) { start = tailIdx[t]; base = nb[j]; break; }
+    var tailNb = function (k) { return adj[k].filter(function (j) { return isTail[j]; }); };
+    var bodyNb = function (k) { return adj[k].filter(function (j) { return !isTail[j]; }); };
+    // one path through every tail node, starting at a tail node that touches the body?
+    var order = null;
+    var ends = tailIdx.filter(function (k) { return tailNb(k).length <= 1; });
+    var isPath = tailIdx.every(function (k) { return tailNb(k).length <= 2; }) && ends.length === (tailIdx.length === 1 ? 1 : 2);
+    if (isPath) {
+        var start = ends.find(function (k) { return bodyNb(k).length > 0; });
+        if (start != null) {
+            order = [start];
+            var seen = new Set(order), cur = start;
+            for (;;) {
+                var nx = tailNb(cur).find(function (j) { return !seen.has(j); });
+                if (nx == null) break;
+                order.push(nx); seen.add(nx); cur = nx;
+            }
+            if (order.length !== tailIdx.length) order = null;
+        }
     }
-    if (start < 0) return { tail: tailIdx.slice(), isTail: isTail };   // no edges: skeleton order
-    var order = [start], seen = new Uint8Array(n);
-    seen[start] = 1;
-    var cur = start;
-    for (;;) {
-        var nxt = -1;
-        for (var k = 0; k < adj[cur].length; k++) { var c = adj[cur][k]; if (isTail[c] && !seen[c]) { nxt = c; break; } }
-        if (nxt < 0) break;
-        seen[nxt] = 1; order.push(nxt); cur = nxt;
-    }
-    // tail nodes off the chain follow in skeleton order
-    for (var r = 0; r < tailIdx.length; r++) if (!seen[tailIdx[r]]) order.push(tailIdx[r]);
-    return { tail: [base].concat(order), isTail: isTail };
+    if (!order) order = tailIdx.slice().sort(function (x, y) { return tailRank(nodeNames[x], x) - tailRank(nodeNames[y], y); });
+    var base = -1;
+    var b0 = bodyNb(order[0]);
+    if (b0.length) base = b0[0];
+    else for (var t = 0; t < order.length && base < 0; t++) { var bn = bodyNb(order[t]); if (bn.length) base = bn[0]; }
+    return { tail: base >= 0 ? [base].concat(order) : order, isTail: isTail };
+}
+
+// Where a tail node's name puts it along the tail (smaller: nearer the body).
+function tailRank(name, idx) {
+    var s = String(name || '').toLowerCase();
+    if (/base|root|start|prox/.test(s)) return -1e6 + idx;
+    if (/tip|end|dist/.test(s)) return 1e6 + idx;
+    var m = s.match(/(\d+)(?!.*\d)/);
+    if (m) return +m[1] * 1000 + idx;
+    if (/mid/.test(s)) return 5e5 + idx;
+    return 6e5 + idx;
 }
 
 /**
@@ -794,8 +861,111 @@ export function animalFromInstance(inst, edges, chain) {
         if (chain.isTail[u] || chain.isTail[v] || !has(u) || !has(v)) return;
         segments.push(inst.getX(u), inst.getY(u), inst.getX(v), inst.getY(v));
     });
-    chain.tail.forEach(function (k) { if (has(k)) tail.push(inst.getX(k), inst.getY(k)); });
-    return { body: body, segments: segments, tail: tail.length >= 4 ? tail : null };
+    var tailPts = [];
+    chain.tail.forEach(function (k) {
+        if (!has(k)) return;
+        tail.push(inst.getX(k), inst.getY(k));
+        if (chain.isTail[k]) tailPts.push(inst.getX(k), inst.getY(k));
+    });
+    return { body: body, segments: segments, tail: tail.length >= 4 ? tail : null, tailPts: tailPts };
+}
+
+/**
+ * Do an animal's keypoints lie in its own outline? Per animal (in the order the
+ * label image numbers them: k = animals[k-1]): its body and tail keypoints
+ * (`body`, `tailPts`) that no pixel of its outline comes within `reach` px of
+ * (`out`: [x, y, isTail, otherLabel] each; `otherLabel` > 0 when the keypoint
+ * lies on another animal's outline), and their counts. With the frame and its
+ * empty arena (`gray`, `bg`), a keypoint off every outline counts only where
+ * something more than `visThr` over the empty arena lies within `reach` (the
+ * part is visible, and the outline missed it); over plain floor it is an
+ * occluded part or a wrong keypoint, not the outline's fault. A pose the outline
+ * does not follow: a missed tail or limb, or the split given to the wrong animal.
+ */
+export function keypointCheck(labels, w, h, animals, reach, gray, bg, visThr) {
+    var R = reach == null ? 3 : reach, R2 = R * R;
+    var seen = gray && bg ? function (xi, yi) {
+        // something brighter than the empty arena within `reach`: the part is visible there
+        for (var dy = -R; dy <= R; dy++) {
+            var yy = yi + dy;
+            if (yy < 0 || yy >= h) continue;
+            for (var dx = -R; dx <= R; dx++) {
+                var xx = xi + dx;
+                if (xx < 0 || xx >= w || dx * dx + dy * dy > R2) continue;
+                if (gray[yy * w + xx] - bg[yy * w + xx] > visThr) return true;
+            }
+        }
+        return false;
+    } : null;
+    return (animals || []).map(function (a, i) {
+        var k = i + 1;
+        var res = { body: 0, bodyOut: 0, bodyOther: 0, tail: 0, tailOut: 0, tailOther: 0, out: [], visible: !!seen };
+        var test = function (pts, isTail) {
+            for (var j = 0; j + 1 < (pts ? pts.length : 0); j += 2) {
+                var x = pts[j], y = pts[j + 1];
+                if (!isFinite(x) || !isFinite(y)) continue;
+                var xi = Math.floor(x), yi = Math.floor(y);
+                if (xi < -R || yi < -R || xi >= w + R || yi >= h + R) continue;   // off the image: nothing to say
+                if (isTail) res.tail++; else res.body++;
+                var own = false;
+                for (var dy = -R; dy <= R && !own; dy++) {
+                    var yy = yi + dy;
+                    if (yy < 0 || yy >= h) continue;
+                    for (var dx = -R; dx <= R; dx++) {
+                        var xx = xi + dx;
+                        if (xx < 0 || xx >= w || dx * dx + dy * dy > R2) continue;
+                        if (labels[yy * w + xx] === k) { own = true; break; }
+                    }
+                }
+                if (own) continue;
+                var other = xi >= 0 && yi >= 0 && xi < w && yi < h ? labels[yi * w + xi] : 0;
+                // with the image at hand, a keypoint over plain floor (an occluded or unseen part,
+                // or a wrong keypoint) is not the outline's fault: only visible misses count
+                if (!other && seen && !seen(xi, yi)) continue;
+                if (isTail) { res.tailOut++; if (other) res.tailOther++; } else { res.bodyOut++; if (other) res.bodyOther++; }
+                res.out.push(x, y, isTail ? 1 : 0, other);
+            }
+        };
+        test(a.body, false);
+        test(a.tailPts, true);
+        return res;
+    });
+}
+
+/**
+ * Suspect outlines from `keypointCheck` (and each animal's outline area): per
+ * animal at most one `{animal: index, reason, detail, weight}` (reasons as
+ * pose/outline-flags.js names them): no outline at all ('missed'), two or more
+ * tail keypoints off it ('tail'), two or more body keypoints on another
+ * animal's outline ('split'), two or more body keypoints on no outline
+ * ('limb'). `names[i]` names animal i in the detail.
+ */
+export function outlineSuspects(check, areas, names) {
+    var out = [];
+    var nm = function (i) { return (names && names[i]) || ('animal ' + (i + 1)); };
+    (check || []).forEach(function (c, i) {
+        var area = areas ? areas[i] : 1;
+        if (!area && c.body >= 3) { out.push({ animal: i, reason: 'missed', detail: 'no outline for ' + nm(i) + '\u2019s pose', weight: c.body + c.tail }); return; }
+        var otherOf = function (isTail) {
+            var cnt = {};
+            for (var j = 0; j < c.out.length; j += 4) if ((c.out[j + 2] === 1) === isTail && c.out[j + 3] > 0) cnt[c.out[j + 3]] = (cnt[c.out[j + 3]] || 0) + 1;
+            var best = 0, bk = 0;
+            for (var key in cnt) if (cnt[key] > best) { best = cnt[key]; bk = +key; }
+            return bk ? nm(bk - 1) : null;
+        };
+        if (c.tailOut >= 2) {
+            var o = c.tailOther ? otherOf(true) : null;
+            out.push({ animal: i, reason: 'tail', weight: c.tailOut,
+                detail: c.tailOut + ' of ' + c.tail + ' tail keypoints outside ' + nm(i) + '\u2019s outline' + (o ? ' (' + c.tailOther + ' on ' + o + '\u2019s)' : '') });
+        } else if (c.bodyOther >= 2) {
+            out.push({ animal: i, reason: 'split', weight: c.bodyOther,
+                detail: c.bodyOther + ' of ' + c.body + ' body keypoints of ' + nm(i) + ' on ' + (otherOf(false) || 'another animal') + '\u2019s outline' });
+        } else if (c.bodyOut - c.bodyOther >= 2) {
+            out.push({ animal: i, reason: 'limb', weight: c.bodyOut - c.bodyOther,
+                detail: (c.bodyOut - c.bodyOther) + ' of ' + c.body + ' body keypoints of ' + nm(i) + ' outside every outline' });
+        }
+    });
+    return out;
 }
 
 /**

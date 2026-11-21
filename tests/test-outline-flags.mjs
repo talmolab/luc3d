@@ -53,7 +53,7 @@ console.log('\n2. metadata.lucid: written only when there are flags, read back e
     addOutlineFlag(s, { frame: 6249, camera: 'topC', animal: 'id_0', identity: 0, track: 1, source: '3d', reason: 'tail', note: 'tail across the other mouse', at: '2026-11-21T08:00:00.000Z' });
     addOutlineFlag(s, { frame: 0, camera: 'mid', reason: 'limb', at: '2026-11-21T08:01:00.000Z' });
     const lucid = writeOutlineFlagsMetadata({ sessionName: 'x' }, s);
-    check(Object.keys(lucid).join() === 'sessionName,outlineFlags' && OUTLINE_FLAGS_METADATA_KEYS.join() === 'outlineFlags', 'one key, outlineFlags');
+    check(Object.keys(lucid).join() === 'sessionName,outlineFlags' && OUTLINE_FLAGS_METADATA_KEYS.join() === 'outlineFlags,outlineEdits', 'only outlineFlags (no corrections: no outlineEdits)');
     check(JSON.stringify(lucid.outlineFlags.flags[0]) === '{"frame":0,"camera":"mid","reason":"limb","at":"2026-11-21T08:01:00.000Z"}', 'empty fields are left out');
     const back = readOutlineFlagsMetadata({ outlineFlags: [{ frame: 1, camera: 'z', reason: 'limb' }] }, JSON.parse(JSON.stringify(lucid)));
     check(JSON.stringify(back.outlineFlags) === JSON.stringify(s.outlineFlags), 'read back: the same flags, and the old ones replaced');
