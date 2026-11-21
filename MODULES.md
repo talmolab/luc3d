@@ -16161,8 +16161,13 @@ current session, overlay reprojected points3d from H5.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session
-(`adoptCampyRecording`, `loading/session-loader.js`): a camera whose campy video
-was picked loads only that video, views follow campy's camera order, the frame
+(`adoptCampyRecording`, `loading/session-loader.js`), read BEFORE videos are
+placed on cameras: campy's own video for each camera goes first, so it wins the
+first-of-equals picks (`assignFolderVideos`, `preferNonCalibrationVideos`) over
+another video in the same camera folder whatever order the browser listed the
+folder in (read afterwards, that order decided: CI's Linux listing loaded the
+other one). A camera whose campy video was picked loads only that video, views
+follow campy's camera order, the frame
 rate is session.json's, and the final status gains each session's warnings
 (`campyRecordingWarnings`). No calibration hash check here: the calibration
 came from the `.slp`.
