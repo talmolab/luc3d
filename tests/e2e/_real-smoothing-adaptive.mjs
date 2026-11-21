@@ -14,8 +14,10 @@
  *   - agreement: |smoothed - unsmoothed| per node, mm, overall and by speed
  *     (|x[t+1] - x[t-1]| / 2 under 1 mm/frame vs over 10);
  *   - the run's time, mean window and fallback count (its status).
- * Then checks This frame against All frames, bit for bit, on random frames, and
- * how many group members were read from the store (released 2D).
+ * Also reports how big the per-point covariances come out (spread, largest
+ * axis, the 2D noise estimate, views). Then checks This frame against All
+ * frames, bit for bit, on random frames; the load line says how many group
+ * members were released (their 2D read from the store).
  */
 import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
@@ -98,6 +100,68 @@ try {
     log(`[${el()}] loaded ${JSON.stringify(info)}`);
     check(!info.err && info.groups > 0, 'project opened, with 3D');
 
+    // How big the per-point covariances come out: each node's 1-sd spread
+    // sqrt(trace / 3) and its largest axis, in mm, and the 2D noise estimate s
+    // (px), on every node of 3,000 random groups (the views as the pass reads
+    // them: resident 2D, or the store row of a released member).
+    const cov = await page.evaluate(async () => {
+        const AT = await import('/pose/adaptive-temporal-averaging.js');
+        const TC = await import('/pose/triangulation-core.js');
+        const s = window.__lucid.state.session;
+        const cams = new Map(s.cameras.filter(c => TC.cameraIncludedInSolves(c.name)).map(c => [c.name, c]));
+        const thr = TC.solveReprojErrorThreshold();
+        const frames = [...s.instanceGroups.keys()];
+        let seed = 7;
+        const spread = [], major = [], noise = [], views = [];
+        const out = new Float64Array(6), us = new Float64Array(16), vs = new Float64Array(16);
+        for (let i = 0; i < 3000; i++) {
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+            const f = frames[seed % frames.length];
+            for (const g of s.instanceGroups.get(f) || []) {
+                const X = window.__raw.get(f + '|' + g.identityId);
+                if (!X) continue;
+                for (let k = 0; k * 3 < X.length; k++) {
+                    if (!Number.isFinite(X[3 * k])) continue;
+                    const vc = []; let n = 0;
+                    for (const [cam, m] of g.instances) {
+                        const c = cams.get(cam);
+                        if (!c || !m || (m.nulledNodes && m.nulledNodes.has(k))) continue;
+                        let u, v;
+                        if (m._lazy2d) {
+                            const r = s.lazyLoader.storeRowPoints(cam, f, m._rawInstIndex);
+                            if (!r || !(r.start + k < r.end)) continue;
+                            u = Number(r.x[r.start + k]); v = Number(r.y[r.start + k]);
+                        } else {
+                            if (!m.hasPoint(k)) continue;
+                            u = m.getX(k); v = m.getY(k);
+                        }
+                        if (Number.isNaN(u) || !Number.isFinite(v)) continue;
+                        vc.push(c); us[n] = u; vs[n] = v; n++;
+                    }
+                    const sp = AT.dltPointCovarianceInto([X[3 * k], X[3 * k + 1], X[3 * k + 2]], vc, us, vs, n, { reprojErrorThreshold: thr }, out, 0);
+                    if (!Number.isFinite(sp)) continue;
+                    noise.push(sp); views.push(n);
+                    spread.push(Math.sqrt((out[0] + out[3] + out[5]) / 3));
+                    // Largest eigenvalue of the 3x3 (power iteration).
+                    let v0 = [1, 1, 1];
+                    for (let it = 0; it < 30; it++) {
+                        const w = [out[0] * v0[0] + out[1] * v0[1] + out[2] * v0[2], out[1] * v0[0] + out[3] * v0[1] + out[4] * v0[2], out[2] * v0[0] + out[4] * v0[1] + out[5] * v0[2]];
+                        const nn = Math.hypot(w[0], w[1], w[2]); v0 = w.map(x => x / nn);
+                    }
+                    const lam = v0[0] * (out[0] * v0[0] + out[1] * v0[1] + out[2] * v0[2]) + v0[1] * (out[1] * v0[0] + out[3] * v0[1] + out[4] * v0[2]) + v0[2] * (out[2] * v0[0] + out[4] * v0[1] + out[5] * v0[2]);
+                    major.push(Math.sqrt(lam));
+                }
+            }
+        }
+        const q = (a, p) => { const b = Float64Array.from(a).sort(); return b[Math.min(b.length - 1, Math.floor(p * (b.length - 1) + 0.5))]; };
+        const pct = (a) => [0.1, 0.5, 0.9, 0.99].map(p => q(a, p));
+        return { n: spread.length, spread: pct(spread), major: pct(major), noise: pct(noise), views: pct(views), threshold: thr };
+    });
+    const f2 = (a) => a.map(v => v.toFixed(2)).join(' / ');
+    log(`[${el()}] point covariances on ${cov.n.toLocaleString('en-US')} nodes (p10 / median / p90 / p99): ` +
+        `spread ${f2(cov.spread)} mm, largest axis ${f2(cov.major)} mm, 2D noise ${f2(cov.noise)} px, views ${cov.views.join(' / ')}` +
+        (cov.threshold ? `, reprojection threshold ${cov.threshold} px` : ''));
+
     // Metrics of the session's 3D now against window.__raw.
     const metrics = () => page.evaluate(async () => {
         const TS = await import('/pose/temporal-smoothing.js');
@@ -148,7 +212,18 @@ try {
         };
     });
 
-    const runAll = (params) => page.evaluate(async (params) => {
+    // `direct`: run the pass itself with these params (for a setting
+    // Settings does not hold, such as smoothAtaCovariance), not the button.
+    const runAll = (params, direct) => page.evaluate(async ({ params, direct }) => {
+        if (direct) {
+            const TS = await import('/pose/temporal-smoothing.js');
+            const t0 = performance.now();
+            const r = await TS.smoothSessionAsync(window.__lucid.state.session, params, {});
+            return {
+                ms: performance.now() - t0,
+                status: `direct: ${r.frames} poses (${TS.describeSmoothingConfig(r.config)}; mean window ${(r.meanWindow || 0).toFixed(1)} frames, ${r.fallbackPoints || 0} of ${r.points || 0} points on the node sigma)`,
+            };
+        }
         const S = await import('/ui/settings.js');
         S.setSmoothingParams(params);
         const st = document.getElementById('statusText');
@@ -163,19 +238,19 @@ try {
         document.getElementById('tbSmooth').click();
         await done;
         return { ms: performance.now() - t, status: st.textContent };
-    }, params);
+    }, { params, direct: !!direct });
 
     const f1 = (v) => (Number.isFinite(v) ? v.toFixed(2) : '–');
     const RUNS = [
         ['adaptive, gate 3 (default)', { smoothMethod: 1 }],
-        ['adaptive, gate 3, node sigma only', { smoothMethod: 1, smoothAtaCovariance: 'sigma' }],
+        ['adaptive, gate 3, node sigma only', { smoothMethod: 1, smoothAtaCovariance: 'sigma' }, true],
         ['adaptive, gate 4', { smoothMethod: 1, smoothAtaK: 4 }],
         ['adaptive, gate 2', { smoothMethod: 1, smoothAtaK: 2 }],
         ['windows: median 3 + Gaussian 7', { smoothMethod: 0, smoothMedianWindow: 3, smoothGaussianWindow: 7 }],
     ];
     const rows = [];
-    for (const [label, params] of RUNS) {
-        const r = await runAll(params);
+    for (const [label, params, direct] of RUNS) {
+        const r = await runAll(params, direct);
         const m = await metrics();
         rows.push({ label, r, m });
         log(`[${el()}] ${label}: ${(r.ms / 1000).toFixed(1)} s — ${r.status}`);
