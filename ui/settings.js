@@ -533,17 +533,21 @@ export function getTrackingThresholds() {
 //
 // `method` says which method a parameter belongs to ('windows' | 'adaptive');
 // the panel shows only the chosen method's. `smoothMethod` is a choice stored
-// as a number (0 = windows, 1 = adaptive; `resolveSmoothingParams`), default
-// the windows, so a project smooths as before until the method is changed.
+// as a number (0 = windows, 1 = adaptive; `resolveSmoothingParams`). The
+// default is Adaptive, which smooths on the first click with nothing to set —
+// except for someone who set a median or Gaussian window before the method
+// existed: with no stored method and a window above 0 they keep the windows
+// (`getSmoothingParam`) until they choose. So `smoothMethod` is always stored
+// once given (`setSmoothingParams`), even at the default.
 export const SMOOTH_METHOD_CHOICES = [
-    { value: 0, label: 'Median + Gaussian windows' },
     { value: 1, label: 'Adaptive (3D adaptive temporal averaging)' },
+    { value: 0, label: 'Median + Gaussian windows' },
 ];
 export const SMOOTHING_PARAMS = [
     {
-        id: 'smoothMethod', label: 'Method', default: 0,
+        id: 'smoothMethod', label: 'Method', default: 1,
         min: 0, max: 1, step: 1, kind: 'choice', options: SMOOTH_METHOD_CHOICES,
-        desc: 'Median + Gaussian windows: fixed windows you set, the same for every node and frame. Adaptive: each node\'s window, per frame, grows while its next 3D point lies within the gate of this one (judged by both points\' uncertainty, from their camera views) and is cut symmetric, then the points are averaged, the more certain ones counting more. Long windows on a still node, a frame or two in fast motion, and no window across a jump (an ID swap) or a gap. On 60 fps mice it never made the 3D worse and halved frame-to-frame jitter.',
+        desc: 'Adaptive (the default): each node\'s window, per frame, grows while its next 3D point lies within the gate of this one (judged by both points\' uncertainty, from their camera views) and is cut symmetric, then the points are averaged, the more certain ones counting more. Long windows on a still node, a frame or two in fast motion, and no window across a jump (an ID swap) or a gap. On 60 fps mice it never made the 3D worse and halved frame-to-frame jitter. Median + Gaussian windows: fixed windows you set, the same for every node and frame.',
     },
     {
         id: 'smoothAtaK', label: 'Gate (standard deviations)', default: 3, method: 'adaptive',
@@ -592,12 +596,22 @@ export function getSmoothingParamDefs() {
     });
 }
 
-// Effective value for one smoothing parameter.
+// Effective value for one smoothing parameter. With no stored method, a
+// median or Gaussian window set above 0 (stored before the method existed)
+// keeps the windows method; otherwise the default, Adaptive.
 export function getSmoothingParam(id) {
     var def = _smoothById.get(id);
     if (!def) return null;
     var v = clampThreshold(def, _settings.smoothingParams[id]);
-    return v == null ? def.default : v;
+    if (v != null) return v;
+    if (id === 'smoothMethod' && windowsAlreadySet()) return 0;
+    return def.default;
+}
+
+function windowsAlreadySet() {
+    return ['smoothMedianWindow', 'smoothGaussianWindow'].some(function (id) {
+        return clampThreshold(_smoothById.get(id), _settings.smoothingParams[id]) > 0;
+    });
 }
 
 // Effective values as an { id: value } map — the form `smoothSession` reads.
@@ -616,7 +630,9 @@ export function setSmoothingParams(map) {
             var def = _smoothById.get(id);
             if (!def) return;
             var v = clampThreshold(def, map[id]);
-            if (v != null && v !== def.default) next[id] = v;
+            // The method is kept even at the default: without it, set windows
+            // would bring back the windows (`getSmoothingParam`).
+            if (v != null && (v !== def.default || id === 'smoothMethod')) next[id] = v;
         });
     }
     _settings.smoothingParams = next;

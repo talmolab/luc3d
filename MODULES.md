@@ -2606,8 +2606,9 @@ missing view fabricates an observation that then votes in triangulation as if
 it were real data.
 
 **Two methods** (`resolveSmoothingParams`' `method`, Settings' `smoothMethod`
-0/1): the windows below (the default), or **adaptive** — see the end of this
-entry.
+0/1): **adaptive** (Settings' default; see the end of this entry), or the
+windows below (what params without `smoothMethod` resolve to, for direct
+callers and tests).
 
 **Algorithm.** Two independently switchable stages over each node's 1D
 coordinate signals (15 nodes = 45 signals per identity; nodes never enter each
@@ -10365,8 +10366,12 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `filterMinInstanceScore`). Same clamp + drop-if-default persistence as the
   thresholds, under `_settings.smoothingParams`. Read by `ui/ui-wiring.js` and
   passed to `smoothSession` (`pose/temporal-smoothing.js`). The method:
-  `smoothMethod` (`kind: 'choice'`, `options` = `SMOOTH_METHOD_CHOICES`: 0 =
-  Median + Gaussian windows, the default; 1 = Adaptive), and the adaptive
+  `smoothMethod` (`kind: 'choice'`, `options` = `SMOOTH_METHOD_CHOICES`: 1 =
+  Adaptive, the default; 0 = Median + Gaussian windows). With no stored
+  method, a median or Gaussian window stored above 0 (set before the method
+  existed) keeps the windows (`getSmoothingParam`), so nobody's Smooth click
+  changes method unasked; `setSmoothingParams` therefore stores `smoothMethod`
+  even at the default. And the adaptive
   method's `smoothAtaK` (gate, 3) and `smoothAtaHmax` (longest half-window,
   15). Each method's own entries carry `method: 'windows' | 'adaptive'`;
   `getSmoothingParamDefs` passes `kind`, `options` and `method` on.

@@ -328,7 +328,11 @@ export function smoothSignalInto(src, dst, segments, opts, scratchV, scratchW) {
     }
 }
 
-/** `smoothMethod` values (Settings stores a number): 0 = windows, 1 = adaptive. */
+/**
+ * `smoothMethod` values (Settings stores a number): 0 = windows, 1 = adaptive.
+ * Params without one resolve to the windows (direct callers, tests); the app's
+ * default, Adaptive, is Settings' (`ui/settings.js` `getSmoothingParam`).
+ */
 export const SMOOTH_METHOD_WINDOWS = 'windows';
 export const SMOOTH_METHOD_ADAPTIVE = 'adaptive';
 

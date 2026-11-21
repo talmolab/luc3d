@@ -3,9 +3,10 @@
  * adaptive temporal averaging, pose/adaptive-temporal-averaging.js) through
  * the real toolbar, on the shared BA rig fixture (3 distorted cameras, 2 px
  * noise on every 2D observation, two animals drifting):
- *   A. the Smooth menu's Method radio sets Settings ▸ Temporal Smoothing's
- *      Method, and the Settings panel shows only the chosen method's rows (the
- *      windows figure only for the windows);
+ *   A. Adaptive is the default, except for someone who had set a window (no
+ *      method stored); the Smooth menu's Method radio sets Settings ▸
+ *      Temporal Smoothing's Method, and the Settings panel shows only the
+ *      chosen method's rows (the windows figure only for the windows);
  *   B. Smooth (all frames) with Adaptive smooths every group, weighing every
  *      point by its views (no fallback), lowers frame-to-frame jitter, and
  *      says so in the status (method, mean window);
@@ -87,13 +88,27 @@ try {
 
     // ---- A. the Method radio and the Settings panel --------------------------------
     console.log('\n-- A. Method --');
-    await page.hover('#tbSmooth');
-    await page.click('#smoothingDropdown input[name="tbSmoothMethod"][value="1"]');
-    const stored = await page.evaluate(async () => {
+    const methodNow = () => page.evaluate(async () => ({
+        stored: (await import('/ui/settings.js')).getSmoothingParams().smoothMethod,
+        radio: (document.querySelector('#smoothingDropdown input[name="tbSmoothMethod"]:checked') || {}).value,
+    }));
+    const fresh = await methodNow();
+    check(fresh.stored === 1 && fresh.radio === '1', 'Adaptive is the default (Settings and the menu radio)', fresh);
+    // Someone who set a window before the method existed (no stored method) keeps the windows.
+    const legacy = await page.evaluate(async () => {
         const S = await import('/ui/settings.js');
-        return S.getSmoothingParams().smoothMethod;
+        S.setSmoothingParams({ smoothGaussianWindow: 9 });
+        const r = { method: S.getSmoothingParams().smoothMethod,
+            radio: document.querySelector('#smoothingDropdown input[name="tbSmoothMethod"]:checked').value };
+        S.setSmoothingParams({});
+        return r;
     });
-    check(stored === 1, 'the Adaptive radio sets Settings ▸ Temporal Smoothing ▸ Method', stored);
+    check(legacy.method === 0 && legacy.radio === '0', 'a Gaussian window set before (no method stored) keeps the windows', legacy);
+    await page.hover('#tbSmooth');
+    await page.click('#smoothingDropdown input[name="tbSmoothMethod"][value="0"]');
+    await page.click('#smoothingDropdown input[name="tbSmoothMethod"][value="1"]');
+    const stored = (await methodNow()).stored;
+    check(stored === 1, 'the radios set Settings ▸ Temporal Smoothing ▸ Method (Windows, then Adaptive)', stored);
     await page.mouse.move(700, 600);
     await page.waitForTimeout(450);
     await page.hover('#tbSmooth');

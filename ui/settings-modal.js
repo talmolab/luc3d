@@ -818,8 +818,8 @@ export function showSettingsModal(initialPanel) {
     smHint.className = 'settings-kbd-hint';
     smHint.style.marginTop = '0';
     smHint.style.marginBottom = '8px';
-    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation, by one of two methods: fixed ' +
-        'windows (a median first, then a Gaussian; both off (0) by default) or adaptive windows. ' +
+    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation, by one of two methods: adaptive ' +
+        'windows (the default) or fixed windows (a median first, then a Gaussian; both off (0) by default). ' +
         '2D labels and predictions never change; the reprojections follow the smoothed 3D. ' +
         'Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame, the method and ' +
         'Remove smoothing). Changes here apply when you click Apply.';
