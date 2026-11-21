@@ -70,4 +70,39 @@
             assertNull(nulledNodesFromOcclusion(P, undefined, 'user'), 'undefined occluded → null');
         });
     });
+
+    // fileNulledNodes: a loaded GROUP member's hidden nodes, the file's
+    // visibility winning over LUC3D's metadata copy (which SLEAP passes through
+    // unchanged when it hides, un-hides or removes a node).
+    describe('fileNulledNodes — the file decides a user member\'s hidden nodes', function () {
+        function member(type, pts, occ) {
+            var inst = new Instance(pts, 0, type, 1);
+            inst.setOccludedFrom(occ);
+            return inst;
+        }
+        it('placed + not visible is hidden, even with no metadata (hidden in SLEAP)', function () {
+            var s = fileNulledNodes(member('user', P, [false, true, false]), null);
+            assertTrue(!!s && s.has(1) && s.size === 1);
+        });
+        it('placed + visible is shown, even when the metadata lists it (un-hidden in SLEAP)', function () {
+            assertNull(fileNulledNodes(member('user', P, [false, false, false]), [1]));
+        });
+        it('a node with no position keeps the metadata hide (old builds wrote NaN)', function () {
+            var s = fileNulledNodes(member('user', [[1, 2], null, [5, 6]], [false, false, false]), [1]);
+            assertTrue(!!s && s.has(1) && s.size === 1);
+        });
+        it('a metadata index past the node count is ignored (node removed in SLEAP)', function () {
+            assertNull(fileNulledNodes(member('user', [[1, 2], [3, 4]], [false, false]), [5]));
+        });
+        it('accepts the metadata as an array or a Set', function () {
+            var m = member('user', [[1, 2], null], [false, false]);
+            assertTrue(fileNulledNodes(m, new Set([1])).has(1));
+            assertTrue(fileNulledNodes(m, [1]).has(1));
+        });
+        it('a prediction keeps the metadata as-is (its visible=0 is the model\'s)', function () {
+            var m = member('predicted', P, [false, true, false]);
+            assertNull(fileNulledNodes(m, null), 'model occlusion is not a hide');
+            assertTrue(fileNulledNodes(m, [2]).has(2), 'metadata kept for non-user');
+        });
+    });
 })();
