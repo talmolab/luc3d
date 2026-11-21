@@ -149,6 +149,26 @@ function buildParamRow(def, bag, onEdit) {
         return row;
     }
 
+    if (def.kind === 'choice') {             // one of `def.options` ({value, label}), stored as the value
+        const select = document.createElement('select');
+        select.className = 'settings-num-input settings-choice-input';
+        select.setAttribute('aria-label', def.label);
+        (def.options || []).forEach(function (opt) {
+            const o = document.createElement('option');
+            o.value = String(opt.value);
+            o.textContent = opt.label;
+            select.appendChild(o);
+        });
+        select.value = String(bag[def.id]);
+        select.addEventListener('change', function () {
+            bag[def.id] = Number(select.value);
+            if (onEdit) onEdit();
+        });
+        row.appendChild(labelWrap);
+        row.appendChild(select);
+        return row;
+    }
+
     const input = document.createElement('input');
     input.type = 'number';
     input.className = 'settings-num-input';
@@ -798,9 +818,10 @@ export function showSettingsModal(initialPanel) {
     smHint.className = 'settings-kbd-hint';
     smHint.style.marginTop = '0';
     smHint.style.marginBottom = '8px';
-    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation: a median first, then a Gaussian. ' +
-        '2D labels and predictions never change; the reprojections follow the smoothed 3D. Both stages are off (0) ' +
-        'by default. Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame and ' +
+    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation, by one of two methods: fixed ' +
+        'windows (a median first, then a Gaussian; both off (0) by default) or adaptive windows. ' +
+        '2D labels and predictions never change; the reprojections follow the smoothed 3D. ' +
+        'Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame, the method and ' +
         'Remove smoothing). Changes here apply when you click Apply.';
     smPanel.appendChild(smHint);
 
@@ -820,13 +841,27 @@ export function showSettingsModal(initialPanel) {
     smFigure.update(working.smoothing);
     smPanel.appendChild(smFigure.el);
 
-    const smSection = buildSection('Filter Parameters', smoothingDefs.length || null);
+    // One section; the method's row first, then only the chosen method's
+    // parameters (`def.method`), shown again as the method changes. The windows
+    // figure belongs to the windows method.
+    const smSection = buildSection('Filter Parameters', null);
     smPanel.appendChild(smSection.root);
+    const smRows = [];
+    function showSmoothingMethod() {
+        const method = working.smoothing.smoothMethod === 1 ? 'adaptive' : 'windows';
+        smRows.forEach(function (r) { r.row.hidden = !!r.method && r.method !== method; });
+        smFigure.el.hidden = method !== 'windows';
+    }
     smoothingDefs.forEach(function (def) {
-        smSection.body.appendChild(buildParamRow(def, working.smoothing, function () {
+        const row = buildParamRow(def, working.smoothing, function () {
             smFigure.update(working.smoothing);
-        }));
+            if (def.id === 'smoothMethod') showSmoothingMethod();
+        });
+        row.dataset.smoothMethod = def.method || '';
+        smRows.push({ row: row, method: def.method });
+        smSection.body.appendChild(row);
     });
+    showSmoothingMethod();
 
     // The two dials of luc3d #134 pull against each other and the interaction is
     // the opposite of what tuning two sliders suggests, so say so here.

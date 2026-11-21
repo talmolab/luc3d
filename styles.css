@@ -5625,6 +5625,21 @@ kbd {
   border-bottom: 1px solid var(--border-color);
 }
 
+/* Settings ▸ Temporal Smoothing shows only the chosen method's rows and its
+   windows figure (ui/settings-modal.js, showSmoothingMethod). */
+.settings-threshold-row[hidden],
+.settings-panel[data-panel="smoothing"] > [hidden] {
+  display: none;
+}
+
+/* A choice row's <select> (Temporal Smoothing ▸ Method): wider than a number. */
+.settings-num-input.settings-choice-input {
+  width: auto;
+  max-width: 260px;
+  text-align: left;
+  font-family: inherit;
+}
+
 .settings-threshold-label-wrap {
   flex: 1;
   min-width: 0;
