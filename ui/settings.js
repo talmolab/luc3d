@@ -540,14 +540,14 @@ export function getTrackingThresholds() {
 // (`getSmoothingParam`) until they choose. So `smoothMethod` is always stored
 // once given (`setSmoothingParams`), even at the default.
 export const SMOOTH_METHOD_CHOICES = [
-    { value: 1, label: 'Adaptive (3D adaptive temporal averaging)' },
-    { value: 0, label: 'Median + Gaussian windows' },
+    { value: 1, label: 'Adaptive' },
+    { value: 0, label: 'Median + Gaussian' },
 ];
 export const SMOOTHING_PARAMS = [
     {
         id: 'smoothMethod', label: 'Method', default: 1,
         min: 0, max: 1, step: 1, kind: 'choice', options: SMOOTH_METHOD_CHOICES,
-        desc: 'Adaptive (the default): each node\'s window, per frame, grows while its next 3D point lies within the gate of this one (judged by both points\' uncertainty, from their camera views) and is cut symmetric, then the points are averaged, the more certain ones counting more. Long windows on a still node, a frame or two in fast motion, and no window across a jump (an ID swap) or a gap. On 60 fps mice it never made the 3D worse and halved frame-to-frame jitter. Median + Gaussian windows: fixed windows you set, the same for every node and frame.',
+        desc: 'One or the other runs, never both. Adaptive (3D adaptive temporal averaging, the default): each node\'s window, per frame, grows while its next 3D point lies within the gate of this one (judged by both points\' uncertainty, from their camera views) and is cut symmetric, then the points are averaged, the more certain ones counting more. Long windows on a still node, a frame or two in fast motion, and no window across a jump (an ID swap) or a gap. On 60 fps mice it never made the 3D worse and halved frame-to-frame jitter. Median + Gaussian: fixed windows you set, the same for every node and frame, a median first, then a Gaussian.',
     },
     {
         id: 'smoothAtaK', label: 'Gate (standard deviations)', default: 3, method: 'adaptive',

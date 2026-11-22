@@ -10367,7 +10367,8 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   thresholds, under `_settings.smoothingParams`. Read by `ui/ui-wiring.js` and
   passed to `smoothSession` (`pose/temporal-smoothing.js`). The method:
   `smoothMethod` (`kind: 'choice'`, `options` = `SMOOTH_METHOD_CHOICES`: 1 =
-  Adaptive, the default; 0 = Median + Gaussian windows). With no stored
+  Adaptive, the default; 0 = Median + Gaussian; one or the other, never both).
+  With no stored
   method, a median or Gaussian window stored above 0 (set before the method
   existed) keeps the windows (`getSmoothingParam`), so nobody's Smooth click
   changes method unasked; `setSmoothingParams` therefore stores `smoothMethod`
@@ -10551,14 +10552,13 @@ it is not a tracking parameter — it runs after triangulation, on 3D the tracke
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
 pass itself runs from the Triangulate / Triangulate All dropdowns. The Method
-row (`smoothMethod`, a `<select>`) comes first, and only the chosen method's
-rows show (`showSmoothingMethod`, by each row's `data-smooth-method`); the figure
-always shows both methods, re-marking the one in use; a figure card's Use that
-switches the method (`onParam('smoothMethod')`) sets the select and the rows.) Threshold
+(`smoothMethod`) is a two-button toggle above the figure (`buildChoiceToggle`:
+Adaptive | Median + Gaussian, one lit; `role="radiogroup"`), and only the
+chosen method's rows and figure cards show (`showSmoothingMethod`, by each
+row's `data-smooth-method`).) Threshold
 and smoothing rows share one `buildParamRow(def, bag, onEdit)` helper (same
 `{ id, label, desc, min, max, step }` catalog shape, clamp on blur, `kind:
-'toggle'` → switch, `kind: 'choice'` → `<select>` of `def.options`; `onEdit`
-lets the filter fields re-count the preview).
+'toggle'` → switch; `onEdit` lets the filter fields re-count the preview).
 Edits mutate a local `working` state only; nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
 `setCameraWeights` + `setTrackingThresholds` + `setSmoothingParams`), which
@@ -12074,7 +12074,7 @@ typing in Animals does not lose it and Tab walks into the items.
 - **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): also
   has the **Remove smoothing / Restore smoothing** toggle (`#tbSmoothToggle`,
   `data-scope="toggle"`) after All frames; see below. Its Method radios
-  (`tbSmoothMethod`: Windows / Adaptive, `wireSmoothMethodRadios`) show and set
+  (`tbSmoothMethod`: Adaptive / Median + Gaussian, `wireSmoothMethodRadios`) show and set
   Settings' `smoothMethod` and follow its Apply (`onSmoothingParamsChange`).
   Settings… → `'smoothing'`.
 - **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
@@ -12862,7 +12862,9 @@ last in the threshold card and told what is being tried); `thresholdPasses` and 
 
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
 Median window and the Gaussian window each do, as two cards (stage 1, stage 2),
-and beside them a third card for the Adaptive method (see below).
+or, for the Adaptive method, its own card (see below). Only the method in use
+(`smoothMethod`, the panel's toggle) is shown: one or the other runs, never
+both.
 Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
 solid white line under everything else that ends low, with one fast real move
 up and back, tall enough that a Gaussian visibly damps it, plus jitter and one
@@ -12927,13 +12929,12 @@ a dashed line labelled gate. In the window: violet; the first over the gate,
 which stops that side: red; passed but cut so both sides match: grey. It starts
 on frame 27 (index 26), where the fast move stops the left side and the right is
 cut. Its sliders (Gate 0.5–10 SD, Up to 0–30 frames each way with the box to 100,
-Frame, ▶) try values; Use sets `smoothAtaK`, `smoothAtaHmax` and switches the
-method to Adaptive; Turn off sets the half-window to 0. Its text says it does not
-remove a spike (its own window is 1 frame; on this trace frames 10, 12 and 13
-still take it in). **Method in use:** the cards of the method not chosen
-(`smoothMethod`; median, Gaussian and gaps for the windows) get `.is-idle`
-(dimmed) and a note by their setting row, and any card's Use also switches the
-method to its own (`useMethod`, through `onParam('smoothMethod', …)`).
+Frame, ▶) try values; Use sets `smoothAtaK` and `smoothAtaHmax`; Turn off sets
+the half-window to 0. Its text says it does not remove a spike (its own window
+is 1 frame; on this trace frames 10, 12 and 13 still take it in). It spans the
+row. **Method in use:** `update` hides the cards of the method not chosen
+(median, Gaussian and gaps for Median + Gaussian; the Adaptive card for
+Adaptive) and the lead's sentence about it.
 
 **Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`;
 `stageSketch(stage, window, { medianWindow, frame })` → `{ svg, keys, truth, raw, medOut, out }`,

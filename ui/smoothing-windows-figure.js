@@ -1,7 +1,9 @@
 // ui/smoothing-windows-figure.js
 // The Settings ▸ Temporal Smoothing figure: what the Median window and the
-// Gaussian window each do (stage 1, stage 2 of the windows method), and beside
-// them what the Adaptive method does instead, as three cards side by side.
+// Gaussian window each do (stage 1, stage 2 of the Median + Gaussian method),
+// or what the Adaptive method does instead. Only the method in use (Settings'
+// `smoothMethod`, toggled above the figure) is shown: one or the other runs,
+// never both.
 //
 // Both cards plot the same made-up trace: one node's x position over 40 frames
 // (a slow back-and-forth movement, a white line under everything else), as
@@ -56,11 +58,9 @@
 // remove the spike (its own window is 1 frame; on this trace frames 10, 12 and
 // 13 still take it in, their own values being close to it), and the text says
 // so. Its sliders try
-// a gate and a longest half-window, and its Use button sets the Adaptive
-// method with them.
+// a gate and a longest half-window, and its Use button sets them.
 //
-// The cards of the method not in use (Settings' `smoothMethod`) are dimmed
-// with a note; a Use button on any card also switches the method to its own.
+// The cards of the method not in use (Settings' `smoothMethod`) are hidden.
 //
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`, `buildSegments`), pose/adaptive-temporal-averaging.js
@@ -557,12 +557,13 @@ export function buildSmoothingWindowsFigure(opts) {
     fig.innerHTML =
         '<p class="smooth-fig-lead">One node\'s x position over 40 frames, made up for this sketch: the true '
         + 'movement (white), with one fast move, and its 3D as triangulated (grey), with jitter and '
-        + 'a one-frame spike (red). The '
-        + 'median\'s output (green) is the Gaussian\'s input, and the Gaussian\'s output is blue; both are computed '
-        + 'with LUC3D\'s own filter. The Adaptive card (violet) is the other method, run on the same 3D instead of '
-        + 'the median and Gaussian. y and z, and every node, are filtered the same way, each on its own. On each '
+        + 'a one-frame spike (red). '
+        + '<span data-method="0">The median\'s output (green) is the Gaussian\'s input, and the Gaussian\'s output '
+        + 'is blue; both are computed with LUC3D\'s own filter.</span>'
+        + '<span data-method="1">The adaptive output (violet) is computed with LUC3D\'s own filter.</span>'
+        + ' y and z, and every node, are filtered the same way, each on its own. On each '
         + 'card, the sliders try values and Frame or ▶ slides the window along the frames; only Use changes '
-        + 'your setting, and a card\'s Use also switches to its method.</p>'
+        + 'your setting.</p>'
         + '<div class="smooth-fig-cols">'
         + '<div class="smooth-fig-col" data-stage="median">'
         + '<div class="smooth-fig-name">1 · Median window<span class="fig-big"></span><small></small>' + STAGE_LEGEND + '</div><div class="smooth-fig-chart"></div>'
@@ -586,7 +587,7 @@ export function buildSmoothingWindowsFigure(opts) {
         + '<div class="smooth-fig-name">Adaptive window<span class="fig-big"></span><small></small>' + STAGE_LEGEND + '</div><div class="smooth-fig-chart"></div>'
         + tryStrip(tryControl('gate', GATE_CONTROL) + tryControl('hmax', HMAX_CONTROL) + tryControl('pos', posControl('adaptive')))
         + settingRow('adaptive')
-        + '<p>The other method, instead of the median and Gaussian: each frame\'s window grows one frame at a time '
+        + '<p>Each frame\'s window grows one frame at a time '
         + 'on each side while the next frame lies within the gate of this one (stems: its distance in standard '
         + 'deviations, from the two points\' uncertainty; in LUC3D that comes from each point\'s camera views). '
         + 'The first frame over the gate stops that side (red), the window is cut so both sides match, and the '
@@ -598,7 +599,7 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'shrink.</p></div>'
         + '</div>'
         + '<div class="smooth-fig-col smooth-fig-wide" data-stage="gaps">'
-        + '<div class="smooth-fig-name">3 · Gaps and segments (median + Gaussian)<span class="fig-big"></span><small></small></div><div class="smooth-fig-chart"></div>'
+        + '<div class="smooth-fig-name">3 · Gaps and segments<span class="fig-big"></span><small></small></div><div class="smooth-fig-chart"></div>'
         + GAP_LEGEND
         + tryStrip(tryControl('gap', GAP_CONTROL) + tryControl('minseg', MINSEG_CONTROL))
         + settingRow('gaps')
@@ -632,7 +633,7 @@ export function buildSmoothingWindowsFigure(opts) {
             render(k);
         });
         showSetting[k] = wireSettingRow(el, k, {
-            use: function () { commit(PARAM[k], candidate[k]); useMethod(0); redraw(); },
+            use: function () { commit(PARAM[k], candidate[k]); redraw(); },
             off: function () { commit(PARAM[k], 0); redraw(); },
             reset: function () { tried[PARAM[k]] = setting[PARAM[k]] || 0; redraw(); },
         });
@@ -653,7 +654,6 @@ export function buildSmoothingWindowsFigure(opts) {
         use: function () {
             commit('smoothAtaK', ataValue('smoothAtaK', tried));
             commit('smoothAtaHmax', ataValue('smoothAtaHmax', tried));
-            useMethod(1);
             redraw();
         },
         off: function () { commit('smoothAtaHmax', 0); redraw(); },
@@ -664,14 +664,6 @@ export function buildSmoothingWindowsFigure(opts) {
         },
     });
     wirePlay('adaptive');
-
-    // A note on each card while its method is not the one in use.
-    fig.querySelectorAll('.smooth-fig-col').forEach(function (el) {
-        var note = document.createElement('p');
-        note.className = 'sf-idle-note';
-        note.hidden = true;
-        el.insertBefore(note, el.querySelector('.fig-setting'));
-    });
 
     function wirePlay(k) {
         var el = cards[k];
@@ -701,7 +693,6 @@ export function buildSmoothingWindowsFigure(opts) {
         use: function () {
             commit('smoothMaxGap', gapValue('smoothMaxGap', tried));
             commit('smoothMinSegment', gapValue('smoothMinSegment', tried));
-            useMethod(0);
             redraw();
         },
         off: function () {},
@@ -718,10 +709,7 @@ export function buildSmoothingWindowsFigure(opts) {
         if (opts.onParam) opts.onParam(id, value);
     }
 
-    /** A card's Use switches the method to its own (Settings' `smoothMethod`: 0 windows, 1 adaptive). */
-    function useMethod(m) {
-        if (methodOf(setting) !== m) commit('smoothMethod', m);
-    }
+    /** Settings' `smoothMethod`: 0 median + Gaussian, 1 adaptive. */
     function methodOf(from) { return +from.smoothMethod === 1 ? 1 : 0; }
 
     function ataValue(id, from) {
@@ -793,16 +781,12 @@ export function buildSmoothingWindowsFigure(opts) {
             rawIntoGaussian: rawIntoGaussian, rawInput: !mw,
             ataK: ataK, ataH: ataH, ata: ataH > 0 ? runAdaptive(ataK, ataH) : null };
 
-        // Which method is in use: the other one's cards are dimmed, with a note.
+        // Only the method in use is shown (its cards, and its part of the lead).
         var method = methodOf(setting);
         [['median', 0], ['gaussian', 0], ['gaps', 0], ['adaptive', 1]].forEach(function (c) {
-            var idle = method !== c[1], el = cards[c[0]] || gapCard, note = el.querySelector('.sf-idle-note');
-            el.classList.toggle('is-idle', idle);
-            note.hidden = !idle;
-            note.textContent = !idle ? '' : c[1] === 1
-                ? 'Not in use: the method is median + Gaussian windows. Use here switches to Adaptive.'
-                : 'Not in use: the method is Adaptive. Use here switches to the median + Gaussian windows.';
+            (cards[c[0]] || gapCard).hidden = method !== c[1];
         });
+        fig.querySelectorAll('.smooth-fig-lead [data-method]').forEach(function (el) { el.hidden = +el.dataset.method !== method; });
 
         // The Adaptive card.
         var ataOn = ataH > 0;
@@ -821,13 +805,12 @@ export function buildSmoothingWindowsFigure(opts) {
         gateCtl.set(ataK, ataK);
         hmaxCtl.set(ataH, Math.min(ataH, HMAX_SLIDER_MAX));
         var sK = ataValue('smoothAtaK', setting), sH = ataValue('smoothAtaHmax', setting);
-        var ataInUse = method === 1;
         showAtaSetting({
             label: 'Your setting',
-            now: !ataInUse ? 'not in use' : sH > 0 ? 'gate ' + sK + ' SD, up to ' + plural(2 * sH + 1) : 'off',
-            unsaved: methodOf(setting) !== methodOf(saved) || sK !== ataValue('smoothAtaK', saved) || sH !== ataValue('smoothAtaHmax', saved),
-            use: ataOn && (!ataInUse || ataK !== sK || ataH !== sH) ? 'Use gate ' + ataK + ' SD, up to ' + plural(2 * ataH + 1) : null,
-            off: ataInUse && sH > 0,
+            now: sH > 0 ? 'gate ' + sK + ' SD, up to ' + plural(2 * sH + 1) : 'off',
+            unsaved: sK !== ataValue('smoothAtaK', saved) || sH !== ataValue('smoothAtaHmax', saved),
+            use: ataOn && (ataK !== sK || ataH !== sH) ? 'Use gate ' + ataK + ' SD, up to ' + plural(2 * ataH + 1) : null,
+            off: sH > 0,
             reset: ataK !== sK || ataH !== sH,
         });
         render('adaptive');
