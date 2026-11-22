@@ -8,9 +8,9 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { noteProgress } from './progress-delta.js?v=dba6b517c26c';
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=dba6b517c26c';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=dba6b517c26c';
+import { noteProgress } from './progress-delta.js?v=7c01aaf950f1';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=7c01aaf950f1';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=7c01aaf950f1';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -26,14 +26,14 @@ import {
     triangulationSettingsKey,
     triangulationMethodLabel,
     dropAllDerivedTriangulationState,
-} from '../pose/triangulation.js?v=dba6b517c26c';
-import { Viewport3D } from './viewport3d.js?v=dba6b517c26c';
-import { getTrackColor, getGroupColor } from './overlays.js?v=dba6b517c26c';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=dba6b517c26c';
-import { updateInfoPanel } from './info-panel.js?v=dba6b517c26c';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=dba6b517c26c';
-import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=dba6b517c26c';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=dba6b517c26c';
+} from '../pose/triangulation.js?v=7c01aaf950f1';
+import { Viewport3D } from './viewport3d.js?v=7c01aaf950f1';
+import { getTrackColor, getGroupColor } from './overlays.js?v=7c01aaf950f1';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=7c01aaf950f1';
+import { updateInfoPanel } from './info-panel.js?v=7c01aaf950f1';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=7c01aaf950f1';
+import { showLoadingProgress, yieldToPaint, createProgressPacer } from './loading-overlay.js?v=7c01aaf950f1';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=7c01aaf950f1';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
@@ -45,22 +45,22 @@ import {
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=dba6b517c26c';
+} from '../import-export/file-io.js?v=7c01aaf950f1';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=dba6b517c26c';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=dba6b517c26c';
-import { fileSystemAccessHint } from './browser-hints.js?v=dba6b517c26c';
-import { pickExportFolder } from '../loading/folder-picker-start.js?v=dba6b517c26c';
-import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=dba6b517c26c';
-import { noteTriangulateRunMarked, markTriangulatedGroups } from '../pose/run-state.js?v=dba6b517c26c';
+import { update3DViewport } from '../pose/initialization.js?v=7c01aaf950f1';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=7c01aaf950f1';
+import { fileSystemAccessHint } from './browser-hints.js?v=7c01aaf950f1';
+import { pickExportFolder } from '../loading/folder-picker-start.js?v=7c01aaf950f1';
+import { chooseProofreadSource, proofreadSlpName } from '../loading/percam-slp-choice.js?v=7c01aaf950f1';
+import { noteTriangulateRunMarked, markTriangulatedGroups } from '../pose/run-state.js?v=7c01aaf950f1';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=dba6b517c26c';
+} from './overlay-export-layout.js?v=7c01aaf950f1';
 
 // ============================================
 // Group by Track & Triangulate All

@@ -20,7 +20,7 @@
 //
 // Depends on: pose/outline-core.js
 
-import { rgbaToGray, medianImage, maskedMedian, poseMask, segmentBlobs, areaModel, computeOutlines } from './outline-core.js?v=dba6b517c26c';
+import { rgbaToGray, medianImage, maskedMedian, poseMask, segmentBlobs, areaModel, singlePoseBlobs, poseAreaModel, computeOutlines } from './outline-core.js?v=7c01aaf950f1';
 
 /**
  * Grey pixels of `src` (an ImageBitmap/VideoFrame/canvas, or already grey
@@ -51,17 +51,21 @@ export function handleOutlineMessage(msg, store, makeCanvas) {
         // each frame's animals (`poses[i]`: their poses there) left out of the median
         var masks = Array.isArray(msg.poses) ? msg.poses.map(function (an) { return an && an.length ? poseMask(w, h, an) : null; }) : null;
         var bg = masks ? maskedMedian(grays, masks) : medianImage(grays);
-        var counts = [], areas = [];
+        var counts = [], areas = [], singles = [];
         for (var i = 0; i < grays.length; i++) {
             var seg = segmentBlobs(grays[i], bg, w, h, msg.params);
             var a = [];
             for (var b = 1; b <= seg.n; b++) a.push(seg.area[b]);
             counts.push(seg.n);
             areas.push(a);
+            // blobs holding exactly one animal's pose: what one animal looks like here
+            var an = Array.isArray(msg.poses) ? msg.poses[i] : null;
+            if (an && an.length) singlePoseBlobs(seg, w, h, an, msg.params).forEach(function (s) { singles.push({ frame: i, area: s.area, reach: s.reach }); });
         }
         store.bgs.set(msg.cam, { bg: bg, w: w, h: h });
         var copy = bg.slice();
-        return { reply: { bg: copy, model: areaModel(areas, msg.nAnimals, msg.params), counts: counts, areas: areas }, transfer: [copy.buffer] };
+        var model = poseAreaModel(singles, msg.params) || areaModel(areas, msg.nAnimals, msg.params);
+        return { reply: { bg: copy, model: model, counts: counts, areas: areas, singles: singles }, transfer: [copy.buffer] };
     }
     if (msg.type === 'setBackground') {
         store.bgs.set(msg.cam, { bg: msg.bg, w: w, h: h });
