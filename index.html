@@ -329,6 +329,12 @@
                             <input type="number" id="tbReprojThreshold" min="0" max="640" step="1" inputmode="decimal"
                                 placeholder="off" autocomplete="off" aria-label="Reprojection error threshold (px)">
                         </label>
+                        <!-- Triangulate's skeleton check (browser-local, off by default).
+                             Wired in ui/ui-wiring.js (wireSkeletonCheckField, ui/skeleton-check-field.js). -->
+                        <label class="tri-dropdown-setting">
+                            <span class="tri-dropdown-setting-label">Skeleton check</span>
+                            <input type="checkbox" id="tbSkeletonCheck" aria-label="Skeleton check">
+                        </label>
                         <button class="tri-dropdown-item" id="tbTriangulateSettings" data-scope="settings" role="menuitem"
                             title="Settings ▸ Triangulation Wizard">Settings…</button>
                     </div>

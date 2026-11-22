@@ -1186,6 +1186,10 @@ body {
   font-size: 12px;
 }
 
+.tri-dropdown-setting input[type="checkbox"] {
+  margin: 0 2px 0 auto;
+}
+
 .tri-dropdown-setting input[type="number"] {
   width: 44px;
   height: 22px;

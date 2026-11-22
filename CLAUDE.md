@@ -141,6 +141,16 @@ Tests: `test-lazy-residency.mjs`, e2e `lazy-playback-eviction`, `sequence-lazy-w
 
 Tests: `test-node-scores.mjs`, `test-node-score-export.js`, e2e `node-score-tooltip`.
 
+## Triangulate's skeleton check (Triangulate ▸ Skeleton check)
+
+Browser-local, off by default (`pose/skeleton-check-run.js`); the math is `pose/skeleton-check.js` (import-free), run by `triangulateAndReproject` through `options.skeleton`.
+- **Chains come from the skeleton:** hubs are nodes with 3+ edges (a part without one is held at its centre); the other nodes that hang together are a chain anchored at its hubs. On DoublePoke's star skeleton every tail point is its own chain.
+- **Usual lengths come from the project's own 3D** (every group's stored `points3d`): median and range `[min(0.5, p2×0.85), max(1.5, p98×1.15)]` per bone, so a bone that often shortens (TTI–TailTip, a curled tail) keeps the ±50 % upper bound.
+- **Repair the FEWEST points, never a whole chain:** each point keeps its place, takes a re-solve from a group of cameras that agree on it (`subsetCandidates`), or is dropped; kept points must stay linked to an anchor; a point seen by 3+ cameras that all agree with it is never changed; a chain no repair makes plausible is left. Whole-chain swaps destroyed correct points in pile-ups (July 13 frames 105,416 and 105,372, judged by eye).
+- **Triangulate All checks in a pass after its solve** (`skeletonCheckPass`: measure on the run's 3D, re-solve only flagged groups, lazy projects hydrate only those windows via `sweepLazyFrameWindows`' `frames`); This frame and Range check inline; an edit's re-solve does not.
+- A repaired group (`group.skeletonRepaired`, in memory) is displayed from its stored 3D. Without `options.skeleton` the solve is bit-identical to before.
+Tests: `tests/test-skeleton-check.mjs` (incl. real data, `fixtures/skeleton-check-real.json`), `tests/e2e/skeleton-check.mjs`.
+
 ## Triangulation must not depend on where the origin is
 
 `triangulatePointDLT` (`pose/triangulation-core.js`) solves in a frame built from the cameras only (`dltNormalizingFrame`). Without it, the answer would depend on where the world origin is, and Track All's association (`pose/cross-view-tracker.js` `_retriangulate`) scores against these points.
