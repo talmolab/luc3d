@@ -276,7 +276,7 @@ function openProgressDialog(title) {
             if (frac != null) {
                 var pct = Math.round(100 * Math.min(1, Math.max(0, frac))) + '%';
                 fill.style.width = head.style.left = pct;
-                noteProgress(fill, parseFloat(pct) / 100);
+                noteProgress(fill, parseFloat(pct) / 100, { head: head });   // one glide for fill, playhead and lit stretch
                 pctEl.textContent = pct;
             }
         },

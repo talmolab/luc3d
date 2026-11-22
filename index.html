@@ -5,13 +5,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- "LUC3D", or "<project> - LUC3D" once one is open (ui/page-title.js). -->
     <title>LUC3D</title>
-    <!-- Cut from docs/assets/luc3d-logo.png (the tile without its outer glow),
-         resampled premultiplied so transparent pixels stay RGB-zero. Relative,
-         like every other URL here, so they resolve under every deploy channel. -->
+    <meta name="description" content="LUC3D (Label Unification and Correspondence in 3D): multi-view pose annotation in the browser.">
+    <meta name="theme-color" content="#131719">
+    <!-- Made by scripts/make_icons.py from docs/assets/luc3d-logo.webp (the
+         tile without its outer glow, resampled premultiplied so transparent
+         pixels stay RGB-zero). Relative, like every other URL here, so they
+         resolve under every deploy channel. -->
+    <link rel="icon" href="icons/favicon.ico" sizes="48x48">
     <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
     <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+    <link rel="manifest" href="icons/site.webmanifest">
+    <!-- Link previews. Crawlers need an absolute image URL, so this one points
+         at the root channel (the newest full release) from every channel. -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="LUC3D">
+    <meta property="og:title" content="LUC3D">
+    <meta property="og:description" content="Label Unification and Correspondence in 3D: multi-view pose annotation in the browser.">
+    <meta property="og:image" content="https://luc3d.sleap.ai/icons/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The LUC3D logo, a wireframe cube, beside the name LUC3D">
+    <meta name="twitter:card" content="summary_large_image">
     <!-- The build this copy is: empty here, filled in the DEPLOYED copy by
          scripts/stamp-version.mjs and shown beside Settings by ui/version-label.js. -->
     <meta name="lucid-release" content="">
@@ -93,6 +110,7 @@
                     <div class="menu-dropdown-item" id="menuSaveAs">Save As...</div>
                     <div class="menu-dropdown-item" id="menuSaveCompact" title="A smaller copy, with predicted keypoints and 3D rounded: asks first and explains what is lost">Save Compact Copy...</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
+                    <div class="menu-dropdown-item" id="menuOpenDemo" title="15 s of two mice filmed by 8 cameras (SLAP-2M), downloaded from Hugging Face (24 MB)">Open Demo</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSessionFolderWizard">Session Folder Wizard...</div>
                     <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Single Session Folder</div>
@@ -336,8 +354,17 @@
                         <button class="tri-dropdown-item" id="tbSmoothToggle" data-scope="toggle" role="menuitem"
                             title="Remove temporal smoothing: put back the 3D from before smoothing, on every frame" disabled>Remove smoothing</button>
                         <div class="tri-dropdown-sep"></div>
+                        <!-- Settings ▸ Temporal Smoothing's Method, one or the other (smoothingMethod:
+                             1 adaptive, the default; 0 median + Gaussian). Wired in ui/ui-wiring.js (wireSmoothMethodRadios). -->
+                        <div class="tri-dropdown-setting" role="radiogroup" aria-label="Smoothing method">
+                            <span class="tri-dropdown-setting-label">Method</span>
+                            <span class="tri-dropdown-setting-control">
+                                <label title="Adaptive (the default): each node's window grows while its 3D stays within the gate, judged by each point's views; no window crosses a jump or a gap"><input type="radio" name="tbSmoothMethod" value="1"> Adaptive</label>
+                                <label title="Median + Gaussian: a median, then a Gaussian, over the windows set in Settings"><input type="radio" name="tbSmoothMethod" value="0"> Median + Gaussian</label>
+                            </span>
+                        </div>
                         <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
-                            title="Settings ▸ Temporal Smoothing: the median and Gaussian windows">Settings…</button>
+                            title="Settings ▸ Temporal Smoothing: the method, its windows or its gate">Settings…</button>
                     </div>
                 </div>
                 <!-- Inside the proofreading group so it stays on this side of
@@ -418,6 +445,8 @@
                         <div class="dock-empty-icon">&#128249;</div>
                         <div id="dockEmptyText">Drag and Drop videos</div>
                         <div id="dockEmptySubtext" style="font-size:11px;margin-top:4px;color:var(--text-muted);">Drag from the view strip or double-click to add</div>
+                        <button class="dock-demo-btn" id="dockDemoBtn" type="button"
+                            title="15 s of two mice filmed by 8 cameras (SLAP-2M), downloaded from Hugging Face (24 MB)">No data? Open the demo</button>
                     </div>
                 </div>
             </div>
@@ -1062,6 +1091,11 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- ==================== Memory Tab ====================
+                     The page's JavaScript heap over time. Built and sampled by
+                     ui/memory-panel.js, only while this section is on screen. -->
+                <div class="panel-tab-content" id="tabMemory"></div>
 
                 <!-- ==================== Define Plane Panel ====================
                      Shown INSTEAD of the tab contents (rail icons disabled) while Defining

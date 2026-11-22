@@ -41,8 +41,11 @@ helpers used by every load path. Calls `init()` at module-load.
 
 **Key exports.**
 - `hideWelcomeOverlay()` — hides the dock empty-state overlay.
-- `loadDemoSession()` — File menu "Load Demo Session" handler. Loads
-  `sample_session/*.mp4` and synthetic data from `demo-data.js`.
+- `loadDemoSession()` — loads `sample_session/*.mp4` and synthetic data from
+  `demo-data.js`. No menu item calls it; e2e tests use it for a quick project.
+  (File ▸ Open Demo is the real-data `loading/demo-project.js`.)
+- `init()` ends with `setupDemoEntry()` (`ui/demo-entry.js`), so a `?demo`
+  URL starts loading the demo once the app is set up.
 - `addNewInstanceSmart()` — adds a new user instance to the focused view.
   Pose source priority: cached `lastUserPoints` → user instance on the current
   frame → user instance on the nearest **prior** frame (so ctrl+i inherits a
@@ -107,6 +110,9 @@ helpers used by every load path. Calls `init()` at module-load.
 - `../ui/panel-rail.js` — `setupPanelRail({ toggleInfoPanel })` (builds the
   right-edge icon rail and wraps each panel in its collapsible section; `toggleInfoPanel` from `../ui/ui-wiring.js` is handed
   in so the rail stays free of that import).
+- `../ui/memory-panel.js` — `setupMemoryPanel`, right after `setupPanelRail`
+  (builds `#tabMemory`, starts its once-a-second heap reading, and follows the
+  rail to draw only while it is seen).
 - `../ui/info-panel.js` — `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel` returns early with no session),
@@ -3101,6 +3107,62 @@ through File ▸ Load SLP.
 
 ---
 
+### pose/adaptive-temporal-averaging.js
+
+**Purpose.** The math of Temporal Smoothing's adaptive method: 3D adaptive
+temporal averaging (ATA) of one node's trajectory, and the per-point covariance
+it weighs samples by. A 3D, covariance-aware port of Bartovčak & Vrankić's
+pixel-wise video denoiser (Engineering Review 2012; Prasath 2019), via
+`ata3d.smooth` (olinesn/ata3d, private) / `ata_3d` of the volfuse study
+(`~/svd/mice/volfuse`, 2026-11-21: on DoublePoke's 60 fps mice it never made a
+held-out or hand-label score worse and halved frame-to-frame jitter, where a
+constant-velocity Kalman lagged in fights). DOM-free.
+
+**`ataSmoothSeriesInto(x, cov, T, {k, hmax, from, to}, out, half)`.** `x` T x 3,
+`cov` T x 6 (packed symmetric `[xx, xy, xz, yy, yz, zz]`), NaN = missing. For
+frame t the window grows forward, then backward up to the forward length, one
+frame at a time while `(x_u - x_t)^T (S_t + S_u)^-1 (x_u - x_t) < k^2`; each
+side stops at its first failure, a missing sample, or `hmax`. The window is
+symmetric (both sides the shorter), and the output is the precision-weighted
+mean over it, with ata3d's unit-free ridges (1e-6 of each covariance's mean
+variance before inverting, 1e-9 of the summed precision's before the solve). A
+1-frame window keeps its sample exactly (ata3d moves it by ~1e-9 relative; the
+one difference). Only [from, to) is computed, and t reads only
+[t - hmax, t + hmax], so a slice holding that much gives the whole series'
+value bit for bit (the sums run centre, then t∓1, t∓2, ...). `half[t]` = h
+(window 1 + 2h), -1 where missing.
+
+**`dltPointCovarianceInto(point, cams, us, vs, n, {reprojErrorThreshold, sigma0,
+k0}, out, o)`** — volfuse's `dlt_cov`: S = s² (Σ J_vᵀJ_v + 1e-9 I)⁻¹, J_v the
+native-pixel projection Jacobian of each view at the point
+(`projectAndJacobianCameraInto`, distortion included), s² = (k0 σ0² + RSS) /
+(k0 + max(2n − 3, 0)) with σ0 = 2 px, k0 = 4 (`DLT_COV_SIGMA0_PX`,
+`DLT_COV_PSEUDO_DOF`). With a threshold, the worst view is left out while it
+misses by more and more than 2 views remain (as the solve drops it). Returns s
+(px), or NaN (out untouched) below 2 views.
+
+**`secondDifferenceSigma(x, T)`** — the fallback: per axis
+1.4826 · median |x[t+1] − 2x[t] + x[t−1]| / √6 over consecutive present
+triples, RMS over the axes; NaN below 5 triples or when 0. Constant velocity
+does not inflate it; acceleration does.
+
+**Exports.** `ATA_DEFAULT_K` (3), `ATA_DEFAULT_HMAX` (15), `DLT_COV_SIGMA0_PX`,
+`DLT_COV_PSEUDO_DOF`, `COV_STRIDE` (6), `invertSym3Into`,
+`ataSmoothSeriesInto`, `dltPointCovarianceInto`, `secondDifferenceSigma`.
+
+**Imports.** `pose/triangulation-core.js` (`projectAndJacobianCameraInto`).
+
+**Imported by.** `pose/temporal-smoothing.js`.
+
+**Tests.** `tests/test-adaptive-temporal-averaging.mjs`: windows equal ata3d's
+and outputs within 1e-9 mm on `tests/fixtures/ata3d/reference.json` (still,
+steady and fast series, a jump, a gap, holes; k 3/2/4), slice = whole bit for
+bit, unit invariance, synthetic still/steady/jump, the covariance against a
+numerical Jacobian through `reprojectPointCamera`, the threshold drop. The
+fixture is made by `tests/fixtures/ata3d/make_reference.py` (needs ata3d).
+
+---
+
 ### pose/temporal-smoothing.js
 
 **Purpose.** Post-triangulation temporal filtering of the 3D tracks — the
@@ -3120,6 +3182,11 @@ rejected because the low-acceleration prior is physically true in 3D and only
 approximately true under perspective projection, and because interpolating a
 missing view fabricates an observation that then votes in triangulation as if
 it were real data.
+
+**Two methods** (`resolveSmoothingParams`' `method`, Settings' `smoothingMethod`
+0/1): **adaptive** (Settings' default; see the end of this entry), or the
+windows below (what params without `smoothingMethod` resolve to, for direct
+callers and tests).
 
 **Algorithm.** Two independently switchable stages over each node's 1D
 coordinate signals (15 nodes = 45 signals per identity; nodes never enter each
@@ -3179,7 +3246,8 @@ smoothed), and a third value there would erase the solver identity
 `resolveTriangulationMethod` exists to preserve.
 
 **Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
-`smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
+`smoothSignalInto`, `resolveSmoothingParams`, `describeSmoothingConfig`,
+`SMOOTH_METHOD_WINDOWS`, `SMOOTH_METHOD_ADAPTIVE`, `collectTrajectories`,
 `smoothTrajectory`, `smoothSession`, `smoothSessionAsync`, `smoothFrame`,
 `unsmoothSession`, `hasSmoothed3d`, `noteSmoothedFrames`, `removeSmoothing`,
 `restoreSmoothing`, `hasRemovedSmoothing`. **Remove / Restore smoothing**:
@@ -3215,14 +3283,46 @@ track; both entry points run the same generators (`smoothTrajectorySteps`,
 `smoothSessionSteps`), so the result and the writes are identical, and nothing
 of a trajectory is written before its last step.
 
+**The adaptive method** (`method: 'adaptive'`, `k` = `smoothAtaK` (3),
+`hmax` = `smoothAtaHmax` (15; 0 = off), `covariance` 'views' | 'sigma' (the
+latter only from `smoothAtaCovariance`, for comparisons)). Per identity
+(`collectTrajectories`, same bucketing) `smoothTrajectoryAtaSteps` gathers the
+pre-smoothing 3D (`gatherTrajectory`), then every sample's covariance
+(`groupCovariancesInto` → `dltPointCovarianceInto`) from the group members' 2D
+where `triangulateAndReproject` would take it: a camera of `session.cameras`
+the solve may use (`cameraIncludedInSolves`, the Camera Views hook), the node
+placed and not nulled, with the reprojection threshold
+(`solveReprojErrorThreshold`) — all read once per run (`ataContext`). A
+released member of a lazy project (`_lazy2d`) is read straight from its store
+row (`SioLazyLoader.storeRowPoints`), so no frame is hydrated; a loader without
+it gets the frame hydrated around the read (`hydrateFrameMembers2d` /
+`releaseFrameMembers2d`). A sample with fewer than 2 views takes its node's
+`secondDifferenceSigma` over the whole trajectory (`fillFallbackCov`, asked only
+when needed). Then each node's series goes through `ataSmoothSeriesInto`, and
+the write-back is the windows' (`writeGroupFrom`, same mark and source).
+`maxGap`/`minSegment` do not apply: a missing sample ends every window. This
+frame (`smoothFrameAta`) gathers [frameIdx − hmax, frameIdx + hmax] and
+computes the centre only, bit for bit the All frames value (a fallback reads
+the whole trajectory, via `collectTrajectories`, only then). Results add
+`points`, `meanWindow` and `fallbackPoints`. `sameSmoothingConfig` compares
+only the chosen method's settings (a windows edit does not stale an adaptive
+Restore). `describeSmoothingConfig(cfg)` is the status text ("adaptive, gate 3
+SD, up to 31 frames" / "median 3 + Gaussian 9").
+
 **Imports.** `pose/pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`,
 `NO_REPROJECTED_INSTANCES`, `pooledPoints3d`, `markPoints3dSmoothed`,
-`isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`) only —
+`isPoints3dSmoothed`, `unsmoothedPoints3d`, `clearPoints3dSmoothed`),
+`pose/adaptive-temporal-averaging.js` (`ATA_DEFAULT_K`, `ATA_DEFAULT_HMAX`,
+`COV_STRIDE`, `ataSmoothSeriesInto`, `dltPointCovarianceInto`,
+`secondDifferenceSigma`), `pose/triangulation-core.js`
+(`cameraIncludedInSolves`, `solveReprojErrorThreshold`),
+`pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`) —
 no UI imports, so the module stays unit-testable in plain Node.
 
 **Imported by.** `ui/ui-wiring.js` (`smoothSessionAsync`, `smoothFrame`,
 `unsmoothSession`, `resolveSmoothingParams`, `hasSmoothed3d`,
-`removeSmoothing`, `restoreSmoothing`), `ui/smoothing-button.js`
+`removeSmoothing`, `restoreSmoothing`, `describeSmoothingConfig`,
+`SMOOTH_METHOD_ADAPTIVE`), `ui/smoothing-button.js`
 (`hasSmoothed3d`, `hasRemovedSmoothing`),
 `import-export/smoothing-metadata.js` (`hasSmoothed3d`, `noteSmoothedFrames`),
 `ui/smoothing-windows-figure.js` (`smoothSignalInto`, `normalizeWindow`,
@@ -3232,7 +3332,12 @@ filter).
 **Tests.** `tests/test-temporal-smoothing.mjs` (`smoothFrame` is checked bit
 for bit against the all-frames pass on every frame of noisy fixtures with
 holes, segment edges, duplicates and unidentified groups, over 270
-configurations); save/reopen in `tests/e2e/smoothing-save-reopen.mjs`. Bench:
+configurations); the adaptive method in `tests/test-temporal-smoothing-adaptive.mjs`
+(This frame = All frames bit for bit with view covariances, the fallback and
+both mixed; store reads = resident 2D; threshold and Camera Views reach the
+covariances; metadata; Remove/Restore) and `tests/e2e/temporal-smoothing-adaptive.mjs`
+(menu, panel, run, toggle, save → reopen); save/reopen in
+`tests/e2e/smoothing-save-reopen.mjs`. Real data: `tests/e2e/_real-smoothing-adaptive.mjs`. Bench:
 `tests/e2e/_bench-smoothing-this-frame.mjs` (Node) and
 `tests/e2e/_bench-smoothing-ui.mjs` (menu click to status, eager + lazy). Verified by
 mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
@@ -4211,6 +4316,11 @@ isCameraTracked, getTrackingThreshold })` — the only app state the pipeline
 reads (unset = every camera included, no threshold; the main thread installs
 them, a worker gets resolved values via `options.includedCameras` /
 `options.reprojErrorThreshold`) — and `__triangulationKernelsForTest`.
+For readers that need a solve's views outside a solve (Temporal Smoothing's
+adaptive method): `cameraIncludedInSolves(name)` and
+`solveReprojErrorThreshold()` (the two hooks' answers, with the same defaults),
+and `projectAndJacobianCameraInto(point, camera, out)` (the refinement's
+allocation-free native-pixel projection + Jacobian, exported).
 
 **`reprojectStoredPoints3d(group, cameras, options?)`** — steps 3-5 of
 `triangulateAndReproject` (reproject, per-camera errors in native and
@@ -5107,6 +5217,49 @@ run is a no-op, Track Frame leaves it) and `tests/e2e/track-all-switches-to-id.m
 (real toolbar: button highlight, 3D recolor, switching back).
 
 ---
+
+### ui/page-title.js
+
+**Purpose.** The browser tab's title: `LUC3D` with nothing open,
+`<project> - LUC3D` once a project is, with a leading `• ` while there are
+unsaved changes. The project's name is the file it was opened from or last
+saved to (`.slp` or project `.json`), else the folder it was loaded from (a
+multi-session load: the parent folder). Only loaders that START a project name
+it; adding a session to an open project keeps its name. Import-free.
+
+**Key exports.** `APP_TITLE`; `formatPageTitle(name, isDirty)` (pure);
+`setPageProject(name)` (null/blank: none); `pageProjectName()`;
+`setPageDirty(isDirty)`. The setters write `document.title` when there is one.
+
+**Imports from project modules.** None.
+
+**Imported by.** `import-export/save-load.js` (`markDirty`/`clearDirty`,
+`newProject`, `handleLoadProject`'s `.json` path, `quickSave`),
+`import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
+(`handleLoadProjectSlpLazy`, which takes `opts.projectName`; the single-SLP,
+per-camera and multi-session folder loaders), `ui/sessions-panes.js` (closing
+the last session).
+
+**Coverage.** `tests/test-page-title.mjs`.
+
+### ui/demo-entry.js
+
+**Purpose.** The ways into the demo (`loading/demo-project.js`) other than File
+▸ Open Demo (wired in `ui/ui-wiring.js`): the "No data? Open the demo" button
+on the empty video dock (`#dockDemoBtn`), shown only while nothing is loaded (a
+`MutationObserver` on `#videoDockEmpty`'s class re-checks, so closing a
+project's last panel does not offer it), and `?demo` in the page URL
+(`luc3d.sleap.ai/?demo` opens straight into it).
+
+**Key exports.** `demoRequested(search)`; `setupDemoEntry()` (called last in
+`pose/initialization.js`'s `init`).
+
+**Imports from project modules.** `ui/app-state.js`,
+`loading/demo-project.js`.
+
+**Imported by.** `pose/initialization.js`.
+
+**Tests.** `tests/e2e/demo-project.mjs`.
 
 ### ui/version-label.js
 
@@ -6534,28 +6687,41 @@ after all tasks complete; stays open on error.
 ### ui/progress-delta.js
 
 **Purpose.** Every progress bar lights up the stretch it gained on its last
-update: a `.progress-delta` element in the bar's track, from the previous
-fraction to the new one, drawn over the fill as a translucent white tint (a
-brighter shade of whatever colour the bar is, no colour per bar) with a 700 ms
-white flash as it appears (an opacity animation on `::after`, so it runs on the
-compositor). It stays lit until the next update replaces it, so a glance says
-how far the bar moved on its last step — the way a game's health bar lights up
-the chunk a hit took off. It grows with the fill's OWN transition (duration and
-timing function of the fill's `width` / `transform` transition, read from its
-computed style), so its leading edge moves with the fill's instead of running
-ahead of it. Moving back, a snap (a new stage, a reset) or the first update of
-a bar show nothing. `prefers-reduced-motion` drops the flash, not the tint.
+update: a `.progress-delta` element in the bar's track, drawn over the fill as
+a translucent white tint (a brighter shade of whatever colour the bar is, no
+colour per bar) with a 700 ms white flash as it appears (an opacity animation
+on `::after`, so it runs on the compositor). It stays lit until the next update
+replaces it, so a glance says how far the bar moved on its last step — the way
+a game's health bar lights up the chunk a hit took off. It also MOVES the bar:
+each update starts one glide (Web Animations, linear) for the fill, the tint
+and the playhead (`opts.head`), from where the fill is drawn right now (read
+from the running glide's own clock) to the new fraction, so the three never
+part. The tint covers that same stretch and its leading edge is the fill's.
+The glide lasts the time since the previous update, at least `MIN_GLIDE_MS`
+(50) and at most the fill's own CSS transition (read once from its computed
+style; the fill's and the playhead's transitions are then switched off
+inline, since a transition outranks an animation in the cascade). Before this,
+each part had its own CSS transition and the tint was placed between targets:
+a burst of updates (videos finishing together) left the fill a third of the
+bar behind the percentage, the playhead further behind, and the tint floating
+ahead of both. Each part glides the property its fill uses (`width`/`left`,
+or `scaleX`/`translateX`), so a busy main thread holds all of them or none.
+Moving back, a snap (a new stage, a reset) or the first update of a bar show
+no tint. `prefers-reduced-motion` drops the flash, not the tint.
 Styles: `.progress-delta` in `styles.css` (by the loading overlay's bar).
 
 **Key exports.**
-- `noteProgress(fill, frac, { animate })` — call right after setting a bar's
-  fill to `frac` (0..1). Remembers the fraction on the fill element; `animate:
-  false` means the fill snapped, so no stretch is lit. Works for a `width`
+- `noteProgress(fill, frac, { animate, head })` — call right after setting a
+  bar's fill (and its playhead `head`, if any) to `frac` (0..1). Keeps the glide
+  state on the fill element; an update to the same fraction leaves the glide
+  under way alone; `animate: false` means the fill snapped, so no stretch is
+  lit and any glide stops. Works for a `width`
   fill and for a full-width fill scaled with `transform: scaleX` (the loading
   overlay's). A static track is given `position: relative` once, for the
   absolutely placed tint. A no-op without a real DOM (Node test stubs, stand-in
   elements).
 - `resetProgress(fill)` — forget the last fraction (a bar reused from zero).
+- `MIN_GLIDE_MS` (50) — the shortest glide.
 
 **Callers (every progress bar).** `ui/loading-overlay.js` (`_setFill`: Track
 All, Triangulate All, Save, loading, the body-size check, …), `ui/id-switch-modal.js`
@@ -6572,7 +6738,9 @@ the lit stretch stands out against them.
 
 Tested by `tests/e2e/progress-delta.mjs` (the tint's extent on both kinds of
 fill, its brightness from screenshot pixels, its edge following the fill's
-frame by frame mid-transition, and no tint on a move back, a snap or a hide).
+frame by frame mid-glide, a burst of updates sampled every frame — fill,
+playhead and tint together, the fill near the percentage, at 100% one glide
+after the last update — and no tint on a move back, a snap or a hide).
 
 ### ui/loading-overlay.js
 
@@ -6619,6 +6787,9 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
   `formatRemaining(ms)` and the clock hook `__setLoadingOverlayClock(fn)` are
   exported for tests; the raw estimate is `#loadingEta[data-ms]`.
 - `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`).
+- `loadingCardText()` — `{ title, message }` while the card is up, null while
+  hidden (two text reads). The Memory panel notes it with each heap reading to
+  mark runs on its plot.
 - `setLoadingCpu(source)` — a CPU line and last-minute graph under the detail
   line (`#loadingHardware` = `#loadingCpu` + `#loadingGraph`), sampled every
   `CPU_SAMPLE_MS` as busy thread-ms / cores via `createLoadMeter`; the tooltip
@@ -6653,7 +6824,8 @@ no bar. Pinned by `tests/e2e/fixtures/progress-card.js`.
 - `PROGRESS_INTERVAL_MS` (250), `CPU_SAMPLE_MS` (1000).
 
 **Imports from project modules.** `./progress-delta.js` (`noteProgress` — the
-bar's lit stretch, called from `_setFill`; import-free), `./load-graph.js` (`createLoadMeter`,
+bar's lit stretch and the one glide of fill, playhead and stretch, called from
+`_setFill` with the playhead as `head`; import-free), `./load-graph.js` (`createLoadMeter`,
 `createBusyClock`, `createLoadGraph`, `formatCpuLoad`, `setLoadLine`, `cpuCores` —
 itself import-free and DOM-free at load), `./browser-hints.js`
 (`renderBraveFingerprintingHint`; also import-free and DOM-free at load). Safe under the Node test stubs: every DOM access is
@@ -6663,7 +6835,7 @@ null-guarded (no `#loadingHardware` → `setLoadingCpu` does nothing), and with 
 **Imported by.** `import-export/save-load.js` (re-exports `showLoading`/
 `hideLoading`), `pose/tracker.js`, `pose/triangulation.js`, `ui/export-modals.js`,
 `ui/id-switch-modal.js`, `loading/session-loader.js` (Load Single Session
-Folder's three-step progress).
+Folder's three-step progress), `ui/memory-panel.js` (`loadingCardText`).
 
 **Notes / caveats.**
 - **The fill animates `transform: scaleX()`** under a 250 ms linear transition
@@ -10161,7 +10333,7 @@ stay): its rows were scored on the fixed labels, so an undo would rename them
 wrongly.
 
 **Imports from project modules.** `ui/progress-delta.js` (`noteProgress`, the
-lit stretch on the image check dialog's bar), `ui/app-state.js` (`state`,
+lit stretch on the image check dialog's bar, gliding its playhead with it), `ui/app-state.js` (`state`,
 `getActiveSession`), `ui/seekbar-markers.js` (`setSeekbarSwitchMarkers`),
 `import-export/save-load.js` (`setStatus`, `markDirty`),
 `ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size
@@ -11135,7 +11307,16 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   already taken here for DETECTION filtering (`filterMinVisibleNodes`,
   `filterMinInstanceScore`). Same clamp + drop-if-default persistence as the
   thresholds, under `_settings.smoothingParams`. Read by `ui/ui-wiring.js` and
-  passed to `smoothSession` (`pose/temporal-smoothing.js`).
+  passed to `smoothSession` (`pose/temporal-smoothing.js`). The method:
+  `smoothingMethod` (`kind: 'choice'`, `options` = `SMOOTH_METHOD_CHOICES`: 1 =
+  Adaptive, the default, also with a median or Gaussian window stored; 0 =
+  Median + Gaussian; one or the other, never both). A new id rather than the
+  PR previews' `smoothMethod`, so a choice saved there is never read. And the adaptive
+  method's `smoothAtaK` (gate, 3) and `smoothAtaHmax` (longest half-window,
+  15). Each method's own entries carry `method: 'windows' | 'adaptive'`;
+  `getSmoothingParamDefs` passes `kind`, `options` and `method` on.
+  `onSmoothingParamsChange(fn)` is called after every `setSmoothingParams` (the
+  Smooth menu's Method radios follow Settings' Apply).
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
@@ -11309,7 +11490,11 @@ minimum segment fields back through `onParam`. Its own panel because
 it is not a tracking parameter — it runs after triangulation, on 3D the tracker
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
-pass itself runs from the Triangulate / Triangulate All dropdowns.) Threshold
+pass itself runs from the Triangulate / Triangulate All dropdowns. The Method
+(`smoothingMethod`) is a two-button toggle above the figure (`buildChoiceToggle`:
+Adaptive | Median + Gaussian, one lit; `role="radiogroup"`), and only the
+chosen method's rows and figure cards show (`showSmoothingMethod`, by each
+row's `data-smooth-method`).) Threshold
 and smoothing rows share one `buildParamRow(def, bag, onEdit)` helper (same
 `{ id, label, desc, min, max, step }` catalog shape, clamp on blur, `kind:
 'toggle'` → switch; `onEdit` lets the filter fields re-count the preview).
@@ -12261,10 +12446,23 @@ either ID-switch check is run.
   scales with the thinning) or a point does not project; `defaultMapCamera` — the
   camera with the most 2D members over a thinned sample of the groups.
 
-**Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
-with placeholders at once and fills them AFTER the box paints: the maps first,
-then the images, one decoded frame per sample (`view.decoder.getFrame`, drawn
-immediately — a decoder's cached frame may be closed by the next decode). Every
+**Drawing.** `renderIdentityGallery(host, session, {onPick, onEmpty})` builds the
+rows with placeholders at once — for `identitiesWith3d` (a cheap scan that stops
+once every identity has a 3D point) — and reads the tracks only AFTER the box
+paints, in slices (`identityTracksAsync`, the same pass as `identityTracks` with a
+pause every `TRACKS_SLICE_MS`, 20 ms): opening the summary on the 8-camera,
+108,000-frame project went from one 89 ms task to 25 ms, the tracks following in
+slices under 25 ms. A row whose identity then has no track is removed; with fewer
+than two left the section removes itself and calls `onEmpty` (the summary drops
+`has-gallery`). Then it fills them: the maps first, then the images, one decoded
+frame per sample, drawn immediately. **Each frame, and the map's background, is a
+caller-owned copy** (`galleryFrame`: `view.decoder.peekFrame`, closed once drawn;
+`getFrame` only for a decoder without `peekFrame`, whose frames are never closed
+here). Not `getFrame`: a jump through it keeps the frame in the view's frame cache
+and warms the 24 frames before it in the background (`_scheduleBackWarm`,
+`loading/video.js`), and the summary's samples left ~28 frames per camera cached
+for good on the 8-camera 1280x1024 project: Chrome's GPU process ended a Track All
++ Triangulate All at ~1.6 GB, ~0.47 GB with copies (VM, two runs each). Every
 row's samples are planned first (`planRow`: frame, camera, crop), then fetched one
 queue per decoder (`fetchSamples`): a decoder is asked for one frame at a time, in
 frame order, while the cameras' queues run side by side. And the samples land on
@@ -12277,7 +12475,7 @@ gap's worth. campy's cameras share keyframes; one that did not would only decode
 slower. 26 samples on an 8-camera project (keyframe every 250 frames): 2.3 s one
 after another, 1.3 s per camera side by side, 0.37 s on keyframes (local disk). Tiles
 fill in as their camera's frames arrive, not row by row. It stops as soon as the
-box is closed (test: e2e `identity-gallery` §5b). Without a video a sample says "no video" and the maps draw on a dark
+box is closed (test: e2e `identity-gallery` §5b; the copies, §5c). Without a video a sample says "no video" and the maps draw on a dark
 ground. The map is a darkened still of the chosen camera with the path coloured
 by TIME on a one-hue sequential ramp and a 0:00 → end key; hovering shows the
 nearest point's time, a click goes there. The chosen view is kept on
@@ -12303,7 +12501,7 @@ time captioned. Changing the map's camera hides a stale preview. The preview
 reads the element's `_zoom` (`{kind, w, h, draw, color, label, frame}`): one box
 serves both kinds.
 
-**Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
+**Key exports.** `renderIdentityGallery`, `galleryFrame`, `identityTracks`, `identityGroupAt`,
 `groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
 `memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
 `GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
@@ -12599,7 +12797,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   shared project skeleton — the user then adds video via File ▸ Load Videos);
   the **"−"** button (`btnRemoveSession`) calls `removeSession`. Folder-based
   session loading stays on the File menu (`menuLoadSessionFolder` →
-  `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`).
+  `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`), as does File ▸
+  Open Demo (`menuOpenDemo` → `loadDemoProject`, `loading/demo-project.js`).
 - Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
   Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
   `showGroupContextMenu`, `hideGroupContextMenu`. The context menu's **Delete
@@ -12776,7 +12975,7 @@ header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`
 (incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
-`file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
+`file-io.js`, `session-loader.js`, `demo-project.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js` (the track/identity helpers,
 Edit Group, `startManualAssignment`, `purgeTriangulationDataForGroup`,
 `swapTracks`), `export-modals.js`,
@@ -12861,7 +13060,9 @@ typing in Animals does not lose it and Tab walks into the items.
   use the default too.
 - **Smooth ▾** (`#smoothingDropdown`, `#tbSmooth`; Temporal Smoothing): also
   has the **Remove smoothing / Restore smoothing** toggle (`#tbSmoothToggle`,
-  `data-scope="toggle"`) after All frames; see below.
+  `data-scope="toggle"`) after All frames; see below. Its Method radios
+  (`tbSmoothMethod`: Adaptive / Median + Gaussian, `wireSmoothMethodRadios`) show and set
+  Settings' `smoothingMethod` and follow its Apply (`onSmoothingParamsChange`).
   Settings… → `'smoothing'`.
 - **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
   their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame
@@ -12896,13 +13097,15 @@ smooths again with the current settings in the removed run's scope (all
 frames, or `smoothFrame` on each removed this-frame run's frames), its status
 ending "— recomputed…". "Nothing is smoothed" if neither applies. Otherwise
 it reads `getSmoothingParams()`; when
-both kernels are off it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
+the method is off (both kernels 0, or an adaptive longest half-window of 0) it restores the pre-smoothing 3D (`unsmoothSession`), or, with nothing
 smoothed, says so and opens Settings ▸ Temporal Smoothing rather than silently
 doing nothing; otherwise All frames runs `smoothSessionAsync`
 (`pose/temporal-smoothing.js`; every run filters the pre-smoothing 3D, so it
 replaces the last) behind the shared progress card, counted in POSES (one per
 animal per frame), shown at once and painted (`yieldToPaint`) before the pass.
-This frame runs `smoothFrame(session, params, state.currentFrame)`
+The status names the run (`describeSmoothingConfig`); an adaptive run adds its
+mean window and, if any, how many points had under 2 views and took their
+node's sigma. This frame runs `smoothFrame(session, params, state.currentFrame)`
 synchronously with no card: it reads only the frames within the filter windows
 of the current one (~1–4 ms on 200,000 frames, vs ~1.3 s when it filtered whole
 trajectories) and writes the values an All frames run gives that frame. Then it
@@ -12913,7 +13116,8 @@ frame), and runs `markDirty` + `drawAllOverlays` + `update3DViewport(state.curre
 (the frame matters: without it the 3D view got no groups and went blank) +
 `updateInfoPanel`, setting the summary status last. Both-windows-0 restores
 pass `writeFrames: new Set([state.currentFrame])` for This frame. It touches only `points3d` on the
-already-resident `session.instanceGroups`, hydrating no 2D. The button is blue
+already-resident `session.instanceGroups`, hydrating no 2D (the adaptive
+method reads members' 2D, resident or from the store). The button is blue
 while smoothing is applied, and the menu lights only the last run's scope
 (`ui/smoothing-button.js`, synced on every overlay draw).
 
@@ -13645,7 +13849,10 @@ last in the threshold card and told what is being tried); `thresholdPasses` and 
 ### ui/smoothing-windows-figure.js
 
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
-Median window and the Gaussian window each do, as two cards (stage 1, stage 2).
+Median window and the Gaussian window each do, as two cards (stage 1, stage 2),
+or, for the Adaptive method, its own card (see below). Only the method in use
+(`smoothingMethod`, the panel's toggle) is shown: one or the other runs, never
+both.
 Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
 solid white line under everything else that ends low, with one fast real move
 up and back, tall enough that a Gaussian visibly damps it, plus jitter and one
@@ -13699,6 +13906,24 @@ short to smooth) and the segments as bars. Its Max gap and Min segment sliders
 (0–15, 1–15; the text boxes go further) try values the same way; its Use button
 sets both through `onParam`.
 
+**The Adaptive card** (`data-stage="adaptive"`, violet) runs
+`ataSmoothSeriesInto` (`pose/adaptive-temporal-averaging.js`) on the same raw
+trace, as one coordinate of a 3D series with every point weighed by the trace's
+own jitter (sd 14/√6 mm; in LUC3D each point's comes from its views). It draws
+the output, the window around the picked frame (its own 1 + 2h), and the test
+that grew it (`gateTrials`): each frame tried on either side as a stem as tall as
+its distance from the picked frame in standard deviations (scale to 6 SD), under
+a dashed line labelled gate. In the window: violet; the first over the gate,
+which stops that side: red; passed but cut so both sides match: grey. It starts
+on frame 27 (index 26), where the fast move stops the left side and the right is
+cut. Its sliders (Gate 0.5–10 SD, Up to 0–30 frames each way with the box to 100,
+Frame, ▶) try values; Use sets `smoothAtaK` and `smoothAtaHmax`; Turn off sets
+the half-window to 0. Its text says it does not remove a spike (its own window
+is 1 frame; on this trace frames 10, 12 and 13 still take it in). It spans the
+row. **Method in use:** `update` hides the cards of the method not chosen
+(median, Gaussian and gaps for Median + Gaussian; the Adaptive card for
+Adaptive) and the lead's sentence about it.
+
 **Key exports.** `buildSmoothingWindowsFigure({ onParam, saved })` → `{ el, update(params) }`;
 `stageSketch(stage, window, { medianWindow, frame })` → `{ svg, keys, truth, raw, medOut, out }`,
 one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian, maxGap, minSegment })`
@@ -13706,7 +13931,9 @@ one card's sketch with no controls, DOM-free, and `gapSketch({ median, gaussian,
 draws the docs' step figures from them.
 
 **Imports.** `pose/temporal-smoothing.js` (`smoothSignalInto`, `normalizeWindow`,
-`sigmaForWindow`, `buildSegments`). **Imported by** `ui/settings-modal.js`,
+`sigmaForWindow`, `buildSegments`), `pose/adaptive-temporal-averaging.js`
+(`ataSmoothSeriesInto`, `ATA_DEFAULT_K`, `ATA_DEFAULT_HMAX`),
+`ui/figure-try-controls.js`. **Imported by** `ui/settings-modal.js`,
 `scripts/smoothing-wiki-figures.mjs`.
 
 **Tests.** `tests/e2e/smoothing-windows-figure.mjs`; `tests/test-smoothing-figure-steps.mjs`
@@ -13885,7 +14112,7 @@ actually stops the corresponding rendering / data work.
 
 **Purpose.** The right-edge icon rail and the stack of collapsible panel
 sections it drives (Instances, Visibility, ID Switches, Videos, Cameras,
-Skeleton, Session); it also shows/hides the info panel. It replaced the
+Skeleton, Session, Memory); it also shows/hides the info panel. It replaced the
 horizontal tab bar. Modelled on sleap-app's sidebar
 (`src/components/layout/AppShell.tsx` `Sidebar`; rules in `appStore.ts`
 `togglePanelOpen` / `openPanel` / `closePanel` / `toggleSectionCollapsed`) in
@@ -13931,6 +14158,11 @@ its default multi-panel (accordion) mode.
   covers the panel's right edge until the pointer leaves it.
 - The rail is a sibling AFTER `#infoPanelWrapper` in `.main-content`, so a
   collapsed wrapper still measures 0 wide and `isInfoPanelVisible` is unchanged.
+- **Panels that work only while seen** (the Memory panel draws its plot only
+  then) register `onPanelRailChange(fn)`; `syncPanelRail` calls every
+  listener after each repaint (open, fold, close, info panel shown/hidden,
+  Define Planes lock), and the listener asks `isPanelOnScreen(tabId)`
+  (expanded, info panel shown, not locked; scrolled out of view still counts).
 - Open / folded sections are display taste:
   `localStorage.lucidPanelRailSections` (`{open, folded}`, best-effort),
   restored once in `setupPanelRail`; whether the info panel is shown is not
@@ -13942,7 +14174,8 @@ its default multi-panel (accordion) mode.
 `clickPanelRailTab(tabId)` (the rail-click rule), `togglePanelSection(tabId)`
 (header chevron), `closePanelTab(tabId)` (header ✕), `getOpenPanelTabs()`
 (`[{tab, expanded}]` in stack order), `setPanelRailLocked(on)` (Define Planes
-disables the panel icons; the top button stays live), `syncPanelRail()`.
+disables the panel icons; the top button stays live), `syncPanelRail()`,
+`onPanelRailChange(fn)` (returns an unsubscribe), `isPanelOnScreen(tabId)`.
 
 **Imports from project modules.** `ui/panel-rail-icons.js` only.
 `toggleInfoPanel` is passed in, because `ui/id-switch-modal.js` and
@@ -13951,7 +14184,8 @@ cycle.
 
 **Imported by.** `pose/initialization.js` (`setupPanelRail`),
 `ui/id-switch-modal.js` (`showPanelTab` in `openIdSwitchPanel`),
-`ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`).
+`ui/plane-definition.js` (`setPanelRailLocked` in `setPanelPlaneMode`),
+`ui/memory-panel.js` (`onPanelRailChange`, `isPanelOnScreen`).
 
 **User-facing features.** The icon rail on the window's right edge and the
 collapsible panel sections. Covered by `tests/e2e/panel-rail.mjs`.
@@ -13963,7 +14197,7 @@ release sleap-app uses through `lucide-react`; ISC, notice in the file header
 and `lib/LICENSES.txt`). sleap-app's glyph wherever the panel matches:
 Instances = Users, Visibility = Eye (sleap-app's View panel), Videos = Film,
 Skeleton = Bone. Others: ID Switches = ArrowLeftRight (two opposing arrows),
-Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
+Cameras = Camera, Session = FolderTree, Memory = MemoryStick, plus PanelRightClose / PanelRightOpen
 and the section headers' ChevronDown / ChevronRight / X (sleap-app's).
 Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 
@@ -13973,6 +14207,125 @@ throws on an unknown name).
 
 **Imports from project modules.** None (leaf). **Imported by.**
 `ui/panel-rail.js`.
+
+### ui/memory-panel.js
+
+**Purpose.** The Memory panel (`#tabMemory`, last on the right-edge rail): the
+page's JavaScript heap (`performance.memory.usedJSHeapSize`) over the last
+five minutes, 30 minutes or hour as an inline-SVG line, V8's limit (`jsHeapSizeLimit`) as a
+dashed reference line named **"JS object limit"** (never "heap limit": it caps
+JavaScript objects only, and `usedJSHeapSize` also counts typed arrays outside
+it, so a big project reads well above it and is fine: 05mice after Track All
+5.6 GB used, objects under 1.9 GB), the current reading as a `toLocaleString('en-US')` MB
+number, peak / allocated / limit rows, and what the project holds (frames in
+memory of the project's frames, `(lazy)` when lazy; frames with instance
+groups, the size of the frame-keyed `instanceGroups`; sessions). An ⓘ says what the number leaves out (workers, video decoding,
+Chrome's GPU and other processes) and that typed arrays count, so it can read
+above the ~4 GB cap.
+- **Reads the heap once a second from app start, open or not**, so opening
+  the panel shows the last five minutes, or up to an hour (a run done with it
+  closed included); the ring keeps an hour (~300 KB).
+  A reading is `performance.memory` into the ring: ~6 µs, the same on the demo
+  and on a 5.7 GB 8-camera project after Track All.
+- **Marks runs.** Each reading notes what was running
+  (`runName(loadingCardText())`: the progress card's title, or its message,
+  so Track All, Triangulate All, loads, saves, and the app's start-up card).
+  A run is a shaded band (`#memoryRunBands` rects, `<title>` = name, length,
+  peak) with its name along the top in HTML over the plot (`#memoryRunLabels`, two
+  rows; the SVG is stretched, so text never goes in it), placed by
+  `placeRunLabels`. Back-to-back bands alternate shades.
+  A run done with the panel closed is marked too.
+- **Draws ONLY while on screen** (`onPanelRailChange` → `isPanelOnScreen`;
+  folded, closed, info panel hidden or Define Planes open, it is not): the SVG,
+  the rows and the project counts (Map sizes, `projectCounts`), at once on
+  opening and then with each reading. Never a walk over frames, so it cannot
+  stall playback, Track All or Triangulate All. A gap in the readings (a
+  throttled background tab) is a gap in the line.
+- **Chrome 157 reports `performance.memory` live** on an ordinary page (checked
+  in a real, non-automated window and on luc3d.sleap.ai), no flag needed.
+  Older Chrome (Playwright's Chromium 153), and `about:blank` in any, rounds it
+  unless started with `--enable-precise-memory-info`: 100 fixed sizes,
+  multiples of 100,000 bytes, capped near 4 GB, refreshed every 20 minutes
+  (Chromium `HeapSizeCache`). `isBucketizedHeap` spots that and the panel says so.
+- **Firefox / Safari** (no `performance.memory`): "Not available in this
+  browser" instead of the plot; the project rows still update.
+- **`measureUserAgentSpecificMemory()`** (whole page, workers included) only
+  where `crossOriginIsolated` and only while on screen (Chrome forces a full GC
+  to answer when none comes within ~20 s: ~140 ms on a big project, so never
+  in the background): at most every 10 s, one call in flight, shown as
+  two rows and an orange line (named in the legend only while it is shown).
+  The deployed site sends no COOP/COEP headers,
+  so it is off there; `python3 server.py --isolated` sends them. A refused call
+  (Playwright's Chromium rejects it even when isolated) hides the two rows for
+  the rest of the page's life.
+- **Workers** are counted only by `measureUserAgentSpecificMemory()`, so only
+  on an isolated page (`server.py --isolated`) in Chrome.
+- **Window switch** (5 min / 30 min / 1 h, in the heading): relabels the axis,
+  the peak row and the plot's `aria-label`. The pick is display taste:
+  `localStorage.lucidMemoryWindow` (`5m`/`30m`/`1h`, best-effort), written
+  only when one is picked, never the `.slp`.
+- **Hover** (`renderHover`): over the plot, a dashed guide and a dot on the
+  reading nearest the pointer (`sampleAt`), and the big number shows that
+  reading with how long ago and what was running ("2 min 5 s ago · Track
+  All"); off the plot it is the current reading again. Redrawn on each
+  reading while the pointer stays.
+- **Copy readings** (`#memoryCopy`): every reading kept (up to an hour) as CSV
+  (`readingsCsv`) to the clipboard (`navigator.clipboard`, else a hidden
+  textarea + `execCommand('copy')`); the button says how many for 2 s.
+- Samples live in a `MemoryRing` in memory only: nothing in the `.slp` or
+  `localStorage` (which holds only the rail's open panels and the window pick).
+
+**Key exports.** `setupMemoryPanel()` (once, after `setupPanelRail`),
+`syncMemorySampling()`, `MEMORY_INFO_TEXT`. Test hook
+`window.__lucidMemoryPanel` (`isSampling`, `isDrawing`, `samplesTaken`, `samples`).
+
+**Imports from project modules.** `ui/panel-rail.js` (`onPanelRailChange`,
+`isPanelOnScreen`), `ui/info-tip.js` (`setInfoTip`, `ICON_INFO`),
+`ui/app-state.js` (`state`), `ui/memory-plot.js`.
+
+**Imported by.** `pose/initialization.js`.
+
+**User-facing features.** Memory panel. Tests: `tests/e2e/memory-panel.mjs`,
+`tests/test-memory-plot.mjs`, `tests/e2e/isolated-server.mjs`.
+
+### ui/memory-plot.js
+
+**Purpose.** The DOM-free half of the Memory panel, import-free for Node tests:
+`MemoryRing` (fixed-capacity sample ring, oldest first), `isBucketizedHeap` /
+`readHeap` (Chrome's `performance.memory`, null elsewhere),
+`summarizeUaMemory` (whole page + dedicated-worker bytes),
+`projectCounts(sessions)` (Map sizes and `lazyLoader.nFrames` only),
+`formatMB`, and `plotGeometry(samples, {width, height, now, windowMs, limit})`
+(SVG path data; y from 0 to max(limit, 1.1 x peak), so the limit line is
+always drawn; a step over `MEMORY_GAP_MS` breaks the line; where several
+readings share one unit of width (30 min, 1 h) each column keeps its first,
+lowest, highest and last, so an hour is ≤ ~4 points per unit and a
+one-second spike still reaches its height).
+Hover and copy: `sampleAt(samples, t)` (nearest reading by binary search,
+null inside a gap), `formatAgo` ("just now", "12 s ago"), `formatClock`
+(12-hour "3:42:15 PM"), `readingsCsv(samples, timeOrigin)` (`time` ISO UTC,
+`clock`, `used_mb`, `allocated_mb`, `js_object_limit_mb`, `whole_page_mb`,
+`running`; MB to one decimal, unknown empty, names quoted as CSV needs).
+Runs: `runName(card)` (the progress card's title, else its message up to the
+first count / colon / ellipsis, cut to 40 characters; null with no card),
+`formatDuration(ms)` ("45 s", "2 min 5 s", "1 h 3 min"),
+`runSpans(samples, {width, now, windowMs})` (one span per stretch of a `run`
+name, split by another name, none, or a gap; covers its samples plus one
+period, never past the right edge; keeps its peak), and
+`placeRunLabels(spans, width, charW, lanes)` (rows of names, never
+overlapping within a row; placed newest run first, then the longest, so the
+run that just ended keeps its name and a 1-second check between two long runs
+never takes their room; each name left-aligned at its band if it fits there,
+else right-aligned at its band's end, in the first row where it fits whole,
+else cut; hidden under three characters).
+
+**Key exports.** The above, plus `MEMORY_SAMPLE_MS` (1 s), `MEMORY_WINDOW_MS`
+(5 min, the default), `MEMORY_WINDOWS` (`{key, ms, label}` for 5 min / 30 min /
+1 h), `MEMORY_RING_CAPACITY` (3,700: an hour with slack), `MEMORY_GAP_MS`,
+`UA_MEMORY_EVERY_MS`.
+
+**Imports from project modules.** None (leaf). **Imported by.**
+`ui/memory-panel.js`, `tests/test-memory-plot.mjs`.
 
 ---
 
@@ -14047,7 +14400,9 @@ bridged into the test runner as `window.__PerCamSlpChoice`.
 
 **Purpose.** Where a `showDirectoryPicker` opens. `startIn` = a file handle opens
 in that file's folder; the project's `.slp` handle is `state.slpFileHandle` (Load
-Project, Load SLP and Save As keep it; it is what File ▸ Save writes). Without
+Project, Load SLP and Save As keep it; it is what File ▸ Save writes). A loader
+adopts it only once it replaces the open project, and New Project or closing the
+last session clears it (`tests/e2e/save-target-handle.mjs`). Without
 `startIn` or `id`, Chromium opens wherever ANY picker of the origin last picked
 (Load Project, Save As, an export…), else Documents — so a picker with neither
 lands somewhere that depends on the browser's history, not the project. An `id`
@@ -14134,6 +14489,36 @@ has no recording folder: Save writes that file, Save As opens beside it.
 Imports nothing.
 
 **Tests.** `tests/e2e/save-opens-in-recording-folder.mjs`.
+
+### loading/demo-project.js
+
+**Purpose.** File ▸ Open Demo: a 15 s, 8-camera clip of SLAP-2M (two mice,
+proofread 2D in six cameras, the session's calibration) in the `demo/` folder
+of the Hugging Face dataset `talmolab/slap-2m`, whose README says where it was
+cut from. It is read from ONE commit (`DEMO_REVISION`): an upload to the
+dataset changes nothing until the pin moves, and moving it means updating
+`DEMO_FILES`' sizes too. Every file is fetched whole (24 MB), wrapped as a File
+with `webkitRelativePath` = `SLAP-2M demo/<path>`, and handed to
+`handleLoadSessionFolderPerCamera` as a picked folder would be, so nothing about
+the demo is special once loaded. Hugging Face answers cross-origin requests, so
+it works on every channel; it is not in the offline bundle, so offline it fails
+with a status message.
+
+**Key exports.** `DEMO_REVISION`, `DEMO_BASE_URL` (trailing slash),
+`DEMO_PROJECT_NAME` (the tab title), `DEMO_FILES` (`[path, bytes]`: the
+progress bar's total before any response);
+`fetchDemoFiles(baseUrl, onBytes, fetchFn?)` → Files (4 at a time, counting
+bytes as they stream); `loadDemoProject({baseUrl}?)` → true once loaded. It asks
+before replacing an open project (`confirm`), then `newProject(true)`, shows the
+download on the progress card (MB), loads the folder and names the project.
+
+**Imports from project modules.** `ui/app-state.js`,
+`loading/session-loader.js`, `import-export/save-load.js`,
+`ui/loading-overlay.js`, `ui/page-title.js`.
+
+**Imported by.** `ui/demo-entry.js`, `ui/ui-wiring.js` (File ▸ Open Demo).
+
+**Tests.** `tests/e2e/demo-project.mjs`.
 
 ### loading/campy-session.js
 
@@ -14588,7 +14973,9 @@ Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
 `import-export/save-load.js` via `shouldUseLazySlp`, and by
 `handleLoadSessionFolderSingleSlp` for a large root `.slp`, which passes
 `{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
-instead of prompting). **It shows the progress
+instead of prompting). `opts.fileHandle` (the picked `.slp`'s handle, from Load
+Project) becomes `state.slpFileHandle` when the old project is freed; without it
+the handle is cleared. **It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
@@ -14725,7 +15112,13 @@ synchronous.
 - `openProjectSlp(file, onProgress, onReadBytes)` — `onReadBytes(done, total)`
   (optional, awaited) counts the bytes read of the four big tables, which the
   vendored reader then reads in row slices (LUCID local patch, open progress);
-  without it the read is unchanged. Lazy reopen of a SINGLE multi-camera
+  without it the read is unchanged. It also passes `lucidReadWorkers:
+  projectReadWorkers()` (cores − 1, at most `PROJECT_READ_WORKERS_MAX` = 5):
+  the vendored reader reads a big column-chunked table's columns side by side
+  on that many workers (LUCID local patch, column reads; 05mice reopen ~14.5 →
+  ~2.9 s), and reads `/session_data`'s datasets (the 3D groups) on the same
+  workers, every dataset in pieces over all of them (HardFight's 3D reads ~0.88 → ~0.25 s). A project saved before the column chunks has its big tables read in row blocks on the same workers, each split into columns by its worker (HardFight ~2.1 → ~0.6 s). `open()` does not: a per-camera folder load already opens its
+  cameras at once. Lazy reopen of a SINGLE multi-camera
   project `.slp` (Load Project for large projects): one interleaved store shared
   by every camera, split into the same per-camera maps. Sets `_sharedStore =
   true` so the streaming re-save appends the store ONCE, retains `videoIdByCam`
@@ -14762,6 +15155,25 @@ then keeps the live columns for pass 2; see `import-export/save-load.js`).
 `remapTracksFromIdentity` resets each camera's own names to the propagated list,
 so a later `_unifyTracks` starts from that. Covered by
 `tests/e2e/percam-track-union.mjs`.
+
+**Store column types (vendored sleap-io.js, `LUCID local patch (narrow
+columns)`).** Each `labels._lazyDataStore` column is a typed array, as narrow as
+holds every value exactly: `x`/`y`/`score`/`tracking_score` Float32Array,
+`visible`/`complete`/`instance_type`/`skeleton` Uint8Array,
+`point_id_start/end` Uint32Array; a column with a value that does not fit (a
+NaN flag, a -1, an f64 coordinate) stays Float64Array, as does every other
+column. Reads return the same numbers as Float64Array would, so readers index
+element-wise and never depend on the type (no `instanceof Float64Array`, no
+`.buffer` reinterpretation). The columns this module WRITES — `track`
+(`_unifyTracks`, `remapTracksFromIdentity`), `from_predicted` and every `frames`
+column (`deleteInstanceRows`) — are always Float64Array; a new in-place writer
+must write only those, or add its column to neither list
+(`LUCID_NARROW_COLUMNS` / `lucidNarrowKindW` in `lib/sleap-io/chunk-X76PRJK6.js`).
+On the 8-camera 05mice project the stores went from 2,770 MB to 1,080 MB.
+Test: `tests/e2e/reopen-store-columns-typed.mjs`. A column-chunked table (every
+big table LUCID writes) is narrowed in the reader's worker, a column at a time
+(`lucidReadColumn`, LUCID local patch, column reads), with the same rule and the
+same result (`tests/e2e/reopen-column-reads.mjs`).
 
 `trackOccupancy` is populated per camera by `_computeSparseOccupancy(labels,
 nFrames, rowMap?)` — one O(nInstances) pass over the columnar store emitting
@@ -14889,7 +15301,12 @@ skeleton's name → column map is cached per skeleton (module-level
 `storeNodeColumn`, a `WeakMap`; first match, as `nodeNames.indexOf`), rebuilt
 if its `nodes` array is replaced or resized or a lookup misses or no longer
 names its node — sleap-io.js's `nodeNames` getter builds a new array per read,
-which was the hottest call of By Cam's per-frame pass.
+which was the hottest call of By Cam's per-frame pass. **`storeRowPoints(camName,
+frameIdx, offsetInFrame)`** returns one store row's 2D straight from the
+columns, `{x, y, start, end}` (node k at `x[start + k]` while `start + k <
+end`; the user or predicted table by `instance_type`), nothing materialized —
+what `hydrateFrameMembers2d` would give a released member back. Temporal
+Smoothing's adaptive method reads released members' 2D through it.
 
 **Imports.** `./track-union.js` (`unionTrackNames`);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
@@ -15894,8 +16311,10 @@ project saves byte-identically — `save-golden-digest.mjs`):
   has one (LUCID local patch (smoothing source)); the vendored reader returns
   it per group (all-NaN rows = none) and `adoptSmoothingSource` re-marks it;
 - per session, `metadata.lucid.temporalSmoothing` = `{scope, medianWindow,
-  gaussianWindow, maxGap, minSegment}` of the last run (the windows are
-  informational; a re-run uses the current Settings).
+  gaussianWindow, maxGap, minSegment}` of the last windows run (no `method`
+  key, as before the adaptive method), or `{scope, method: 'adaptive', k,
+  hmax}` (+ `covariance: 'sigma'` only for a sigma-only run) of an adaptive one
+  (the settings are informational; a re-run uses the current Settings).
 
 A full copy, not "re-triangulate on demand": the source is not reproducible from
 the 2D when the 3D was imported (campy-live), the triangulation settings or the
@@ -16704,9 +17123,19 @@ loading-overlay/status-text UI helpers.
   suggested name is the session's name when there is one session. Save Compact
   Copy's picker gets the same `startIn` (else the project file's folder). Covered by
   `tests/e2e/save-opens-in-recording-folder.mjs`.
+- Tab title (`ui/page-title.js`): `markDirty` / `clearDirty` call
+  `setPageDirty`; `newProject` clears the project's name, `handleLoadProject`
+  sets a `.json`'s, and a save sets the name of the file it wrote.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
-  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
-  `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
+  is used by the 3D-import reset and File ▸ Open Demo; it clears
+  `state.slpFileHandle`, so Save never writes the new project over the old
+  one's file, and the session LIST (`state.sessions`, every session's lazy
+  loader closed, the session strip repainted) and the dirty flag: a session
+  left in the list stayed on the strip and the next folder loaded joined it —
+  `tests/e2e/demo-project.mjs` §5), `markDirty`, `clearDirty`,
+  `quickSave`, `saveAs`, `saveProjectSlp`, `saveProject`,
+  `handleLoadProject(file, fileHandle)` (hands `fileHandle`, an `.slp`'s own, to
+  the loader; a `.json` leaves none; routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
   eager parse, freeing any previously loaded project first). A `.json` loaded
@@ -16894,8 +17323,13 @@ current session, overlay reprojected points3d from H5.
 
 **campy recordings.** When the video prompt's folder is a campy recording
 (session.json), `handleLoadSlpFile` puts it on the session
-(`adoptCampyRecording`, `loading/session-loader.js`): a camera whose campy video
-was picked loads only that video, views follow campy's camera order, the frame
+(`adoptCampyRecording`, `loading/session-loader.js`), read BEFORE videos are
+placed on cameras: campy's own video for each camera goes first, so it wins the
+first-of-equals picks (`assignFolderVideos`, `preferNonCalibrationVideos`) over
+another video in the same camera folder whatever order the browser listed the
+folder in (read afterwards, that order decided: CI's Linux listing loaded the
+other one). A camera whose campy video was picked loads only that video, views
+follow campy's camera order, the frame
 rate is session.json's, and the final status gains each session's warnings
 (`campyRecordingWarnings`). No calibration hash check here: the calibration
 came from the `.slp`.
@@ -16945,7 +17379,10 @@ path uses `resolveImportTrackIdx`, and the grouped-reconstruction path keeps
 first track.
 
 **Key exports.**
-- `handleLoadSlpFile(slpFile)` — replace-current-state load. Pre-allocates all
+- `handleLoadSlpFile(slpFile, fileHandle)` — replace-current-state load. Sets
+  `state.slpFileHandle` (File ▸ Save's target) to `fileHandle` or null at the
+  point it clears the old project, never before, so a load cancelled at its
+  first prompt leaves the open project's file alone. Pre-allocates all
   N session groups in the LoadingProgressModal before the per-session loop so
   the header reads the true "Session n of N"; re-engages `showLoading` after the
   non-embedded folder picker so the overlay stays up during video decode. Calls
@@ -17035,7 +17472,16 @@ first track.
   `opts.onCount(done, total)` (optional, awaited; frames) is the Open project
   card's counted hook, called at each yield and at the end; `opts.onProgress`
   still gets the old message. `stampFrameIdentitiesFromGroups` takes the same
-  `opts.onCount`.
+  `opts.onCount`. With `opts.labels` (the open lazy `Labels`;
+  `handleLoadProjectSlpLazy` passes it) each member's type, track and score are
+  read from the lazy store's rows (`lazyMemberStore`, `storeMembers`, private)
+  the way `LazyDataStore.materializeFrame` builds them, instead of through
+  `typedIG.instanceByCamera`, which materializes every grouped frame (points and
+  all) only for those three values: an 8-camera, 108,000-frame project reopened
+  in ~3.7 s instead of ~6 s. The store path stands aside when any frame is
+  already materialized or the group has a concrete instance map. Test:
+  `tests/e2e/lazy-reopen-members-from-store.mjs` (store path = the old path,
+  member for member).
 - `stampFrameIdentitiesFromGroups(session, opts)` — now DEFINED in
   `./frame-identity-metadata.js` and re-exported here for existing callers. For
   files whose identities live only on the groups (campy-live-export: file
@@ -17268,8 +17714,21 @@ fallback skeleton when loaded data carries none).
 tree, keeps a legacy `POST /convert-slp` endpoint alive when `h5py` is present,
 and implements **offline mode**.
 
-**CLI.** `python3 server.py [port] [--offline]`; `LUCID_OFFLINE=1` also enables
-offline. Prints which mode it started in.
+**CLI.** `python3 server.py [port] [--offline] [--isolated]`; `LUCID_OFFLINE=1`
+also enables offline, `LUCID_ISOLATED=1` isolation. Prints which mode it
+started in.
+
+**Isolated mode** (`--isolated`, opt-in). `LucidHandler.end_headers` adds
+`ISOLATION_HEADERS` (COOP `same-origin`, COEP `credentialless`) to EVERY
+response, errors and 304s included (an isolated page refuses a worker script
+without COEP). The page is then cross-origin isolated, and Chrome (157; not
+Playwright's Chromium 153) allows `measureUserAgentSpecificMemory()`: the whole
+page with its web workers, shown by the Memory panel (`ui/memory-panel.js`). `credentialless`, not
+`require-corp`, because the CDN scripts and Hugging Face send no CORP header.
+Off by default: no deployed channel sends these headers. Combines with
+`--offline`. The e2e harness does the same with `LUC3D_E2E_ISOLATED=1`
+(`startServer({ isolated })`), to run any file or the whole suite isolated.
+Test: `tests/e2e/isolated-server.mjs`.
 
 **Offline mode.** Reads `offline-deps.json` via `scripts/offline_deps.py` and
 rewrites the mapped CDN URLs in served `.html` / `.js` / `.mjs` bodies to
@@ -17283,7 +17742,8 @@ are ESM imports inside `ui/sessions-panes.js` and `ui/overlay-export-modal.js`.
 `load_manifest`, `package_status`, `replacement_map`, `rewrite_text`,
 `is_rewritable`.
 
-**User-facing features.** Local development; offline development.
+**User-facing features.** Local development; offline development; the Memory
+panel's whole-page reading with workers (`--isolated`).
 
 ---
 
