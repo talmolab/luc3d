@@ -23,16 +23,16 @@
 //             pose/pose-data.js (`groupDisplayName`), pose/outline-core.js,
 //             pose/outline-worker.js (`handleOutlineMessage`, the inline path)
 
-import { state, isViewDocked } from './app-state.js?v=7c01aaf950f1';
-import { groupReprojection, getGroupColor, unlinkedBaseColor, unlinkedDupIndices } from './overlays.js?v=7c01aaf950f1';
-import { keyframeIndices } from './image-embedder.js?v=7c01aaf950f1';
-import { drawAllOverlays } from './rendering.js?v=7c01aaf950f1';
-import { showLoadingProgress, hideLoading } from './loading-overlay.js?v=7c01aaf950f1';
-import { ensureLazyFrameData } from '../pose/triangulation.js?v=7c01aaf950f1';
-import { groupDisplayName } from '../pose/pose-data.js?v=7c01aaf950f1';
-import { tailChain, animalFromInstance, areaModel, poseAreaModel, outlineParams, pointInPolygon, labelImageContours, keypointCheck, outlineSuspects } from '../pose/outline-core.js?v=7c01aaf950f1';
-import { outlineEditAt, rleEncode, rleDecode } from '../pose/outline-edits.js?v=7c01aaf950f1';
-import { handleOutlineMessage } from '../pose/outline-worker.js?v=7c01aaf950f1';
+import { state, isViewDocked } from './app-state.js?v=8925dfae915d';
+import { groupReprojection, getGroupColor, unlinkedBaseColor, unlinkedDupIndices } from './overlays.js?v=8925dfae915d';
+import { keyframeIndices } from './image-embedder.js?v=8925dfae915d';
+import { drawAllOverlays } from './rendering.js?v=8925dfae915d';
+import { showLoadingProgress, hideLoading } from './loading-overlay.js?v=8925dfae915d';
+import { ensureLazyFrameData } from '../pose/triangulation.js?v=8925dfae915d';
+import { groupDisplayName } from '../pose/pose-data.js?v=8925dfae915d';
+import { tailChain, animalFromInstance, areaModel, poseAreaModel, outlineParams, pointInPolygon, labelImageContours, keypointCheck, outlineSuspects } from '../pose/outline-core.js?v=8925dfae915d';
+import { outlineEditAt, rleEncode, rleDecode } from '../pose/outline-edits.js?v=8925dfae915d';
+import { handleOutlineMessage } from '../pose/outline-worker.js?v=8925dfae915d';
 
 /** Frames sampled per camera for its empty arena (odd: an exact median). */
 export var BACKGROUND_FRAMES = 39;
@@ -78,7 +78,7 @@ function makePool() {
     if (!inline) {
         for (var i = 0; i < size; i++) {
             try {
-                var w = new Worker(new URL('../pose/outline-worker.js?v=7c01aaf950f1', import.meta.url), { type: 'module' });
+                var w = new Worker(new URL('../pose/outline-worker.js?v=8925dfae915d', import.meta.url), { type: 'module' });
                 w.onmessage = onWorkerMessage;
                 w.onerror = onWorkerError(i);
                 pool.workers.push(w);

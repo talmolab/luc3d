@@ -16,26 +16,26 @@
 //             ui/loading-overlay.js, pose/outline-flags.js, pose/triangulation.js,
 //             import-export/outline-export.js, import-export/save-load.js
 
-import { state, interactionManager, videoController, isViewDocked } from './app-state.js?v=7c01aaf950f1';
+import { state, interactionManager, videoController, isViewDocked } from './app-state.js?v=8925dfae915d';
 import {
     outlinesEnabled, outlineCameraState, ensureBackgrounds, animalsInView, drawnOutlines, outlineAnimalAt,
     computeViewOutlines, paintOutlines, currentOutlineParams, resetOutlines, BACKGROUND_FRAMES, editedEntry, entryLabels,
     scanOutlines, outlineScan, sampleFrames,
-} from './animal-outlines.js?v=7c01aaf950f1';
-import { formatFrameNumber } from './frame-readout.js?v=7c01aaf950f1';
-import { setInfoTip } from './info-tip.js?v=7c01aaf950f1';
-import { ICON_INFO } from './plane-definition.js?v=7c01aaf950f1';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=7c01aaf950f1';
+} from './animal-outlines.js?v=8925dfae915d';
+import { formatFrameNumber } from './frame-readout.js?v=8925dfae915d';
+import { setInfoTip } from './info-tip.js?v=8925dfae915d';
+import { ICON_INFO } from './plane-definition.js?v=8925dfae915d';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=8925dfae915d';
 import {
     OUTLINE_FLAG_REASONS, OUTLINE_NOTE_MAX, outlineFlags, addOutlineFlag, removeOutlineFlag, outlineFlagReasonLabel,
-} from '../pose/outline-flags.js?v=7c01aaf950f1';
-import { getInstanceGroupsForFrame, ensureLazyFrameData } from '../pose/triangulation.js?v=7c01aaf950f1';
-import { zipStore, encodePngGray, OUTLINE_EXPORT_README, outlineEntryBase, safeFileName } from '../import-export/outline-export.js?v=7c01aaf950f1';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=7c01aaf950f1';
-import { outlineEdits, outlineEditAt, revertOutlineEdit, BRUSH_MIN, BRUSH_MAX } from '../pose/outline-edits.js?v=7c01aaf950f1';
-import { brushState, setBrushOn, setBrushRadius, setBrushAnimal, onBrushChange } from './outline-brush.js?v=7c01aaf950f1';
-import { drawAllOverlays } from './rendering.js?v=7c01aaf950f1';
-import { keyframeIndices } from './image-embedder.js?v=7c01aaf950f1';
+} from '../pose/outline-flags.js?v=8925dfae915d';
+import { getInstanceGroupsForFrame, ensureLazyFrameData } from '../pose/triangulation.js?v=8925dfae915d';
+import { zipStore, encodePngGray, OUTLINE_EXPORT_README, outlineEntryBase, safeFileName } from '../import-export/outline-export.js?v=8925dfae915d';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=8925dfae915d';
+import { outlineEdits, outlineEditAt, revertOutlineEdit, BRUSH_MIN, BRUSH_MAX } from '../pose/outline-edits.js?v=8925dfae915d';
+import { brushState, setBrushOn, setBrushRadius, setBrushAnimal, onBrushChange } from './outline-brush.js?v=8925dfae915d';
+import { drawAllOverlays } from './rendering.js?v=8925dfae915d';
+import { keyframeIndices } from './image-embedder.js?v=8925dfae915d';
 
 var OUTLINES_INFO = 'An outline per camera and animal, made the idtracker.ai way: pixels brighter than the camera\'s empty arena, ' +
     'grouped into blobs, each blob given to the animal whose pose is in it (split by nearest skeleton where animals touch), tails traced along their keypoints.';
