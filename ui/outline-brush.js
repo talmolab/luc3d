@@ -1,9 +1,9 @@
 // ui/outline-brush.js — the Outlines brush: correct an animal's outline by
-// hand in a camera view. With the brush on (B, or the Outlines tab's Brush
+// hand in a camera view. With the brush on (B, or the Outlines panel's Brush
 // button), holding the LEFT button draws the animal's outline, holding the
 // RIGHT button erases outline (any animal's) under the brush. The animal drawn
 // is the one under the pointer where the stroke starts, else the one chosen in
-// the Outlines tab (by default the last one drawn). [ and ] change the size,
+// the Outlines panel (by default the last one drawn). [ and ] change the size,
 // Cmd/Ctrl+Z undoes the last stroke, Esc puts the brush away.
 //
 // The first stroke on a camera frame copies the outline shown there into an
@@ -29,7 +29,7 @@ var PREFS_KEY = 'lucid.outlineBrush';
 var brush = {
     on: false,
     radius: 8,              // video px
-    animal: null,           // index chosen in the Outlines tab (null: the last one drawn / under the pointer)
+    animal: null,           // index chosen in the Outlines panel (null: the last one drawn / under the pointer)
     pointer: null,          // {view, x, y} in video px, while over a camera view
     stroke: null,           // {edit, value, last: [x, y], rec: {idx, old}}
 };
@@ -116,7 +116,7 @@ function onMouseDown(e) {
         else if (brush.animal != null && brush.animal < edit.animals.length) value = brush.animal + 1;
         else if (edit.animals.length === 1) value = 1;
         else {
-            setStatus('Start the stroke on the animal, or choose which animal to draw in the Outlines tab');
+            setStatus('Start the stroke on the animal, or choose which animal to draw in the Outlines panel');
             dropIfUntouched(edit);       // nothing painted yet: no edit
             return;
         }
@@ -181,7 +181,7 @@ function onHover(e) {
     }
     var p = videoPoint(e, view);
     brush.pointer = { view: view.name, x: p[0], y: p[1] };
-    if (!prev || prev.view !== view.name) notify('state');   // the tab lists this view's animals
+    if (!prev || prev.view !== view.name) notify('state');   // the panel lists this view's animals
     redraw();
 }
 

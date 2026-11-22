@@ -472,7 +472,7 @@ function cachePut(st, key, val) {
 }
 
 var _announce = 0;
-// The Outlines tab lists the suspects on the frame shown: tell it when outlines land.
+// The Outlines panel lists the suspects on the frame shown: tell it when outlines land.
 function announceSoon() {
     if (_announce || typeof window === 'undefined') return;
     _announce = setTimeout(function () {

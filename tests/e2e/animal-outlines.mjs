@@ -1,5 +1,5 @@
 /**
- * animal-outlines.mjs — Visibility ▸ Animal Outlines and the Outlines tab's
+ * animal-outlines.mjs — Visibility ▸ Animal Outlines and the Outlines panel's
  * flags on bad outlines (ui/animal-outlines.js, ui/outline-flags-panel.js), in
  * the real app on a two-camera clip of two bright "mice" with tails
  * (tests/fixtures/outline-mice/, cam1 = cam0 mirrored; they touch around
@@ -31,14 +31,12 @@
  *  §8 During playback nothing is computed.
  *
  * Screenshots of the overlay and the flag dialog go to $SHOTS when set.
- * Run: node tests/e2e/animal-outlines.mjs   (spawns its own http.server)
+ * Run: node tests/e2e/animal-outlines.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import net from 'node:net';
 import zlib from 'node:zlib';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,19 +48,8 @@ const { unzipStore } = await import(pathToFileURL(path.join(repoRoot, 'import-ex
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
-async function freePort() {
-    return new Promise((resolve) => {
-        const s = net.createServer();
-        s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
-    });
-}
-const PORT = Number(process.env.PORT) || await freePort();
-const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1'], { cwd: repoRoot, stdio: 'ignore' });
-for (let i = 0; i < 50; i++) {
-    const ok = await new Promise(r => { const c = net.connect(PORT, '127.0.0.1', () => { c.end(); r(true); }); c.on('error', () => r(false)); });
-    if (ok) break;
-    await new Promise(r => setTimeout(r, 100));
-}
+const server = await startServer(repoRoot);
+const PORT = server.port;
 
 // Decode an 8-bit grey PNG made by encodePngGray (one IDAT, filter 0 rows).
 function decodeGrayPng(buf) {
@@ -88,7 +75,7 @@ const mx = (cam, x) => cam === 'cam1' ? 319 - x : x;
 
 let browser;
 try {
-    browser = await chromium.launch();
+    browser = await launchBrowser();
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
     const page = await context.newPage();
     page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
@@ -98,7 +85,7 @@ try {
         if (/Failed to load resource|net::ERR|404/.test(t)) return;
         console.log('  [console.error]', t.slice(0, 300));
     });
-    await page.goto(`http://127.0.0.1:${PORT}/index.html`);
+    await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
     await page.waitForTimeout(400);
 
@@ -232,7 +219,7 @@ try {
     // ---------------------------------------------------------------- §5
     console.log('\n§5 flagging with Shift+O');
     await outlinesAt(45);
-    await page.evaluate(() => document.querySelector('.panel-tab[data-tab="tabOutlines"]').click());
+    await page.evaluate(async () => (await import('/ui/panel-rail.js')).showPanelTab('tabOutlines'));
     const pt = await page.evaluate(({ x, y }) => {
         const v = window.__lucid.state.views.find(v => v.name === 'cam0');
         const r = v.overlayCanvas.getBoundingClientRect();
@@ -256,7 +243,7 @@ try {
     await page.focus('#outlineFlagNote');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('.outline-flag-modal'), null, { timeout: 5000 });
-    // a second flag from the tab's button, on cam1, "several / not sure"
+    // a second flag from the panel's button, on cam1, "several / not sure"
     await page.evaluate(() => { window.__lucid.interactionManager.lastInteractedView = 'cam1'; window.__lucid.interactionManager.lastCursorPos = null; });
     await page.click('#outlineFlagBtn');
     await page.waitForSelector('.outline-flag-modal');
@@ -303,7 +290,7 @@ try {
     });
     check(sus.cam0.length === 1 && /^tail:A:2 of 2 tail keypoints outside A.s outline \(2 on B.s\)/.test(sus.cam0[0]), 'cam0, frame 30: A\'s tail keypoints are on B\'s tail: ' + sus.cam0.join());
     check(sus.cam1 === 0, 'cam1 (a good pose) has no suspect');
-    check(sus.rows.length === 1 && /Tail on the wrong animal/.test(sus.rows[0]), 'the Outlines tab lists it for this frame');
+    check(sus.rows.length === 1 && /Tail on the wrong animal/.test(sus.rows[0]), 'the Outlines panel lists it for this frame');
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, 'suspect.png') });
     await page.evaluate(() => window.__lucid.videoController.seekToFrame(0));
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 0);
@@ -398,7 +385,7 @@ try {
             dirty: window.__lucid.state.isDirty, sum: e ? e.labels.reduce((s, v, i) => (s + v * (i % 9973)) % 1000003, 0) : null };
     });
     check(ed.edit && ed.strokes === 1 && ed.drawnEdited, 'the camera frame now shows its corrected outline (one stroke left after the undo)');
-    check(ed.rows === 1 && ed.dirty, 'the Outlines tab lists it; the project is unsaved');
+    check(ed.rows === 1 && ed.dirty, 'the Outlines panel lists it; the project is unsaved');
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, 'brush.png') });
     await page.keyboard.press('Escape');
     check(await page.evaluate(() => !document.body.classList.contains('outline-brush-on')), 'Esc puts the brush away');
@@ -426,7 +413,7 @@ try {
     for (const route of ['eager', 'lazy']) {
         const p2 = await context.newPage();
         p2.on('pageerror', e => { console.log('  [pageerror ' + route + ']', String(e).slice(0, 300)); fails++; });
-        await p2.goto(`http://127.0.0.1:${PORT}/index.html`);
+        await p2.goto(`http://localhost:${PORT}/index.html`);
         await p2.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
         const got = await p2.evaluate(async ({ route, b64 }) => {
             const skip = setInterval(() => {
@@ -496,7 +483,7 @@ try {
     fails++;
 } finally {
     if (browser) await browser.close();
-    server.kill();
+    server.close();
 }
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);

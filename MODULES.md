@@ -4478,7 +4478,7 @@ stroke, max=30)` / `undoStroke(edit)`, `rleEncode` / `rleDecode` (`[value, count
 ### pose/outline-flags.js
 
 **Purpose.** Flags on bad animal outlines: "this camera, this frame, this animal's
-outline is wrong, and why" — the Outlines tab's review list and what its export
+outline is wrong, and why" — the Outlines panel's review list and what its export
 hands on as feedback and training data. DOM-free. A flag is `{frame (0-based),
 camera, animal (its name as the outline showed it, or null = several / not sure),
 identity, track (its track in that camera), source ('2d' own detection | '3d'
@@ -5692,7 +5692,7 @@ In-memory only; see `ui/app-state.js`.
   `setSkeletonEditWarningSuppressed` for `#skeletonWarnOffNote`.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
   the ID Switches tab (and its seekbar markers) for the active session.
-- `./outline-flags-panel.js` — `refreshOutlinePanel`: likewise the Outlines tab
+- `./outline-flags-panel.js` — `refreshOutlinePanel`: likewise the Outlines panel
   (empty arenas per camera, flags on bad outlines).
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
   `rememberSkeleton`, `buildRememberedSkeleton`, `setProjectSkeleton`,
@@ -9882,7 +9882,7 @@ camera and animal (`pose/outline-core.js`), drawn BEHIND the skeletons
   `scanOutlines(session, views, frames, onProgress, cancelled)` works out (or
   reuses) the outlines of every camera on `frames` and returns every suspect;
   the last scan is `outlineScan(session)` (in memory). A landed outline fires
-  `lucid:outlines-landed` (debounced) for the tab's suspect list.
+  `lucid:outlines-landed` (debounced) for the panel's suspect list.
 - `outlineAnimalAt(session, cam, x, y)` hit-tests the outline last drawn in a
   camera (label image, then polygons); `drawnOutlines`, `cachedOutlines`,
   `outlineCameraState`, `resetOutlines`, `outlineAnimalCount`, `outlinesEnabled`,
@@ -9903,11 +9903,11 @@ function bodies only), `./loading-overlay.js`, `../pose/pose-data.js`
 
 ### ui/outline-brush.js
 
-**Purpose.** The Outlines brush (`B`, or the Outlines tab's Brush button; turning
+**Purpose.** The Outlines brush (`B`, or the Outlines panel's Brush button; turning
 it on shows the outlines): hold the LEFT button over a camera view to draw an
 animal's outline, the RIGHT button to erase outline (any animal's) under the brush.
 A stroke that starts on an animal draws that animal; one that starts off every
-animal draws the animal chosen in the tab (default: the last one drawn; the only
+animal draws the animal chosen in the panel (default: the last one drawn; the only
 one if there is one). `[`/`]` change the size (`BRUSH_MIN`..`BRUSH_MAX` video px,
 kept in `localStorage['lucid.outlineBrush']`), Cmd/Ctrl+Z undoes the last stroke on
 the camera frame under the pointer, Esc puts the brush away.
@@ -9920,7 +9920,7 @@ the camera frame under the pointer, Esc puts the brush away.
   draws the edit (`editedEntry`). A stroke that changed nothing leaves no edit.
   A finished stroke marks the project dirty.
 - The ring cursor is drawn through `setOutlinePaintHook` after the view's outlines.
-- `onBrushChange(fn)` tells the tab what changed (`'state'`, `'radius'` — so the
+- `onBrushChange(fn)` tells the panel what changed (`'state'`, `'radius'` — so the
   size slider is not rebuilt mid-drag — or `'edit'`).
 
 **Exports.** `setBrushOn`, `toggleOutlineBrush`, `brushState`, `setBrushRadius`,
@@ -9932,11 +9932,11 @@ handler). **Tests.** `tests/e2e/animal-outlines.mjs` §6b.
 
 ### ui/outline-flags-panel.js
 
-**Purpose.** The Outlines tab (`#tabOutlines` / `#outlinePanel`): per camera, how its
+**Purpose.** The Outlines panel (`#tabOutlines` / `#outlinePanel`): per camera, how its
 empty arena stands (frames sampled, single-animal area median ± s.d.), Show/Hide
 and Rebuild empty arenas; and the flags on bad outlines (`pose/outline-flags.js`).
 - **Flag** (`openOutlineFlagDialog`, `flagOutlineUnderPointer` = shortcut
-  `Shift+O`, or the tab's Flag outline… button): a dialog for the view the pointer
+  `Shift+O`, or the panel's Flag outline… button): a dialog for the view the pointer
   was last over (`interactionManager.lastInteractedView`), at the frame on screen,
   with the animal under the pointer chosen (`outlineAnimalAt` on
   `lastCursorPos`); animal (or Several / not sure), reason, optional note; Enter
@@ -15557,9 +15557,9 @@ the v2 and v3 project-JSON shapes) — and the four readers —
 
 ### import-export/outline-flags-metadata.js
 
-**Purpose.** The `metadata.lucid` ↔ Session mapping for the Outlines tab's flags
-on bad animal outlines and the outlines corrected with its brush: the fifth
-`metadata.lucid` writer module, beside visibility, smoothing, plane and behavior.
+**Purpose.** The `metadata.lucid` ↔ Session mapping for the Outlines panel's flags
+on bad animal outlines and the outlines corrected with its brush: the fourth
+`metadata.lucid` writer module, beside visibility, smoothing and plane.
 Two keys per session, each written only when the session has some:
 `outlineFlags` (`{v: 1, flags}`, `pose/outline-flags.js`) and `outlineEdits`
 (`{v: 1, edits}`, run-length label images, `pose/outline-edits.js`); an unflagged,
@@ -16215,7 +16215,7 @@ session's resident/total) rather than truncate silently. Covered by
 - `./visibility-metadata.js` — `writeVisibilityMetadata` (its only deps are
   dependency-free `ui/` leaves, so it adds nothing to this module's import
   graph).
-- `./outline-flags-metadata.js` — `writeOutlineFlagsMetadata` (the Outlines tab's
+- `./outline-flags-metadata.js` — `writeOutlineFlagsMetadata` (the Outlines panel's
   flags; DOM-free, imports only `pose/outline-flags.js`).
 - `./frame-identity-metadata.js` — `writeFrameIdentityMetadata` (fills
   `metadata.lucid.frameIdentityMap` in `buildSlpLabelsAllViews`; no imports).

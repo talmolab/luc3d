@@ -17,11 +17,9 @@
  * The videos must be ones the browser decodes (Playwright's Chromium: H.264;
  * CHROME=1 uses installed Chrome, which decodes HEVC on a Mac).
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import net from 'node:net';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,20 +32,19 @@ const SOLO = (process.env.SOLO || '').split(',').filter(Boolean).map(x => ({ f: 
 if (!DATA) { console.log('set DATA=<recording folder>'); process.exit(2); }
 fs.mkdirSync(OUT, { recursive: true });
 
-const PORT = await new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
-const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1'], { cwd: repoRoot, stdio: 'ignore' });
-await new Promise(r => setTimeout(r, 1000));
+const server = await startServer(repoRoot);
+const PORT = server.port;
 const t0 = Date.now();
 const log = (m) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)} s] ${m}`);
 
 let browser;
 try {
-    browser = await chromium.launch(process.env.CHROME ? { channel: 'chrome' } : {});
+    browser = await launchBrowser(process.env.CHROME ? { channel: 'chrome' } : {});
     const context = await browser.newContext({ viewport: { width: 1920, height: 1200 }, deviceScaleFactor: 2, acceptDownloads: true });
     const page = await context.newPage();
     page.on('pageerror', e => log('[pageerror] ' + String(e).slice(0, 300)));
     page.on('console', m => { if ((m.type() === 'error' || /\[outlines\]/.test(m.text())) && !/Failed to load resource|404/.test(m.text())) log('[console.' + m.type() + '] ' + m.text().slice(0, 300)); });
-    await page.goto(`http://127.0.0.1:${PORT}/index.html`);
+    await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 30000 });
     await page.evaluate(async () => { window.__ao = await import('/ui/animal-outlines.js'); });
 
@@ -83,7 +80,7 @@ try {
     log('groups on ' + await page.evaluate(() => window.__lucid.state.session.instanceGroups.size) + ' frames');
 
     await page.evaluate(() => { const cb = document.getElementById('visOutlines'); cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); });
-    await page.evaluate(() => document.querySelector('.panel-tab[data-tab="tabOutlines"]').click());
+    await page.evaluate(async () => (await import('/ui/panel-rail.js')).showPanelTab('tabOutlines'));
     await page.waitForFunction(() => {
         const s = window.__lucid.state.session;
         return window.__lucid.state.views.every(v => { const c = window.__ao.outlineCameraState(s, v.name); return c && (c.status === 'ready' || c.status === 'failed'); });
@@ -201,5 +198,5 @@ try {
     process.exitCode = 1;
 } finally {
     if (browser) await browser.close();
-    server.kill();
+    server.close();
 }

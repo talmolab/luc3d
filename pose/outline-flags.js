@@ -1,6 +1,6 @@
 // pose/outline-flags.js — flags on bad animal outlines (ui/animal-outlines.js):
 // "this camera, this frame, this animal's outline is wrong, and why". They are
-// the review list the Outlines tab shows and what its export hands on as
+// the review list the Outlines panel shows and what its export hands on as
 // feedback and training data. DOM-free; the file mapping is
 // import-export/outline-flags-metadata.js.
 //

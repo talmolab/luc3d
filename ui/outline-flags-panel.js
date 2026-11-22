@@ -1,7 +1,7 @@
-// ui/outline-flags-panel.js — the Outlines tab: how the animal outlines
+// ui/outline-flags-panel.js — the Outlines panel: how the animal outlines
 // (ui/animal-outlines.js) stand per camera, and the flags on bad ones.
 //
-// Flagging: Shift+O (or the tab's Flag outline… button) opens a small dialog
+// Flagging: Shift+O (or the panel's Flag outline… button) opens a small dialog
 // for the camera view the pointer was last over, at the frame on screen, with
 // the animal under the pointer already chosen; pick the reason, add a note if
 // you like, Enter. Flags are per session, saved in the project
@@ -56,10 +56,10 @@ function viewByName(name) {
 }
 
 // ---------------------------------------------------------------------------
-// The tab
+// The panel
 // ---------------------------------------------------------------------------
 
-/** (Re)render the Outlines tab for the active session. Cheap. */
+/** (Re)render the Outlines panel for the active session. Cheap. */
 export function refreshOutlinePanel() {
     var host = typeof document !== 'undefined' && document.getElementById('outlinePanel');
     if (!host) return;

@@ -1,8 +1,8 @@
 // import-export/outline-flags-metadata.js — the `metadata.lucid` <-> Session
-// mapping for the Outlines tab's flags on bad animal outlines
+// mapping for the Outlines panel's flags on bad animal outlines
 // (pose/outline-flags.js) and the outlines corrected with its brush
-// (pose/outline-edits.js). The fifth `metadata.lucid` writer module, beside
-// visibility, smoothing, plane and behavior.
+// (pose/outline-edits.js). The fourth `metadata.lucid` writer module, beside
+// visibility, smoothing and plane.
 //
 // Two keys per session, each written only when the session has some:
 // `outlineFlags` (`{v: 1, flags: [...]}`) and `outlineEdits` (`{v: 1, edits:
