@@ -14,8 +14,11 @@
  *      curls) gets a wider lower bound but the same upper one, so a tip reaching onto a neighbour still counts.
  *   3. THE REPAIR (`checkChains`): a chain with a bone outside its range gets the FEWEST point changes that bring
  *      every bone inside: each point keeps its place, takes a candidate (a re-solve from a group of cameras that
- *      agree, from the core; later a volumetric model's point), or is dropped (no 3D). Kept points must stay linked
- *      to an anchor through present bones, so a drop cannot cut a wrong piece loose. A LOCKED point (every camera
+ *      agree, from the core; with a volume also its point or the plain solve's), or, only when the caller allows it
+ *      (`allowDrop`: with a volume), is dropped (no 3D). Without a volume nothing independent says a point is wrong:
+ *      a short bone may mean its other end is, and a dropped nose that was right is a loss (judged by eye on July 13
+ *      frame 105,413). Kept points must stay linked to an anchor through present bones, so a drop cannot cut a
+ *      wrong piece loose. A LOCKED point (every camera
  *      that sees it agrees) never changes. Ties go to fewer drops, then to better-supported candidates, then to the
  *      smallest move. A chain no repair makes plausible is left as it is. Never a whole chain at once: one wrong
  *      point among right ones is the common case (the volfuse study's July 13 frames, judged by eye).
@@ -197,10 +200,11 @@ export function chainRepairBadness(P, chain) {
  * kind: string, support: number }] }: what node k may become instead of its point (called only for the points of a
  * chain that is off). Each measured chain outside its ranges (`chainBadness` > 0) gets the fewest changes that make
  * it plausible (`chainRepairBadness` 0); ties: fewer drops, more support, smaller move. A chain no repair makes
- * plausible is left as it is.
+ * plausible is left as it is. `opts.allowDrop` (default true): whether a point may be dropped at all.
  * -> { chains: chains repaired, changed: { [kind]: points }, dropped: points }
  */
-export function checkChains(points3d, chains, candidatesFor) {
+export function checkChains(points3d, chains, candidatesFor, opts) {
+    const allowDrop = !(opts && opts.allowDrop === false);
     const out = { chains: 0, changed: {}, dropped: 0 };
     if (!chains || !chains.length) return out;
     let work = null;
@@ -220,7 +224,7 @@ export function checkChains(points3d, chains, candidatesFor) {
                     if (here && Math.hypot(X[0] - points3d[q], X[1] - points3d[q + 1], X[2] - points3d[q + 2]) <= 1e-6) continue;
                     o.push(cand);
                 }
-                if (here) o.push({ kind: 'drop' });
+                if (here && allowDrop) o.push({ kind: 'drop' });
             }
             opts.push(o);
             total *= o.length;

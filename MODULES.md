@@ -3762,7 +3762,9 @@ the reprojection-threshold rule (`pose/skeleton-check.js` `checkChains`): a chai
 ranges gets the fewest point changes that make it plausible, each to a candidate from `subsetCandidates` — every
 pair of the cameras that see the point is triangulated, the cameras within `subsetPx` (12) of that point's
 reprojection form a group, each group of 2+ is re-solved (DLT) from its own detections, the `maxCandidates` (3)
-largest offered — or dropped (NaN). A point seen by 3+ cameras that all agree with it is locked. Candidates use
+largest offered — or, only with a matched volume, dropped (NaN; `checkChains`' `allowDrop`: without one nothing
+independent says a point is wrong, and July 13 frame 105,413 lost a right nose). A point seen by 3+ cameras that all
+agree with it is locked. Candidates use
 every detection, from a copy taken before the threshold rule. The result then carries `skeleton: {chainsRepaired,
 nodesResolved, nodesDropped}`; without the option it is exactly the old one (no `skeleton` key).
 **`triangulationSummary(result)`** — `{points3d, meanError,
@@ -3876,9 +3878,10 @@ find body parts whose 3D breaks the skeleton's usual bone lengths and repair onl
   fixed hash); fewer than `MIN_BONE_SAMPLES` (20) → the chain is skipped, with why. A steady bone gets exactly ±50 %;
   TTI–TailTip (short whenever the tail curls; 19 % of July 13's poses are under half its median) gets a wider lower
   bound and the same upper one.
-- **The repair** (`checkChains(points3d, chains, candidatesFor)`): the trigger `chainBadness` (bones with both ends
-  present, outside their ranges; a missing point is absent, not implausible); every combination of keep / a
-  candidate / drop per chain point (≤ 4,096); the result must be plausible (`chainRepairBadness` 0: judged bones
+- **The repair** (`checkChains(points3d, chains, candidatesFor, opts)`): the trigger `chainBadness` (bones with both
+  ends present, outside their ranges; a missing point is absent, not implausible); every combination of keep / a
+  candidate / drop per chain point (≤ 4,096; drop only while `opts.allowDrop` is not false — the core allows it
+  with a volume only); the result must be plausible (`chainRepairBadness` 0: judged bones
   inside their ranges and every kept point linked to an anchor through present bones, so a drop cannot cut a wrong
   piece loose); fewest changes, then fewest drops, then most support, then smallest move; none plausible = the chain
   is left. A `locked` point is keep-only. **Never swap a whole chain**: one wrong point among right ones is the

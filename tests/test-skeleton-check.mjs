@@ -8,8 +8,8 @@
  *   - the repair: fewest changes, locked points kept, a drop when nothing fits, fewer drops on ties, better support
  *     first, a drop cannot cut a point loose, plausible chains untouched;
  *   - in the solve, on SLAP's 8 real cameras: a point half the cameras put on a neighbour comes back from the cameras
- *     that agree on the truth; a point every camera agrees on is kept; nothing plausible is fitted; without
- *     `options.skeleton` nothing changes;
+ *     that agree on the truth; a point every camera agrees on is kept; without a volume a point no camera group fits
+ *     is kept, never dropped; nothing plausible is fitted; without `options.skeleton` nothing changes;
  *   - real data (tests/fixtures/skeleton-check-real.json, two DoublePoke clips, production 2D, no volume): every
  *     flagged chain is repaired to plausible or left as it was, and no plausible chain is touched;
  *   - pose/skeleton-check-run.js: the setting, the session's named chains, measuring from stored 3D, flagged frames.
@@ -123,6 +123,10 @@ group('the repair: fewest changes, locks, drops, support');
     P = truth(); P[3] = 50;
     r = SC.checkChains(P, [CH2], k => k === 1 ? { locked: false, cands: [cand([60, 0, 0], 4)] } : { locked: true, cands: [] });
     ok(r.chains === 1 && r.dropped === 1 && Number.isNaN(P[3]) && P[7] === 40, 'when nothing fits the point is dropped (no 3D)');
+    P = truth(); P[3] = 50;
+    r = SC.checkChains(P, [CH2], k => k === 1 ? { locked: false, cands: [cand([60, 0, 0], 4)] } : { locked: true, cands: [] },
+        { allowDrop: false });
+    ok(r.chains === 0 && P[3] === 50, 'unless dropping is not allowed: then the chain is left as it is');
     // two fitting candidates: the better supported wins
     P = truth(); P[3] = 50;
     r = SC.checkChains(P, [CH2], k => k === 1 ? { locked: false, cands: [cand([21, 0, 0], 2), cand([19, 0, 0], 5)] } : { locked: true, cands: [] });
@@ -198,6 +202,19 @@ group('in the solve: a point every camera agrees on is kept');
     ok(r.skeleton && r.skeleton.chainsRepaired === 0 && sameArr(r.points3d, plain.points3d), 'nothing changed: every camera agrees on that point');
 }
 
+group('in the solve: without a volume a point no camera group fits is kept, not dropped');
+{
+    seed = 4;
+    // tip 1's detections split between two wrong places, 80 mm out along x (cameras 0-3) and along z (4-7)
+    const offA = [TRUTH[1][0] + 80, TRUTH[1][1], TRUTH[1][2]], offB = [TRUTH[1][0], TRUTH[1][1], TRUTH[1][2] + 80];
+    const obs = observe(0.5, o => { for (let c = 0; c < o.length; c++) { const q = native(c < 4 ? offA : offB, c); o[c][1] = [q[0], q[1]]; } });
+    const plain = solve(obs, undefined), r = solve(obs, SKEL);
+    const ch1 = measured.find(ch => Array.from(ch.nodes).join() === '1');
+    ok(SC.chainBadness(plain.points3d, ch1) > 0, 'plain triangulation puts tip 1 out of its range');
+    ok(r.skeleton && r.skeleton.nodesDropped === 0 && sameArr(r.points3d, plain.points3d),
+        'nothing fits, and nothing is dropped: the point stays (' + JSON.stringify(r.skeleton) + ')');
+}
+
 group('in the solve: plausible poses, and no option');
 {
     seed = 3;
@@ -242,8 +259,11 @@ group('real data: two DoublePoke clips, production 2D, no volume');
         }
         console.log(`    ${clip.name}: ${clip.cases.length} animal-frames, ${flagged} chains flagged: ${repaired} repaired (${resolved} points re-solved, ` +
             `${dropped} dropped), ${left} left as they were`);
-        ok(flagged >= 20 && broken === 0 && repaired + left === flagged && repaired >= 0.8 * flagged,
+        // without a volume nothing is dropped: a chain no camera group fits stays as it was (July 13 24 of 30
+        // repaired, the fight 21 of 29)
+        ok(flagged >= 20 && broken === 0 && repaired + left === flagged && repaired >= 0.7 * flagged,
             `${clip.name}: every flagged chain is repaired to plausible or left as it was`);
+        ok(dropped === 0, `${clip.name}: no point dropped without a volume`);
         ok(touched === 0, `${clip.name}: no plausible chain is touched`);
     }
 }

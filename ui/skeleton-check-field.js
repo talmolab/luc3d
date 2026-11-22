@@ -13,8 +13,8 @@ import { setStatus } from '../import-export/save-load.js';
 
 const INFO = 'Skeleton check: after Triangulate, a body part whose bones are far outside their usual lengths ' +
     '(measured on this project\'s own 3D) is repaired with the fewest point changes: each point re-solved from a ' +
-    'group of cameras that agree on it, or left out (no 3D) when none fits. A point every camera agrees on is never ' +
-    'changed. Used by the next Triangulate.';
+    'group of cameras that agree on it, or kept when none fits (with a volume loaded: its point, or left out). A ' +
+    'point every camera agrees on is never changed. Used by the next Triangulate.';
 
 function refresh(input, label) {
     input.checked = !!getSkeletonCheckSettings().enabled;

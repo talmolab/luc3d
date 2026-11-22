@@ -1844,8 +1844,9 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     }
 
     // Skeleton check: a chain (a tail point, the ears, ...) whose bones break their usual lengths gets the fewest
-    // point changes that make it plausible, each to a re-solve from a group of cameras that agree, or dropped; a
-    // point every camera agrees on is never changed (pose/skeleton-check.js).
+    // point changes that make it plausible, each to a re-solve from a group of cameras that agree, or kept; a point is
+    // never dropped, since nothing independent says which end of a bad bone is wrong (July 13 frame 105,413 lost a
+    // right nose that was right), and a point every camera agrees on is never changed (pose/skeleton-check.js).
     let skeletonInfo = null;
     if (skeleton) {
         const px = skeleton.subsetPx != null ? skeleton.subsetPx : SKELETON_CHECK_DEFAULTS.subsetPx;
@@ -1853,7 +1854,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         const sk = checkChains(points3d, skeleton.chains, function (k) {
             return subsetCandidates(k, points3d, skObs, allObservationsRaw, included, projMatrices,
                 cameraNames.map(function (n) { return cameraMap[n]; }), px, maxC);
-        });
+        }, { allowDrop: false });   // a point is re-solved or kept, never dropped
         skeletonInfo = { chainsRepaired: sk.chains, nodesResolved: sk.changed.subset || 0, nodesDropped: sk.dropped };
     }
 
