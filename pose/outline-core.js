@@ -12,10 +12,15 @@
 //    ones while the floor and its shadows, never brighter than the empty arena,
 //    stay out. Then a morphological open (3 px ellipse) and close (5 px),
 //    8-connected components, a minimum area, and holes filled (`segmentBlobs`).
-// 2. A single-animal area model per video (`areaModel`): the median and s.d. of
-//    blob areas in sampled frames whose blob count equals the number of animals.
-//    A blob more than `areaSigmas` s.d. over the median is a crossing
-//    (idtracker.ai's test is one-sided: a small blob is an animal's fragment).
+// 2. What one animal looks like in this camera, from the sampled frames' blobs
+//    that hold exactly one animal's pose (`singlePoseBlobs`, `poseAreaModel`):
+//    the median and robust s.d. of their areas, and how far their pixels reach
+//    from the pose (`reach`, the median of each blob's 99th percentile). A blob
+//    more than `areaSigmas` s.d. over the median is a crossing (idtracker.ai's
+//    test is one-sided: a small blob is an animal's fragment). idtracker.ai
+//    learns the area from frames whose blob count equals the number of animals
+//    (`areaModel`, kept for frames without poses); a camera that also sees the
+//    animals' reflections, or never sees them all apart, has no such frame.
 // 3. Per animal (`computeOutlines`): an animal is IN a blob when at least a
 //    quarter of its body keypoints (at least one) lie in it. A blob with one
 //    animal in it is that animal's, whole. A crossing (two or more animals in
@@ -23,7 +28,12 @@
 //    nearest body skeleton. A blob nobody is in goes to the animal whose body
 //    keypoints come within `reach` px of it, else to nobody. Poses come from
 //    the camera's own 2D detection, else from the animal's 3D projected into it
-//    (the caller supplies whichever it has).
+//    (the caller supplies whichever it has). Either way an animal gets only the
+//    pixels within `envelope` times the camera's `reach` of its body skeleton
+//    (or `tailWidth` of its tail line): something bright that touches an animal
+//    is not the animal (its reflection in a wall where it meets the floor, wall
+//    lit up beside it). Those pixels stay nobody's, shown like other blobs
+//    nobody is in.
 // 4. Tails, traced: pixels more than `tailThr` (14) grey levels over the empty
 //    arena (tails are thin and dimmer than bodies) within `tailWidth` px of an animal's tail
 //    polyline (its tail keypoints from the body point they hang from) become
@@ -53,6 +63,7 @@ export const OUTLINE_PARAMS = Object.freeze({
     reattachMin: 6,     // px: smaller bright pieces are noise
     minPiece: 60,       // px: an animal's pieces smaller than this go
     inFraction: 0.25,   // share of an animal's body keypoints that puts it in a blob
+    envelope: 1.5,      // an animal's pixels lie within this many times its camera's reach of its pose (0 = no limit)
 });
 
 /** Merged parameters: `p` over the defaults, unknown keys ignored. */
@@ -457,6 +468,70 @@ export function areaModel(samples, nAnimals, params) {
     return { median: median, sd: sd, lo: median - P.areaSigmas * sd, hi: median + P.areaSigmas * sd, n: m, frames: frames };
 }
 
+/**
+ * The blobs of one frame (`segmentBlobs`' result) that hold exactly one
+ * animal's pose: at least `inFraction` of its body keypoints are in the blob
+ * and no other animal has a body keypoint there. -> [{blob, animal, area,
+ * reach}], `reach` the 99th percentile of the blob's pixels' distance (px) to
+ * the animal's pose (body skeleton, or its tail line): how far one animal's
+ * own pixels lie from its pose in this camera, unless something bright
+ * touches it.
+ */
+export function singlePoseBlobs(seg, w, h, animals, params) {
+    var P = outlineParams(params);
+    var A = (animals || []).map(normalizeAnimal);
+    var nb = seg.n, blob = seg.blob;
+    var cnt = A.map(function () { return new Int32Array(nb + 1); });
+    A.forEach(function (a, k) {
+        for (var i = 0; i + 1 < a.body.length; i += 2) {
+            var x = Math.round(a.body[i]), y = Math.round(a.body[i + 1]);
+            if (x >= 0 && y >= 0 && x < w && y < h && blob[y * w + x]) cnt[k][blob[y * w + x]]++;
+        }
+    });
+    var out = [];
+    for (var b = 1; b <= nb; b++) {
+        var who = -1, touched = 0;
+        for (var k = 0; k < A.length; k++) {
+            if (!cnt[k][b]) continue;
+            touched++;
+            if (cnt[k][b] >= Math.max(1, Math.ceil(P.inFraction * (A[k].body.length >> 1)))) who = k;
+        }
+        if (touched !== 1 || who < 0) continue;
+        var a = A[who], L = a.tail ? smoothTail(a.tail, 8) : null;
+        var box = seg.box.subarray(4 * b, 4 * b + 4);
+        var d = new Float32Array(seg.area[b]), n = 0;
+        for (var y = box[1]; y <= box[3]; y++) {
+            for (var x = box[0], p = y * w + box[0]; x <= box[2]; x++, p++) {
+                if (blob[p] !== b) continue;
+                d[n++] = Math.sqrt(Math.min(bodyDist2(a, x, y), L ? lineDist2(L, x, y) : Infinity));
+            }
+        }
+        d = d.subarray(0, n).sort();
+        out.push({ blob: b, animal: who, area: seg.area[b], reach: n ? d[Math.min(n - 1, Math.floor(0.99 * n))] : 0 });
+    }
+    return out;
+}
+
+/**
+ * What one animal looks like in a camera, from `singlePoseBlobs` of sampled
+ * frames (`singles`: their entries, each with `frame`, the sample it came
+ * from): the median area and a robust s.d. (1.4826 x the median absolute
+ * deviation, so the few blobs with a reflection or lit wall attached don't
+ * widen it), `hi` the crossing threshold, `reach` the median of the blobs'
+ * reach. null with fewer than 3 blobs.
+ */
+export function poseAreaModel(singles, params) {
+    var P = outlineParams(params);
+    if (!singles || singles.length < 3) return null;
+    var med = function (v) { v = v.slice().sort(function (a, b) { return a - b; }); var m = v.length; return m % 2 ? v[(m - 1) >> 1] : (v[m / 2 - 1] + v[m / 2]) / 2; };
+    var areas = singles.map(function (s) { return s.area; });
+    var median = med(areas);
+    var sd = 1.4826 * med(areas.map(function (a) { return Math.abs(a - median); }));
+    var frames = new Set(singles.map(function (s) { return s.frame; })).size;
+    return { median: median, sd: sd, lo: median - P.areaSigmas * sd, hi: median + P.areaSigmas * sd, n: singles.length, frames: frames,
+        reach: med(singles.map(function (s) { return s.reach; })), source: 'poses' };
+}
+
 // Squared distance from (px,py) to segment (ax,ay)-(bx,by).
 function segDist2(px, py, ax, ay, bx, by) {
     var vx = bx - ax, vy = by - ay;
@@ -480,6 +555,16 @@ function bodyDist2(a, x, y) {
     for (i = 0; i + 1 < p.length; i += 2) {
         var dx = p[i] - x, dy = p[i + 1] - y, e = dx * dx + dy * dy;
         if (e < best) best = e;
+    }
+    return best;
+}
+
+// Squared distance from a pixel to a polyline [x,y,...] (a tail line).
+function lineDist2(L, x, y) {
+    var best = Infinity;
+    for (var i = 0; i + 3 < L.length; i += 2) {
+        var d = segDist2(x, y, L[i], L[i + 1], L[i + 2], L[i + 3]);
+        if (d < best) best = d;
     }
     return best;
 }
@@ -584,6 +669,16 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
     };
     var housed = new Uint8Array(A.length);
     for (var aa = 0; aa < A.length; aa++) for (var bb = 1; bb <= nb; bb++) if (isIn(aa, bb)) { housed[aa] = 1; break; }
+    // an animal's pixels lie near its pose: within `envelope` x the camera's reach
+    // of its body skeleton, or `tailWidth` of its tail line
+    var tails = A.map(function (z) { return z.tail ? smoothTail(z.tail, 8) : null; });
+    var lim2 = model && model.reach > 0 && P.envelope > 0 ? Math.pow(model.reach * P.envelope, 2) : Infinity;
+    var tw2 = P.tailWidth * P.tailWidth;
+    var near = function (k, x, y, bd2) {
+        if (lim2 === Infinity) return true;
+        if ((bd2 == null ? bodyDist2(A[k], x, y) : bd2) <= lim2) return true;
+        return !!tails[k] && lineDist2(tails[k], x, y) <= tw2;
+    };
 
     var blobInfo = [];
     var reach2 = P.reach * P.reach;
@@ -613,12 +708,18 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
             if (best >= 0) { cand.push(best); kind = 'near'; }
             else kind = 'unassigned';
         }
-        blobInfo.push({ area: seg.area[b], kind: kind, animals: cand.slice(), byArea: byArea });
+        var info = { area: seg.area[b], kind: kind, animals: cand.slice(), byArea: byArea, beyond: 0 };
+        blobInfo.push(info);
         if (!cand.length) continue;
         var x0 = box[0], y0 = box[1], x1 = box[2], y1 = box[3];
         if (cand.length === 1) {
             var v = cand[0] + 1;
-            for (var yy = y0; yy <= y1; yy++) for (var xx = x0, p = yy * w + x0; xx <= x1; xx++, p++) if (blob[p] === b) labels[p] = v;
+            for (var yy = y0; yy <= y1; yy++) {
+                for (var xx = x0, p = yy * w + x0; xx <= x1; xx++, p++) {
+                    if (blob[p] !== b) continue;
+                    if (near(cand[0], xx, yy)) labels[p] = v; else info.beyond++;
+                }
+            }
         } else {
             for (var y2 = y0; y2 <= y1; y2++) {
                 for (var x2 = x0, p2 = y2 * w + x0; x2 <= x1; x2++, p2++) {
@@ -628,7 +729,7 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
                         var dd = bodyDist2(A[cand[ci]], x2, y2);
                         if (dd < bd) { bd = dd; bk = cand[ci]; }
                     }
-                    labels[p2] = bk + 1;
+                    if (near(bk, x2, y2, bd)) labels[p2] = bk + 1; else info.beyond++;
                 }
             }
         }
@@ -643,9 +744,8 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
         // animal; never in a blob that is one animal's alone
         var shared = new Uint8Array(nb + 1);
         for (var sb = 0; sb < blobInfo.length; sb++) shared[sb + 1] = blobInfo[sb].animals.length > 1 ? 1 : 0;
-        var tw2 = P.tailWidth * P.tailWidth;
         for (var t = 0; t < A.length; t++) {
-            var L = smoothTail(A[t].tail, 8);
+            var L = tails[t];
             if (!L) continue;
             var tv = t + 1;
             var bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
@@ -661,11 +761,11 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
                     var cv = core[tp];
                     if (cv && cv !== tv) continue;
                     if (labels[tp] && blob[tp] && !shared[blob[tp]]) continue;
-                    var near = false;
+                    var onTail = false;
                     for (var sj = 0; sj + 3 < L.length; sj += 2) {
-                        if (segDist2(tx, ty, L[sj], L[sj + 1], L[sj + 2], L[sj + 3]) <= tw2) { near = true; break; }
+                        if (segDist2(tx, ty, L[sj], L[sj + 1], L[sj + 2], L[sj + 3]) <= tw2) { onTail = true; break; }
                     }
-                    if (near) { labels[tp] = tv; traced[tv]++; }
+                    if (onTail) { labels[tp] = tv; traced[tv]++; }
                 }
             }
         }
@@ -711,12 +811,19 @@ export function computeOutlines(gray, bg, w, h, animals, model, params) {
         contours[v2].push(traceBoundary(pc.lab, w, h, pc.first[pi], pi));
     }
 
-    // animal-sized blobs nobody was given (an animal with no pose here)
+    // animal-sized blobs nobody was given (an animal with no pose here), and
+    // animal-sized parts of blobs that lie beyond every animal's reach
     var unassigned = [];
     var minUn = model ? Math.max(P.minArea, model.median / 2) : P.minArea;
     for (var ub = 1; ub <= nb; ub++) {
-        var info = blobInfo[ub - 1];
-        if (info.kind === 'unassigned' && info.area >= minUn) unassigned.push(traceBoundary(blob, w, h, firstPixel(blob, w, seg.box, ub), ub));
+        var bi0 = blobInfo[ub - 1];
+        if (bi0.kind === 'unassigned' && bi0.area >= minUn) unassigned.push(traceBoundary(blob, w, h, firstPixel(blob, w, seg.box, ub), ub));
+    }
+    if (blobInfo.some(function (z) { return z.beyond >= minUn; })) {
+        var left = new Uint8Array(N);
+        for (var lp = 0; lp < N; lp++) if (blob[lp] && !labels[lp] && blobInfo[blob[lp] - 1].kind !== 'unassigned') left[lp] = 1;
+        var lc = components(left, w, h, false);
+        for (var li2 = 1; li2 <= lc.n; li2++) if (lc.area[li2] >= minUn) unassigned.push(traceBoundary(lc.lab, w, h, lc.first[li2], li2));
     }
 
     var animalsOut = [];

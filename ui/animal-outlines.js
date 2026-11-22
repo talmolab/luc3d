@@ -30,7 +30,7 @@ import { drawAllOverlays } from './rendering.js';
 import { showLoadingProgress, hideLoading } from './loading-overlay.js';
 import { ensureLazyFrameData } from '../pose/triangulation.js';
 import { groupDisplayName } from '../pose/pose-data.js';
-import { tailChain, animalFromInstance, areaModel, outlineParams, pointInPolygon, labelImageContours, keypointCheck, outlineSuspects } from '../pose/outline-core.js';
+import { tailChain, animalFromInstance, areaModel, poseAreaModel, outlineParams, pointInPolygon, labelImageContours, keypointCheck, outlineSuspects } from '../pose/outline-core.js';
 import { outlineEditAt, rleEncode, rleDecode } from '../pose/outline-edits.js';
 import { handleOutlineMessage } from '../pose/outline-worker.js';
 
@@ -158,7 +158,7 @@ function sessionState(session) {
 
 function camKey(st, cam) { return st.id + '|' + cam; }
 
-/** A camera's empty-arena state: {status, w, h, bg, model, areas, frames, nAnimals, error, decoder}. */
+/** A camera's empty-arena state: {status, w, h, bg, model, areas, singles, frames, nAnimals, error, decoder}. */
 export function outlineCameraState(session, cam) {
     return session ? sessionState(session).cams.get(cam) || null : null;
 }
@@ -352,7 +352,7 @@ async function posesAt(session, frame, cam) {
         }
         var groups = session.instanceGroups ? session.instanceGroups.get(frame) || [] : [];
         var fg = session.getFrameGroup ? session.getFrameGroup(frame) : null;
-        return animalsInView(session, frame, cam, groups, fg).map(function (a) { return { body: a.body, tail: a.tail }; });
+        return animalsInView(session, frame, cam, groups, fg).map(function (a) { return { body: a.body, tail: a.tail, segments: a.segments }; });
     } catch (e) {
         return null;
     }
@@ -390,7 +390,7 @@ export async function buildBackground(session, view, onFrame) {
                 type: 'background', cam: camKey(st, cam), frames: bitmaps, w: view.videoWidth, h: view.videoHeight,
                 nAnimals: n, params: currentOutlineParams(), poses: poses,
             }, bitmaps);
-            Object.assign(entry, { status: 'ready', bg: res.bg, model: res.model, areas: res.areas, counts: res.counts, frames: used, nAnimals: n });
+            Object.assign(entry, { status: 'ready', bg: res.bg, model: res.model, areas: res.areas, singles: res.singles, counts: res.counts, frames: used, nAnimals: n });
         } catch (e) {
             Object.assign(entry, { status: 'failed', error: String(e && e.message || e) });
         }
@@ -409,7 +409,8 @@ export function refitAreaModels(session, nAnimals) {
     sessionState(session).cams.forEach(function (c) {
         if (c.status !== 'ready' || !c.areas) return;
         c.nAnimals = nAnimals;
-        c.model = areaModel(c.areas, nAnimals, currentOutlineParams());
+        // learnt from the blobs holding one pose when there were any: the count does not change it
+        c.model = poseAreaModel(c.singles, currentOutlineParams()) || areaModel(c.areas, nAnimals, currentOutlineParams());
     });
     sessionState(session).cache.clear();
 }

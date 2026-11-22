@@ -5,13 +5,15 @@
  * model; per-animal assignment (whole individual blobs, crossings split by
  * nearest BODY skeleton, the nearest animal for a blob nobody's pose is in);
  * tail tracing that stops at another animal's body core; small bright pieces
- * re-attached; contours. Synthetic images with exact answers. ESM, so
+ * re-attached; contours; what one animal looks like learnt from blobs holding
+ * one pose, and something bright touching an animal (its reflection, a lit
+ * wall) kept off it. Synthetic images with exact answers. ESM, so
  * tests/run-mjs-tests.mjs picks it up.
  */
 import {
     OUTLINE_PARAMS, outlineParams, rgbaToGray, medianImage, ellipseElement, morph, components, fillHoles,
     segmentBlobs, areaModel, computeOutlines, traceBoundary, pointInPolygon, tailChain, animalFromInstance, normalizeAnimal,
-    keypointCheck, outlineSuspects, smoothTail, maskedMedian, poseMask, convexHull,
+    keypointCheck, outlineSuspects, smoothTail, maskedMedian, poseMask, convexHull, singlePoseBlobs, poseAreaModel,
 } from '../pose/outline-core.js';
 
 let passed = 0, failed = 0;
@@ -300,6 +302,56 @@ console.log('\n15. Only visible misses count; a bent tail is followed (smooth cu
     for (let i = 0; i < sm.length; i += 2) near = Math.min(near, Math.hypot(sm[i] - mid[0], sm[i + 1] - mid[1]));
     check(near < 0.5, `the smoothed tail follows the bend: ${near.toFixed(2)} px from the arc (the chord: 1.57)`);
     check(smoothTail([0, 0, 10, 0, 20, 0], 4).length === 2 + 2 * 2 * 4, 'smoothTail samples each segment');
+}
+
+console.log('\n16. What one animal looks like, from blobs holding one pose (reflections and crossings don\'t count)');
+{
+    // A alone; B and C touching (two poses, one blob); a reflection with no pose
+    const img = frame(ellipse(60, 40, 26, 12), hline(40, 34, 14), ellipse(150, 40, 26, 12), ellipse(200, 40, 26, 12), ellipse(100, 120, 26, 12));
+    const seg = segmentBlobs(img, BG, W, H);
+    const A = mouse(60, 40, 1, 40), B = mouse(150, 40, 1, 0), C = mouse(200, 40, -1, 0);
+    const s1 = singlePoseBlobs(seg, W, H, [A, B, C]);
+    check(s1.length === 1 && s1[0].animal === 0, `only the blob holding one pose counts (${s1.length}: not the crossing, not the reflection)`);
+    check(s1[0].reach >= 9 && s1[0].reach <= 14, `its reach is the body's half width, tail included as tail (${s1[0].reach.toFixed(1)} px)`);
+    const apart = segmentBlobs(frame(ellipse(60, 40, 26, 12), ellipse(140, 40, 26, 12), ellipse(210, 40, 26, 12), ellipse(100, 120, 26, 12)), BG, W, H);
+    check(apart.n === 4 && areaModel([Array.from(apart.area.slice(1))], 3) === null, 'counting blobs, a camera that also sees a reflection has no frame with as many blobs as animals, even with all apart');
+    const singles = [{ frame: 0, area: 1000, reach: 12 }, { frame: 1, area: 1050, reach: 13 }, { frame: 2, area: 980, reach: 11 }, { frame: 2, area: 5000, reach: 60 }];
+    const m = poseAreaModel(singles);
+    check(m && m.median === 1025 && m.reach === 12.5 && m.frames === 3 && m.n === 4 && m.source === 'poses', 'median area and reach over the blobs, frames counted');
+    check(m.sd < 100 && m.hi < 1500, `a blob with something attached does not widen the model (robust s.d. ${m.sd.toFixed(0)})`);
+    check(poseAreaModel(singles.slice(0, 2)) === null && poseAreaModel(null) === null, 'fewer than 3 blobs: no model');
+}
+
+console.log('\n17. Something bright touching an animal is not the animal (its reflection, a lit wall)');
+{
+    const model = { median: 900, sd: 60, lo: 660, hi: 4000, reach: 12 };          // lim = 1.5 x 12 = 18 px
+    const A = mouse(100, 60, 1, 40);                                              // body x 80..122 on y = 60
+    const reflection = ellipse(100, 83, 26, 12);                                 // overlaps the body's edge at y = 71
+    const lit = (x, y) => (x >= 126 && x <= 200 && y >= 40 && y <= 80 ? floor(x, y) + 15 : null);   // dim, joined by hysteresis
+    const img = frame(ellipse(100, 60, 26, 12), hline(60, 74, 40), reflection, lit);
+    const seg = segmentBlobs(img, BG, W, H);
+    check(seg.n === 1 && seg.blob[84 * W + 100] === seg.blob[60 * W + 100] && seg.blob[60 * W + 180] === seg.blob[60 * W + 100], 'mouse, reflection and lit wall are one blob');
+    const r0 = computeOutlines(img, BG, W, H, [A], null);
+    check(at(r0, 100, 90) === 1 && at(r0, 180, 60) === 1, 'without a model (no reach known) the blob is the mouse\'s whole, as before');
+    const r = computeOutlines(img, BG, W, H, [A], model);
+    check(at(r, 100, 62) === 1 && at(r, 100, 70) === 1 && at(r, 124, 60) === 1, 'the body stays the mouse\'s');
+    check(at(r, 100, 90) === 0 && at(r, 100, 94) === 0, 'the reflection beyond its reach is not');
+    check(at(r, 180, 60) === 0 && at(r, 160, 45) === 0, 'nor the lit wall beyond it');
+    check(at(r, 45, 60) === 1 && at(r, 60, 60) === 1, 'the tail along its line stays (beyond the body\'s reach)');
+    check(r.blobs[0].beyond > 1500 && r.animals[0].area < seg.area[1] - 1500, `pixels beyond reach are counted, not given (${r.blobs[0].beyond})`);
+    check(r.unassigned.length >= 1, 'an animal-sized part beyond reach is shown as nobody\'s');
+    const r2 = computeOutlines(img, BG, W, H, [A], model, { envelope: 0 });
+    check(at(r2, 100, 90) === 1, 'envelope 0 turns the limit off');
+}
+
+console.log('\n18. In a crossing too: each animal\'s part, and nothing beyond');
+{
+    const model = { median: 900, sd: 60, lo: 660, hi: 4000, reach: 12 };
+    const A = mouse(70, 60, 1, 0), B = mouse(130, 60, -1, 0);
+    const img = frame(ellipse(70, 60, 26, 12), ellipse(130, 60, 26, 12), ellipse(100, 83, 56, 12));   // both reflected below
+    const r = computeOutlines(img, BG, W, H, [A, B], model);
+    check(r.blobs[0].kind === 'crossing' && at(r, 60, 60) === 1 && at(r, 140, 60) === 2, 'the crossing is split between the two');
+    check(at(r, 100, 92) === 0 && at(r, 70, 92) === 0 && at(r, 130, 92) === 0, 'their reflection is nobody\'s');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

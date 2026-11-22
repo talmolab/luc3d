@@ -70,7 +70,7 @@ export function refreshOutlinePanel() {
         var c = session ? outlineCameraState(session, v.name) : null;
         var status = !v.decoder ? 'no video' : !c ? '—' : c.status === 'building' ? 'building…' :
             c.status === 'failed' ? 'failed: ' + c.error : 'ready';
-        var model = c && c.model ? n(Math.round(c.model.median)) + ' ± ' + n(Math.round(c.model.sd)) : (c && c.status === 'ready' ? 'no frames with ' + (c.nAnimals || '?') + ' blobs' : '');
+        var model = c && c.model ? n(Math.round(c.model.median)) + ' ± ' + n(Math.round(c.model.sd)) : (c && c.status === 'ready' ? 'no blob with one animal alone' : '');
         return '<tr><td>' + esc(v.name) + '</td><td>' + esc(status) + '</td><td style="text-align:right;">' +
             (c && c.frames ? n(c.frames.length) : '') + '</td><td style="text-align:right;">' + esc(model) + '</td></tr>';
     }).join('');

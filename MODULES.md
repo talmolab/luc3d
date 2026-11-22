@@ -4362,9 +4362,18 @@ animals by their poses. DOM-free, typed arrays only; runs in
    selection; the lower median for an even count). The plain median keeps any
    animal resting in one place for most of the sampled frames (idtracker.ai's
    limit): on the HardFight excerpt, ghost mice in the empty arena hid a dim tail.
-2. **Area model** (`areaModel`): median and s.d. of the blob areas in sampled frames
-   with exactly as many blobs as animals; a blob over median + `areaSigmas` (4)
-   s.d. is a crossing (idtracker.ai's test is one-sided). null with < 3 areas.
+2. **What one animal looks like** (`singlePoseBlobs`, `poseAreaModel`): from the
+   sampled frames' blobs that hold exactly one animal's pose (at least
+   `inFraction` of its body keypoints, and no other animal's), the median area, a
+   robust s.d. (1.4826 x the median absolute deviation) and `reach`: the median
+   of each blob's 99th percentile of pixel distance to the animal's pose (body
+   skeleton, or tail line). A blob over median + `areaSigmas` (4) s.d. is a
+   crossing (idtracker.ai's test is one-sided). null with < 3 such blobs.
+   idtracker.ai's rule, median and s.d. over frames with exactly as many blobs as
+   animals (`areaModel`), stays for frames without poses: a camera that sees the
+   animals' reflections never has such a frame (DoublePoke 2026-07-13 topC, 5
+   mice: 2 to 13 blobs in 39 sampled frames, never 5), nor one that never sees
+   them all apart.
 3. **Per animal** (`computeOutlines`): an animal is IN a blob when at least a
    quarter of its body keypoints (at least one) lie in it, so one stray keypoint
    makes no crossing. One animal in a blob: all of it (`individual`). Two or more,
@@ -4372,7 +4381,21 @@ animals by their poses. DOM-free, typed arrays only; runs in
    `reach` join it): split pixel by pixel by nearest BODY skeleton (`crossing`; one
    animal and nobody near: `oversized`, all of it). Nobody in it: the animal whose
    body keypoints come within `reach` (15 px), `near`; else nobody (`unassigned`,
-   listed as polygons when animal-sized, ≥ max(minArea, median/2)).
+   listed as polygons when animal-sized, ≥ max(minArea, median/2)). In every
+   case an animal gets only the pixels within `envelope` (1.5) x the model's
+   `reach` of its body skeleton, or `tailWidth` of its tail line (no model, no
+   limit); the rest stay nobody's (`blobs[].beyond` counts them) and an
+   animal-sized part of them is listed in `unassigned` too. Something bright
+   touching an animal is not the animal: its reflection in a wall where the wall
+   meets the floor, or wall lit up beside it, which hysteresis joins (DoublePoke
+   2026-07-13 topC, 4,551-4,926: one mouse got 20-31 thousand px, three mice'
+   worth; HardFight 637: reflections in the side walls). Measured on 271 blobs
+   holding one pose (2 recordings, 8 cameras): own pixels lie within 25-45 px of
+   the pose on top cameras, 34-97 on side cameras (the belly below a side view's
+   skeleton), so the reach is learnt per camera; blobs with something attached
+   reach 150-300. A reflection touching the animal along its side keeps a band
+   within the limit. Capping how far dim pixels may join bright ones would cut
+   real side-view bodies (up to 59 % of a blob is dim), so hysteresis stays.
 4. **Tails**: pixels more than `tailThr` (14) grey levels over the empty arena
    (tails are thin and dimmer than bodies) within `tailWidth` (7) px of an
    animal's tail polyline become its own, unless they are another animal's: in
@@ -4396,9 +4419,11 @@ animals by their poses. DOM-free, typed arrays only; runs in
 
 **Exports.** `OUTLINE_PARAMS` (frozen defaults), `outlineParams(p)`, `rgbaToGray`,
 `medianImage`, `ellipseElement`, `morph`, `components(mask, w, h, sameValue)`,
-`fillHoles`, `segmentBlobs`, `areaModel`, `computeOutlines(gray, bg, w, h, animals,
-model, params)` → `{labels: Uint8Array (0 = none, k = animals[k-1]), blobs: [{area,
-kind, animals, byArea}], animals: [{area, blobs, tail, reattached, posed}],
+`fillHoles`, `segmentBlobs`, `areaModel`, `singlePoseBlobs(seg, w, h, animals,
+params)` → `[{blob, animal, area, reach}]`, `poseAreaModel(singles, params)` →
+`{median, sd, lo, hi, n, frames, reach, source: 'poses'}`, `computeOutlines(gray,
+bg, w, h, animals, model, params)` → `{labels: Uint8Array (0 = none, k =
+animals[k-1]), blobs: [{area, kind, animals, byArea, beyond}], animals: [{area, blobs, tail, reattached, posed}],
 contours: [[Float32Array]], unassigned: [Float32Array]}`, `traceBoundary`,
 `pointInPolygon`, `tailChain(nodeNames, edges)` (nodes named /tail/i; along the
 edges when they form one path from the body, else by name: base/root, numbers,
@@ -4436,8 +4461,9 @@ frame. Frames arrive as ImageBitmaps (transferred) and are turned grey on an
 OffscreenCanvas.
 
 **Messages.** `background` (sampled frames, `nAnimals`, and per frame the animals'
-poses there, `poses`, left out of the median) → `{bg (a copy), model,
-counts, areas}`; `setBackground`; `outline` (frame, animals, model, params) →
+poses there, `poses` (`{body, tail, segments}`), left out of the median and used
+for the blobs holding one pose) → `{bg (a copy), model (`poseAreaModel`, else
+`areaModel`), counts, areas, singles}`; `setBackground`; `outline` (frame, animals, model, params) →
 `computeOutlines`' result with its buffers transferred; `drop`. Each reply echoes
 `id`; a failure replies `{error}`.
 
@@ -9843,12 +9869,14 @@ camera and animal (`pose/outline-core.js`), drawn BEHIND the skeletons
   `keyframeIndices`, so each is one decode; evenly spaced frames when there are
   fewer than min(39, 15) keyframes; every frame when asked for at least as many
   as the video has) read with `decoder.peekFrame`, each with the animals' poses
-  on it (`posesAt`; the active lazy project's frames hydrated first) so the
-  worker leaves them out of the median (never the
-  playback path) and sent to the camera's worker. A progress card counts the
-  frames; up to 4 cameras at once. The number of animals for the area model is
-  `session.numAnimals` when it is a count, else the animals in view on the
-  current frame; `refitAreaModels` redoes the models from the kept blob areas.
+  on it (`posesAt`: body, tail and body segments; the active lazy project's
+  frames hydrated first) so the worker leaves them out of the median and learns
+  one animal's area and reach from the blobs holding one pose (never the
+  playback path), sent to the camera's worker. A progress card counts the
+  frames; up to 4 cameras at once. Only without such blobs does the area model
+  count blobs against a number of animals: `session.numAnimals` when it is a
+  count, else the animals in view on the current frame; `refitAreaModels` redoes
+  the models from the kept blobs (`singles`, else `areas`).
 - **Outlines** (`drawAnimalOutlines`, `computeViewOutlines`): while paused, a
   missing camera frame is requested (one in flight per camera, the newest wins)
   with the frame (`peekFrame`, a cache hit for the frame on screen) and the poses;
