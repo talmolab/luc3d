@@ -2605,9 +2605,9 @@ approximately true under perspective projection, and because interpolating a
 missing view fabricates an observation that then votes in triangulation as if
 it were real data.
 
-**Two methods** (`resolveSmoothingParams`' `method`, Settings' `smoothMethod`
+**Two methods** (`resolveSmoothingParams`' `method`, Settings' `smoothingMethod`
 0/1): **adaptive** (Settings' default; see the end of this entry), or the
-windows below (what params without `smoothMethod` resolve to, for direct
+windows below (what params without `smoothingMethod` resolve to, for direct
 callers and tests).
 
 **Algorithm.** Two independently switchable stages over each node's 1D
@@ -10366,13 +10366,10 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `filterMinInstanceScore`). Same clamp + drop-if-default persistence as the
   thresholds, under `_settings.smoothingParams`. Read by `ui/ui-wiring.js` and
   passed to `smoothSession` (`pose/temporal-smoothing.js`). The method:
-  `smoothMethod` (`kind: 'choice'`, `options` = `SMOOTH_METHOD_CHOICES`: 1 =
-  Adaptive, the default; 0 = Median + Gaussian; one or the other, never both).
-  With no stored
-  method, a median or Gaussian window stored above 0 (set before the method
-  existed) keeps the windows (`getSmoothingParam`), so nobody's Smooth click
-  changes method unasked; `setSmoothingParams` therefore stores `smoothMethod`
-  even at the default. And the adaptive
+  `smoothingMethod` (`kind: 'choice'`, `options` = `SMOOTH_METHOD_CHOICES`: 1 =
+  Adaptive, the default, also with a median or Gaussian window stored; 0 =
+  Median + Gaussian; one or the other, never both). A new id rather than the
+  PR previews' `smoothMethod`, so a choice saved there is never read. And the adaptive
   method's `smoothAtaK` (gate, 3) and `smoothAtaHmax` (longest half-window,
   15). Each method's own entries carry `method: 'windows' | 'adaptive'`;
   `getSmoothingParamDefs` passes `kind`, `options` and `method` on.
@@ -10552,7 +10549,7 @@ it is not a tracking parameter — it runs after triangulation, on 3D the tracke
 has finished with. A note warns that raising the reprojection-error threshold
 creates more gaps, hence more gap edges where the filter is least accurate. The
 pass itself runs from the Triangulate / Triangulate All dropdowns. The Method
-(`smoothMethod`) is a two-button toggle above the figure (`buildChoiceToggle`:
+(`smoothingMethod`) is a two-button toggle above the figure (`buildChoiceToggle`:
 Adaptive | Median + Gaussian, one lit; `role="radiogroup"`), and only the
 chosen method's rows and figure cards show (`showSmoothingMethod`, by each
 row's `data-smooth-method`).) Threshold
@@ -12075,7 +12072,7 @@ typing in Animals does not lose it and Tab walks into the items.
   has the **Remove smoothing / Restore smoothing** toggle (`#tbSmoothToggle`,
   `data-scope="toggle"`) after All frames; see below. Its Method radios
   (`tbSmoothMethod`: Adaptive / Median + Gaussian, `wireSmoothMethodRadios`) show and set
-  Settings' `smoothMethod` and follow its Apply (`onSmoothingParamsChange`).
+  Settings' `smoothingMethod` and follow its Apply (`onSmoothingParamsChange`).
   Settings… → `'smoothing'`.
 - **Track ▾** (`#trackDropdown`): the button (Track All) and This frame keep
   their own handlers in `pose/tracker.js`'s IIFE; `ui-wiring.js` wires Frame
@@ -12863,7 +12860,7 @@ last in the threshold card and told what is being tried); `thresholdPasses` and 
 **Purpose.** The figure at the top of Settings ▸ Temporal Smoothing: what the
 Median window and the Gaussian window each do, as two cards (stage 1, stage 2),
 or, for the Adaptive method, its own card (see below). Only the method in use
-(`smoothMethod`, the panel's toggle) is shown: one or the other runs, never
+(`smoothingMethod`, the panel's toggle) is shown: one or the other runs, never
 both.
 Both plot one made-up trace (one node's x over 40 frames: a slow movement, a
 solid white line under everything else that ends low, with one fast real move

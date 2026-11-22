@@ -858,7 +858,7 @@ export function showSettingsModal(initialPanel) {
 
     // The method, one or the other: a toggle above the figure. The figure and
     // the parameters below show only the chosen method's.
-    const methodDef = smoothingDefs.find(function (d) { return d.id === 'smoothMethod'; });
+    const methodDef = smoothingDefs.find(function (d) { return d.id === 'smoothingMethod'; });
     const smMethod = buildChoiceToggle(methodDef, working.smoothing, function () { showSmoothingMethod(); });
     smPanel.appendChild(smMethod.el);
 
@@ -884,17 +884,17 @@ export function showSettingsModal(initialPanel) {
     smPanel.appendChild(smSection.root);
     const smRows = [];
     function showSmoothingMethod() {
-        const method = working.smoothing.smoothMethod === 1 ? 'adaptive' : 'windows';
+        const method = working.smoothing.smoothingMethod === 1 ? 'adaptive' : 'windows';
         smRows.forEach(function (r) { r.row.hidden = !!r.method && r.method !== method; });
         smMethod.sync();
         smFigure.update(working.smoothing);
     }
     smoothingDefs.forEach(function (def) {
-        if (def.id === 'smoothMethod') return;     // the toggle above the figure
+        if (def.id === 'smoothingMethod') return;     // the toggle above the figure
         const row = buildParamRow(def, working.smoothing, function () {
             smFigure.update(working.smoothing);
         });
-        row.dataset.smoothMethod = def.method || '';
+        row.dataset.smoothingMethod = def.method || '';
         smRows.push({ row: row, method: def.method });
         smSection.body.appendChild(row);
     });

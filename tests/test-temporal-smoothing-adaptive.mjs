@@ -3,7 +3,7 @@
  * (3D adaptive temporal averaging) as `pose/temporal-smoothing.js` runs it on
  * a session: real 2D in four distorted cameras, DLT 3D, two identities.
  *
- *   - Settings: `smoothMethod` 1 selects it; defaults k 3, hmax 15; hmax 0 is off.
+ *   - Settings: `smoothingMethod` 1 selects it; defaults k 3, hmax 15; hmax 0 is off.
  *   - It smooths: a still node's frame-to-frame jitter and error fall, a fast
  *     node is left nearly as it was, and every point is weighed by its views'
  *     covariance (no fallback) while cameras and 2D exist.
@@ -155,17 +155,17 @@ const snapshot3d = (session) => {
     for (const [f, groups] of session.instanceGroups) for (const g of groups) out.push([f, g.identityId, Array.from(g.points3d)]);
     return JSON.stringify(out, (k, v) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v));
 };
-const ADAPTIVE = { smoothMethod: 1 };
+const ADAPTIVE = { smoothingMethod: 1 };
 
 // ---------------------------------------------------------------------------
 group('settings');
 {
     const c = resolveSmoothingParams(ADAPTIVE);
-    ok(c.method === SMOOTH_METHOD_ADAPTIVE && c.k === 3 && c.hmax === 15 && c.enabled, 'smoothMethod 1: adaptive, k 3, hmax 15, enabled');
-    ok(resolveSmoothingParams({ smoothMethod: 'adaptive', smoothAtaHmax: 0 }).enabled === false, 'hmax 0 is off');
-    ok(resolveSmoothingParams({ smoothMethod: 1, smoothAtaK: -2 }).k === 3, 'a bad gate falls back to 3');
+    ok(c.method === SMOOTH_METHOD_ADAPTIVE && c.k === 3 && c.hmax === 15 && c.enabled, 'smoothingMethod 1: adaptive, k 3, hmax 15, enabled');
+    ok(resolveSmoothingParams({ smoothingMethod: 'adaptive', smoothAtaHmax: 0 }).enabled === false, 'hmax 0 is off');
+    ok(resolveSmoothingParams({ smoothingMethod: 1, smoothAtaK: -2 }).k === 3, 'a bad gate falls back to 3');
     ok(resolveSmoothingParams({}).method === 'windows' && !resolveSmoothingParams({}).enabled, 'no method: the windows, off by default (as before)');
-    ok(resolveSmoothingParams({ smoothMethod: 1, smoothMedianWindow: 0 }).enabled, 'adaptive needs no window');
+    ok(resolveSmoothingParams({ smoothingMethod: 1, smoothMedianWindow: 0 }).enabled, 'adaptive needs no window');
     ok(/adaptive, gate 3 SD, up to 31 frames/.test(describeSmoothingConfig(c)), `described: "${describeSmoothingConfig(c)}"`);
 }
 
@@ -345,7 +345,7 @@ group('Remove / Restore smoothing');
     for (const [label, params] of [
         ['a new gate', { ...ADAPTIVE, smoothAtaK: 4 }],
         ['a new longest window', { ...ADAPTIVE, smoothAtaHmax: 10 }],
-        ['the windows method', { smoothMethod: 0, smoothGaussianWindow: 9 }],
+        ['the windows method', { smoothingMethod: 0, smoothGaussianWindow: 9 }],
     ]) {
         const t = buildSession();
         smoothSession(t, ADAPTIVE);

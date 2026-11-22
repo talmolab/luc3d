@@ -242,11 +242,11 @@ try {
 
     const f1 = (v) => (Number.isFinite(v) ? v.toFixed(2) : '–');
     const RUNS = [
-        ['adaptive, gate 3 (default)', { smoothMethod: 1 }],
-        ['adaptive, gate 3, node sigma only', { smoothMethod: 1, smoothAtaCovariance: 'sigma' }, true],
-        ['adaptive, gate 4', { smoothMethod: 1, smoothAtaK: 4 }],
-        ['adaptive, gate 2', { smoothMethod: 1, smoothAtaK: 2 }],
-        ['windows: median 3 + Gaussian 7', { smoothMethod: 0, smoothMedianWindow: 3, smoothGaussianWindow: 7 }],
+        ['adaptive, gate 3 (default)', { smoothingMethod: 1 }],
+        ['adaptive, gate 3, node sigma only', { smoothingMethod: 1, smoothAtaCovariance: 'sigma' }, true],
+        ['adaptive, gate 4', { smoothingMethod: 1, smoothAtaK: 4 }],
+        ['adaptive, gate 2', { smoothingMethod: 1, smoothAtaK: 2 }],
+        ['windows: median 3 + Gaussian 7', { smoothingMethod: 0, smoothMedianWindow: 3, smoothGaussianWindow: 7 }],
     ];
     const rows = [];
     for (const [label, params, direct] of RUNS) {
@@ -267,7 +267,7 @@ try {
         const TS = await import('/pose/temporal-smoothing.js');
         const SM = await import('/import-export/smoothing-metadata.js');
         const s = window.__lucid.state.session;
-        S.setSmoothingParams({ smoothMethod: 1 });
+        S.setSmoothingParams({ smoothingMethod: 1 });
         const params = S.getSmoothingParams();
         TS.smoothSession(s, params);
         const all = new Map();

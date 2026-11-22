@@ -2,7 +2,7 @@
 // The Settings ▸ Temporal Smoothing figure: what the Median window and the
 // Gaussian window each do (stage 1, stage 2 of the Median + Gaussian method),
 // or what the Adaptive method does instead. Only the method in use (Settings'
-// `smoothMethod`, toggled above the figure) is shown: one or the other runs,
+// `smoothingMethod`, toggled above the figure) is shown: one or the other runs,
 // never both.
 //
 // Both cards plot the same made-up trace: one node's x position over 40 frames
@@ -60,7 +60,7 @@
 // so. Its sliders try
 // a gate and a longest half-window, and its Use button sets them.
 //
-// The cards of the method not in use (Settings' `smoothMethod`) are hidden.
+// The cards of the method not in use (Settings' `smoothingMethod`) are hidden.
 //
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
 // `sigmaForWindow`, `buildSegments`), pose/adaptive-temporal-averaging.js
@@ -709,8 +709,8 @@ export function buildSmoothingWindowsFigure(opts) {
         if (opts.onParam) opts.onParam(id, value);
     }
 
-    /** Settings' `smoothMethod`: 0 median + Gaussian, 1 adaptive. */
-    function methodOf(from) { return +from.smoothMethod === 1 ? 1 : 0; }
+    /** Settings' `smoothingMethod`: 0 median + Gaussian, 1 adaptive. */
+    function methodOf(from) { return +from.smoothingMethod === 1 ? 1 : 0; }
 
     function ataValue(id, from) {
         if (id === 'smoothAtaK') {

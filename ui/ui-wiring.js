@@ -3177,18 +3177,18 @@ export function setupUI() {
     });
 
     // The Smooth menu's Method radios show and set Settings ▸ Temporal
-    // Smoothing's Method (`smoothMethod`), the one setting behind them, and
+    // Smoothing's Method (`smoothingMethod`), the one setting behind them, and
     // follow its Apply.
     function wireSmoothMethodRadios() {
         var radios = document.querySelectorAll('#smoothingDropdown input[name="tbSmoothMethod"]');
         function sync() {
-            var m = getSmoothingParams().smoothMethod === 1 ? '1' : '0';
+            var m = getSmoothingParams().smoothingMethod === 1 ? '1' : '0';
             radios.forEach(function (r) { r.checked = r.value === m; });
         }
         radios.forEach(function (r) {
             r.addEventListener('change', function () {
                 if (!r.checked) return;
-                setSmoothingParams(Object.assign(getSmoothingParams(), { smoothMethod: Number(r.value) }));
+                setSmoothingParams(Object.assign(getSmoothingParams(), { smoothingMethod: Number(r.value) }));
             });
         });
         sync();
