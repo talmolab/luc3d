@@ -13,7 +13,8 @@
 import {
     OUTLINE_PARAMS, outlineParams, rgbaToGray, medianImage, ellipseElement, morph, components, fillHoles,
     segmentBlobs, areaModel, computeOutlines, traceBoundary, pointInPolygon, tailChain, animalFromInstance, normalizeAnimal,
-    keypointCheck, outlineSuspects, smoothTail, maskedMedian, poseMask, convexHull, singlePoseBlobs, poseAreaModel,
+    keypointCheck, outlineSuspects, smoothTail, maskedMedian, poseMask, convexHull, singlePoseBlobs, poseAreaModel, tubeReach,
+    mirrorEvidence, reflectingSurfaces,
 } from '../pose/outline-core.js';
 
 let passed = 0, failed = 0;
@@ -352,6 +353,67 @@ console.log('\n18. In a crossing too: each animal\'s part, and nothing beyond');
     const r = computeOutlines(img, BG, W, H, [A, B], model);
     check(r.blobs[0].kind === 'crossing' && at(r, 60, 60) === 1 && at(r, 140, 60) === 2, 'the crossing is split between the two');
     check(at(r, 100, 92) === 0 && at(r, 70, 92) === 0 && at(r, 130, 92) === 0, 'their reflection is nobody\'s');
+}
+
+console.log('\n19. With the 3D pose: the body as it is in 3D, projected (a reflection beside it falls outside)');
+{
+    check(Math.abs(tubeReach([0, 0, 2, 10, 0, 4], 5, 6) - 2) < 1e-9, 'distance to the projected edge over the scale where it is closest (6 px at 3 px per unit = 2)');
+    check(tubeReach([0, 0, 2, 10, 0, 4], 14, 0) === 1 && tubeReach([], 1, 1) === Infinity, 'past the end: the end\'s scale; no edges: Infinity');
+    // the body x 80..122 on y = 60 at 1 px per unit; its reflection touches it below (section 17)
+    const tubes = [80, 60, 1, 101, 60, 1, 101, 60, 1, 122, 60, 1];
+    const A = Object.assign(mouse(100, 60, 1, 40), { tubes, tubeError: 0 });
+    const img = frame(ellipse(100, 60, 26, 12), hline(60, 74, 40), ellipse(100, 83, 26, 12));
+    const m2 = { median: 900, sd: 60, lo: 660, hi: 4000, reach: 12 };            // 2D: 18 px
+    const m3 = Object.assign({}, m2, { reach3d: 10 });                          // 3D: 12.5 units = 12.5 px here
+    const r2 = computeOutlines(img, BG, W, H, [A], m2), r3 = computeOutlines(img, BG, W, H, [A], m3);
+    check(at(r2, 100, 76) === 1 && at(r3, 100, 76) === 0, 'the band of reflection the 2D limit keeps (16 px from the skeleton) is cut with 3D');
+    check(at(r3, 100, 70) === 1 && at(r3, 122, 62) === 1 && at(r3, 45, 60) === 1, 'the body and the tail stay');
+    check(r3.animals[0].by3d === true && r2.animals[0].by3d === false, 'the result says which rule each animal used');
+    const bad = Object.assign({}, A, { tubeError: 40 });                        // 3D 40 px off the 2D pose
+    const rb = computeOutlines(img, BG, W, H, [bad], m3);
+    check(rb.animals[0].by3d === false && at(rb, 100, 76) === 1, '3D that disagrees with the 2D pose (more than half the limit) is not used: the 2D rule');
+    const r0 = computeOutlines(img, BG, W, H, [A], m3, { envelope3d: 0 });
+    check(r0.animals[0].by3d === false && at(r0, 100, 76) === 1, 'envelope3d 0: the 2D rule');
+    // a projected body twice as large at its head end (nearer the camera) reaches further there
+    const near = Object.assign(mouse(100, 60, 1, 0), { tubes: [80, 60, 1, 122, 60, 2], tubeError: 0 });
+    const rn = computeOutlines(frame(ellipse(100, 60, 30, 20)), BG, W, H, [near], m3);
+    check(rn.blob === undefined && at(rn, 114, 77) === 1 && at(rn, 86, 77) === 0, 'the limit follows the image scale along the body (17 px below it: kept near the near end, cut near the far end)');
+    // learning: the blob's 3D half-width, tail pixels left out
+    const seg = segmentBlobs(frame(ellipse(60, 40, 26, 12), hline(40, 34, 14)), BG, W, H);
+    const one = Object.assign(mouse(60, 40, 1, 40), { tubes: [40, 40, 1, 82, 40, 1], tubeError: 0 });
+    const s3 = singlePoseBlobs(seg, W, H, [one]);
+    check(s3.length === 1 && s3[0].reach3d >= 9 && s3[0].reach3d <= 13, `a blob holding one pose with 3D gives the body's half-width in units (${s3[0].reach3d && s3[0].reach3d.toFixed(1)})`);
+    const s3b = singlePoseBlobs(seg, W, H, [Object.assign({}, one, { tubeError: 30 })]);
+    check(s3b.length === 1 && s3b[0].reach3d === undefined, 'with 3D off the 2D pose, no 3D half-width from it');
+    const ms = poseAreaModel([{ frame: 0, area: 1000, reach: 12, reach3d: 10 }, { frame: 1, area: 1000, reach: 12, reach3d: 11 }, { frame: 2, area: 1000, reach: 12 }, { frame: 3, area: 1000, reach: 12, reach3d: 30 }]);
+    check(ms.reach3d === 11 && ms.n3d === 3, 'the model takes the median 3D half-width over the blobs that had 3D');
+    check(poseAreaModel([{ frame: 0, area: 1000, reach: 12, reach3d: 10 }, { frame: 1, area: 1000, reach: 12 }, { frame: 2, area: 1000, reach: 12 }]).reach3d === undefined, 'fewer than 3 with 3D: none (the 2D rule)');
+}
+
+console.log('\n20. A reflection touching the animal, where the arena\'s wall is known (campy cage)');
+{
+    // the body x 80..122 on y = 60 (1 px per unit); it touches its mirror image below,
+    // whose mirrored body lies on y = 83 (the mirror line at y = 71.5, the body's edge)
+    const tubes = [80, 60, 1, 101, 60, 1, 101, 60, 1, 122, 60, 1];
+    const mirror = [80, 83, 1, 101, 83, 1, 101, 83, 1, 122, 83, 1];
+    const A = Object.assign(mouse(100, 60, 1, 40), { tubes, tubeError: 0, mirrors: [{ plane: 2, tubes: mirror }] });
+    const img = frame(ellipse(100, 60, 26, 12), hline(60, 74, 40), ellipse(100, 83, 26, 12));
+    const m = { median: 900, sd: 60, lo: 660, hi: 4000, reach: 12, reach3d: 16 };    // 3D limit 20 units: the band passes it
+    const r0 = computeOutlines(img, BG, W, H, [A], m);
+    check(at(r0, 100, 76) === 1 && at(r0, 100, 79) === 1, 'without the wall known to reflect, the band near the body is the mouse\'s');
+    const mm = Object.assign({}, m, { mirrors: [{ plane: 2, n: 40, hits: 38 }] });
+    const r = computeOutlines(img, BG, W, H, [A], mm);
+    check(at(r, 100, 76) === 0 && at(r, 100, 79) === 0, 'with it, the reflection\'s pixels nearer its mirror image than the body are nobody\'s');
+    check(at(r, 100, 68) === 1 && at(r, 100, 70) === 1 && at(r, 45, 60) === 1, 'the body up to its edge, and the tail, stay the mouse\'s');
+    check(r.blobs[0].mirrored > 300, `pixels left to the reflection are counted (${r.blobs[0].mirrored})`);
+    const other = Object.assign({}, mm, { mirrors: [{ plane: 4, n: 40, hits: 38 }] });
+    check(at(computeOutlines(img, BG, W, H, [A], other), 100, 76) === 1, 'a surface that reflects is needed: another surface\'s images do nothing here');
+    // which surfaces reflect: the images on bright pixels, or on floor
+    const ev = mirrorEvidence(img, BG, W, H, [Object.assign({}, A, { mirrors: [{ plane: 2, tubes: mirror }, { plane: 3, tubes: [150, 130, 1, 200, 130, 1] }] })], 16);
+    check(ev[2] && ev[2].n >= 2 && ev[2].hits === ev[2].n, `plane 2's images land on the reflection (${ev[2] && ev[2].hits} of ${ev[2] && ev[2].n})`);
+    check(ev[3] && ev[3].n === 2 && ev[3].hits === 0, 'plane 3\'s land on floor');
+    check(JSON.stringify(reflectingSurfaces({ 2: { n: 40, hits: 30 }, 3: { n: 40, hits: 2 }, 4: { n: 5, hits: 5 } }).map((x) => x.plane)) === '[2]',
+        'a surface reflects with at least 20 images to judge by and half of them on something bright');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

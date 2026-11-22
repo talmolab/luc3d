@@ -16,13 +16,13 @@
 //             (`drawAllOverlays`), pose/outline-edits.js,
 //             import-export/save-load.js (`markDirty`, `setStatus`)
 
-import { state, interactionManager } from './app-state.js?v=8925dfae915d';
-import { drawnOutlines, setOutlinePaintHook, outlinesEnabled, entryLabels } from './animal-outlines.js?v=8925dfae915d';
-import { drawAllOverlays } from './rendering.js?v=8925dfae915d';
+import { state, interactionManager } from './app-state.js?v=9033745dd35e';
+import { drawnOutlines, setOutlinePaintHook, outlinesEnabled, entryLabels } from './animal-outlines.js?v=9033745dd35e';
+import { drawAllOverlays } from './rendering.js?v=9033745dd35e';
 import {
     BRUSH_MIN, BRUSH_MAX, beginOutlineEdit, outlineEditAt, paintSegment, pushStroke, undoStroke,
-} from '../pose/outline-edits.js?v=8925dfae915d';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=8925dfae915d';
+} from '../pose/outline-edits.js?v=9033745dd35e';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=9033745dd35e';
 
 var PREFS_KEY = 'lucid.outlineBrush';
 

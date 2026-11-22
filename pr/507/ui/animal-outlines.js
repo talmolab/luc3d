@@ -23,16 +23,17 @@
 //             pose/pose-data.js (`groupDisplayName`), pose/outline-core.js,
 //             pose/outline-worker.js (`handleOutlineMessage`, the inline path)
 
-import { state, isViewDocked } from './app-state.js?v=8925dfae915d';
-import { groupReprojection, getGroupColor, unlinkedBaseColor, unlinkedDupIndices } from './overlays.js?v=8925dfae915d';
-import { keyframeIndices } from './image-embedder.js?v=8925dfae915d';
-import { drawAllOverlays } from './rendering.js?v=8925dfae915d';
-import { showLoadingProgress, hideLoading } from './loading-overlay.js?v=8925dfae915d';
-import { ensureLazyFrameData } from '../pose/triangulation.js?v=8925dfae915d';
-import { groupDisplayName } from '../pose/pose-data.js?v=8925dfae915d';
-import { tailChain, animalFromInstance, areaModel, poseAreaModel, outlineParams, pointInPolygon, labelImageContours, keypointCheck, outlineSuspects } from '../pose/outline-core.js?v=8925dfae915d';
-import { outlineEditAt, rleEncode, rleDecode } from '../pose/outline-edits.js?v=8925dfae915d';
-import { handleOutlineMessage } from '../pose/outline-worker.js?v=8925dfae915d';
+import { state, isViewDocked } from './app-state.js?v=9033745dd35e';
+import { groupReprojection, getGroupColor, unlinkedBaseColor, unlinkedDupIndices } from './overlays.js?v=9033745dd35e';
+import { keyframeIndices } from './image-embedder.js?v=9033745dd35e';
+import { drawAllOverlays } from './rendering.js?v=9033745dd35e';
+import { showLoadingProgress, hideLoading } from './loading-overlay.js?v=9033745dd35e';
+import { ensureLazyFrameData } from '../pose/triangulation.js?v=9033745dd35e';
+import { groupDisplayName } from '../pose/pose-data.js?v=9033745dd35e';
+import { cagePlanes, mirroredPoint, reflectionVisible } from '../pose/cage-mirrors.js?v=9033745dd35e';
+import { tailChain, animalFromInstance, areaModel, poseAreaModel, outlineParams, pointInPolygon, labelImageContours, keypointCheck, outlineSuspects } from '../pose/outline-core.js?v=9033745dd35e';
+import { outlineEditAt, rleEncode, rleDecode } from '../pose/outline-edits.js?v=9033745dd35e';
+import { handleOutlineMessage } from '../pose/outline-worker.js?v=9033745dd35e';
 
 /** Frames sampled per camera for its empty arena (odd: an exact median). */
 export var BACKGROUND_FRAMES = 39;
@@ -78,7 +79,7 @@ function makePool() {
     if (!inline) {
         for (var i = 0; i < size; i++) {
             try {
-                var w = new Worker(new URL('../pose/outline-worker.js?v=8925dfae915d', import.meta.url), { type: 'module' });
+                var w = new Worker(new URL('../pose/outline-worker.js?v=9033745dd35e', import.meta.url), { type: 'module' });
                 w.onmessage = onWorkerMessage;
                 w.onerror = onWorkerError(i);
                 pool.workers.push(w);
@@ -208,6 +209,120 @@ function cameraOf(session, name) {
     return null;
 }
 
+/**
+ * An animal's 3D body projected into `camera`, for the outline's 3D limit
+ * (`tubeReach`, pose/outline-core.js): per body edge with both ends in 3D, its
+ * two image points (distortion included) and the image scale at each
+ * (pixels per calibration unit: a step across the view at 1 % of the depth,
+ * projected); body nodes alone when the skeleton has no body edge. And how far
+ * the animal's 2D body keypoints lie from their projections (`inst2d`; median
+ * px, 0 without a 2D pose). -> {tubes, tubeError} or null without 3D.
+ */
+export function bodyTubes(group, camera, edges, chain, inst2d) {
+    var p3 = group && group.points3d;
+    var proj = scaledProjector(camera);
+    if (!p3 || !p3.length || !proj) return null;
+    var n = (p3.length / 3) | 0;
+    var memo = [];
+    var at = function (k) {
+        if (memo[k] !== undefined) return memo[k];
+        var X = k >= 0 && k < n ? [p3[3 * k], p3[3 * k + 1], p3[3 * k + 2]] : null;
+        memo[k] = X && isFinite(X[0]) && isFinite(X[1]) && isFinite(X[2]) ? proj(X) : null;
+        return memo[k];
+    };
+    var T = edgeTubes(at, n, edges, chain);
+    if (!T.length) return null;
+    var err = 0;
+    if (inst2d) {
+        var ds = [];
+        for (var j = 0; j < n; j++) {
+            if (chain.isTail[j] || !at(j) || !inst2d.hasPoint(j)) continue;
+            var x = inst2d.getX(j), y = inst2d.getY(j);
+            if (isFinite(x) && isFinite(y)) ds.push(Math.hypot(x - at(j)[0], y - at(j)[1]));
+        }
+        ds.sort(function (a, b) { return a - b; });
+        err = ds.length ? ds[ds.length >> 1] : Infinity;
+    }
+    return { tubes: T, tubeError: err };
+}
+
+// Projects a 3D point into `camera` with the image scale there: [u, v,
+// pixels per calibration unit] (a step across the view at 1 % of the depth,
+// projected, distortion included), or null behind the camera. null without
+// a calibrated camera.
+function scaledProjector(camera) {
+    if (!camera || typeof camera.project !== 'function' || !camera.rotationMatrix || !camera.tvec) return null;
+    var R = camera.rotationMatrix, t = camera.tvec;
+    var pr = function (X) { var uv = camera.project(X); return camera.distortPoint ? camera.distortPoint(uv) : uv; };
+    return function (X) {
+        var z = R[2][0] * X[0] + R[2][1] * X[1] + R[2][2] * X[2] + t[2];
+        if (!(z > 0)) return null;
+        var uv = pr(X), d = 0.01 * z;
+        var uv2 = pr([X[0] + d * R[0][0], X[1] + d * R[0][1], X[2] + d * R[0][2]]);
+        var sc = Math.hypot(uv2[0] - uv[0], uv2[1] - uv[1]) / d;
+        return isFinite(uv[0]) && isFinite(uv[1]) && sc > 0 && isFinite(sc) ? [uv[0], uv[1], sc] : null;
+    };
+}
+
+// Body edges (no tail node) with both ends projected (`at(k)`: [u, v, scale]
+// or null) as tubes; body nodes alone when no body edge has both.
+function edgeTubes(at, n, edges, chain) {
+    var T = [];
+    (edges || []).forEach(function (e) {
+        var u = e[0], v = e[1];
+        if (chain.isTail[u] || chain.isTail[v]) return;
+        var a = at(u), b = at(v);
+        if (a && b) T.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+    });
+    if (!T.length) for (var k = 0; k < n; k++) { if (chain.isTail[k]) continue; var q = at(k); if (q) T.push(q[0], q[1], q[2], q[0], q[1], q[2]); }
+    return T;
+}
+
+var _cagePlanes = { cage: null, planes: [] };
+
+/**
+ * An animal's mirror images in the arena's floor and walls (a campy cage,
+ * `session.campyCage`, pose/cage-mirrors.js) as `camera` would see them: per
+ * surface, the body mirrored across it and projected (tubes as `bodyTubes`'),
+ * only the edges whose both ends' images the camera sees through that
+ * surface's own rectangle. -> [{plane (index in `cagePlanes`), tubes}] (only
+ * surfaces with an edge seen), or null without a cage, 3D or calibration.
+ */
+export function bodyMirrors(group, camera, edges, chain, cage) {
+    var p3 = group && group.points3d;
+    var proj = scaledProjector(camera);
+    if (!cage || !p3 || !p3.length || !proj) return null;
+    if (_cagePlanes.cage !== cage) _cagePlanes = { cage: cage, planes: cagePlanes(cage) };
+    var planes = _cagePlanes.planes;
+    var R = camera.rotationMatrix, t = camera.tvec;
+    var C = [0, 1, 2].map(function (i) { return -(R[0][i] * t[0] + R[1][i] * t[1] + R[2][i] * t[2]); });   // -R^T t
+    var n = (p3.length / 3) | 0, out = [];
+    planes.forEach(function (pl, j) {
+        var memo = [];
+        var at = function (k) {
+            if (memo[k] !== undefined) return memo[k];
+            var r = null;
+            if (k >= 0 && k < n) {
+                var X = [p3[3 * k], p3[3 * k + 1], p3[3 * k + 2]];
+                if (isFinite(X[0]) && isFinite(X[1]) && isFinite(X[2])) {
+                    var Xm = mirroredPoint(X, pl);
+                    if (reflectionVisible(C, X, Xm, pl)) r = proj(Xm);
+                }
+            }
+            memo[k] = r;
+            return r;
+        };
+        var T = [];
+        (edges || []).forEach(function (e) {
+            if (chain.isTail[e[0]] || chain.isTail[e[1]]) return;
+            var a = at(e[0]), b = at(e[1]);
+            if (a && b) T.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+        });
+        if (T.length) out.push({ plane: j, tubes: T });
+    });
+    return out;
+}
+
 function resolveIdentity(session, group, inst, cam, frameIdx) {
     if (inst && Number.isInteger(inst.trackIdx) && inst.trackIdx >= 0 && session.getIdentityForTrack) {
         var ident = session.getIdentityForTrack(inst.trackIdx, cam, frameIdx);
@@ -251,6 +366,11 @@ export function animalsInView(session, frameIdx, cam, groups, frameGroup) {
         var a = animalFromInstance(inst, edges, chain);
         if (!a.body.length) return;
         if (source === '2d') placed.push(inst);
+        var tb = bodyTubes(g, camera, edges, chain, source === '2d' ? inst : null);
+        if (tb) {
+            a.tubes = tb.tubes; a.tubeError = tb.tubeError;
+            if (session.campyCage) a.mirrors = bodyMirrors(g, camera, edges, chain, session.campyCage);
+        }
         a.name = groupDisplayName(session, g, frameIdx);
         a.color = getGroupColor(g, session, useId, frameIdx, cam) || '#cccccc';
         a.identity = resolveIdentity(session, g, source === '2d' ? inst : null, cam, frameIdx);
@@ -299,6 +419,7 @@ function poseSignature(animals) {
         mix(a.body.length); a.body.forEach(mix);
         mix(a.tail ? a.tail.length : 0); if (a.tail) a.tail.forEach(mix);
         mix(a.segments.length);
+        mix(a.tubes ? a.tubes.length : 0); if (a.tubes) a.tubes.forEach(mix);
     });
     return animals.length + ':' + h.toString(36);
 }
@@ -352,7 +473,7 @@ async function posesAt(session, frame, cam) {
         }
         var groups = session.instanceGroups ? session.instanceGroups.get(frame) || [] : [];
         var fg = session.getFrameGroup ? session.getFrameGroup(frame) : null;
-        return animalsInView(session, frame, cam, groups, fg).map(function (a) { return { body: a.body, tail: a.tail, segments: a.segments }; });
+        return animalsInView(session, frame, cam, groups, fg).map(function (a) { return { body: a.body, tail: a.tail, segments: a.segments, tubes: a.tubes, tubeError: a.tubeError, mirrors: a.mirrors }; });
     } catch (e) {
         return null;
     }
@@ -410,7 +531,10 @@ export function refitAreaModels(session, nAnimals) {
         if (c.status !== 'ready' || !c.areas) return;
         c.nAnimals = nAnimals;
         // learnt from the blobs holding one pose when there were any: the count does not change it
+        var old = c.model;
         c.model = poseAreaModel(c.singles, currentOutlineParams()) || areaModel(c.areas, nAnimals, currentOutlineParams());
+        // the surfaces found to reflect stay (they come from the sampled frames, not the count)
+        if (c.model && old && old.mirrors && c.model.reach3d === old.reach3d) { c.model.mirrors = old.mirrors; c.model.mirrorStats = old.mirrorStats; }
     });
     sessionState(session).cache.clear();
 }
@@ -508,7 +632,7 @@ export async function computeViewOutlines(session, view, frameIdx, animals) {
     if (!bm) return null;
     var res = await call(camKey(st, view.name), {
         type: 'outline', cam: camKey(st, view.name), frame: bm, w: c.w, h: c.h,
-        animals: animals.map(function (a) { return { body: a.body, segments: a.segments, tail: a.tail, tailPts: a.tailPts }; }),
+        animals: animals.map(function (a) { return { body: a.body, segments: a.segments, tail: a.tail, tailPts: a.tailPts, tubes: a.tubes, tubeError: a.tubeError, mirrors: a.mirrors }; }),
         model: c.model || null, params: currentOutlineParams(),
     }, [bm]);
     var entry = { frame: frameIdx, cam: view.name, w: c.w, h: c.h, animals: animals, result: res, sig: poseSignature(animals) };
