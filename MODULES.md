@@ -4447,10 +4447,40 @@ tail keypoints off it), `split` (≥ 2 body keypoints on another's), `limb` (≥
 none)), `labelImageContours(labels, w, h, n)`
 (a hand-painted label image's contours, as `computeOutlines` gives them).
 
+**With 3D** (an animal's `tubes`: its body edges projected into the camera,
+with pixels per calibration unit at each end, from `ui/animal-outlines.js`
+`bodyTubes`; `tubeError`: px between its 2D body keypoints and their
+projections): `tubeReach(T, x, y)` is a pixel's distance from the projected
+body in calibration units; `singlePoseBlobs` measures each blob's `reach3d`
+(its 99th percentile, tail pixels left out, only where `tubeError` ≤ a quarter
+of the blob's 2D reach), `poseAreaModel` takes the median (`reach3d`, `n3d`, at
+least 3). `computeOutlines` then keeps an animal's pixels within `envelope3d`
+(1.25) x `reach3d` of its projected body (`animals[].by3d`), for animals whose
+`tubeError` ≤ half that limit at their scale; others keep the 2D rule. On the
+5-mouse 2026-07-13 excerpt the 3D half-width came out 20-25 mm (top and mid
+cameras), 22-42 (sides).
+**Reflections** (a campy cage, `pose/cage-mirrors.js`; an animal's `mirrors`:
+`[{plane, tubes}]`, its body mirrored across a surface and projected where the
+camera sees that image in the surface, `bodyMirrors`): `mirrorEvidence(gray,
+bg, w, h, animals, reach3d, params)` counts, per surface, the images' points
+outside every animal's own body and how many land on something brighter than
+the empty arena; `reflectingSurfaces(ev)` keeps the surfaces with ≥ 20 points
+and ≥ half on something bright (the worker sums the sampled frames:
+`model.mirrors`, `model.mirrorStats`). In `computeOutlines`, a pixel within the
+limit of an animal's projected body but nearer (in units) a reflecting
+surface's mirror image of any animal is nobody's (`blobs[].mirrored`). The
+distance limits alone keep a reflection that touches the animal along its side
+(on topC, a band ~40 px deep under a mouse at the floor's edge): a round tube
+wide enough for the body takes in the image's near half. On that excerpt the
+front wall reflects in the four top cameras (63-90 % of points on something
+bright; matt surfaces 1-15 %, at most 47 %), no surface in mid or the sides;
+the mouse at the floor's edge on topC 4,926: 15,081 px → 9,542 (one mouse:
+9,457), suspects unchanged.
+
 **Speed.** ~80 ms per 1280×1024 camera frame (Node, warm); the 39-frame median ~0.2 s.
 
 **Imports.** None. **Imported by.** `pose/outline-worker.js`, `ui/animal-outlines.js`.
-**Tests.** `tests/test-outline-core.mjs`, `tests/e2e/animal-outlines.mjs`.
+**Tests.** `tests/test-outline-core.mjs` (§19 3D, §20 reflections), `tests/e2e/animal-outlines.mjs`.
 
 ### pose/outline-worker.js
 
@@ -4461,9 +4491,11 @@ frame. Frames arrive as ImageBitmaps (transferred) and are turned grey on an
 OffscreenCanvas.
 
 **Messages.** `background` (sampled frames, `nAnimals`, and per frame the animals'
-poses there, `poses` (`{body, tail, segments}`), left out of the median and used
-for the blobs holding one pose) → `{bg (a copy), model (`poseAreaModel`, else
-`areaModel`), counts, areas, singles}`; `setBackground`; `outline` (frame, animals, model, params) →
+poses there, `poses` (`{body, tail, segments, tubes, tubeError, mirrors}`),
+left out of the median and used for the blobs holding one pose and, with
+`reach3d`, for which surfaces reflect: `mirrorEvidence` summed over the frames,
+`reflectingSurfaces` → `model.mirrors`, `model.mirrorStats`) → `{bg (a copy),
+model (`poseAreaModel`, else `areaModel`), counts, areas, singles}`; `setBackground`; `outline` (frame, animals, model, params) →
 `computeOutlines`' result with its buffers transferred; `drop`. Each reply echoes
 `id`; a failure replies `{error}`.
 
@@ -4474,6 +4506,26 @@ OffscreenCanvas is missing (`self.onmessage` is installed only inside a worker).
 **Imports.** `./outline-core.js`. **Imported by.** `ui/animal-outlines.js` (the worker
 by `new URL('../pose/outline-worker.js', import.meta.url)`, and statically for the
 inline path). **Tests.** `tests/e2e/animal-outlines.mjs` (the pool's workers).
+
+### pose/cage-mirrors.js
+
+**Purpose.** The arena's floor and walls as mirrors, from a campy cage
+(`<calibration>.cage.json`, written by campy's `campy-cage` from the box's
+printed grid, in the calibration's units). Import-free, DOM-free. A mouse near a
+glossy wall shows a mirror image as bright as itself; where the image touches
+the mouse, only the 3D pose mirrored across the wall says which pixels are the
+image (`ui/animal-outlines.js` `bodyMirrors`, `pose/outline-core.js`).
+
+**Exports.** `isCampyCageName(name)` (`*.cage.json`); `parseCampyCage(text)` →
+`{corners (4, the floor's, in order), up (unit), height, units}` or null;
+`cagePlanes(cage)` → the floor, then a wall per floor edge, each `{name, point,
+normal (into the box), quad}`; `mirroredPoint(X, plane)`;
+`reflectionVisible(C, X, Xm, plane)` (camera and point on the box's side, and
+the line from the camera to the image crosses the plane inside its quad).
+
+**Imports.** None. **Imported by.** `loading/session-loader.js` (`adoptCampyCage`),
+`ui/animal-outlines.js`. **Tests.** `tests/test-cage-mirrors.mjs` (DoublePoke's
+2026-07-13 cage).
 
 ### pose/outline-edits.js
 
@@ -9869,7 +9921,8 @@ camera and animal (`pose/outline-core.js`), drawn BEHIND the skeletons
   `keyframeIndices`, so each is one decode; evenly spaced frames when there are
   fewer than min(39, 15) keyframes; every frame when asked for at least as many
   as the video has) read with `decoder.peekFrame`, each with the animals' poses
-  on it (`posesAt`: body, tail and body segments; the active lazy project's
+  on it (`posesAt`: body, tail, body segments, and with 3D `tubes`, `tubeError`,
+  `mirrors`; the active lazy project's
   frames hydrated first) so the worker leaves them out of the median and learns
   one animal's area and reach from the blobs holding one pose (never the
   playback path), sent to the camera's worker. A progress card counts the
@@ -9915,7 +9968,13 @@ camera and animal (`pose/outline-core.js`), drawn BEHIND the skeletons
   camera (label image, then polygons); `drawnOutlines`, `cachedOutlines`,
   `outlineCameraState`, `resetOutlines`, `outlineAnimalCount`, `outlinesEnabled`,
   `currentOutlineParams` (`window.LUCID_OUTLINE_PARAMS` overrides, for tests),
-  `__outlinePoolInfo`.
+  `__outlinePoolInfo`, `bodyTubes(group, camera, edges, chain, inst2d)` (an
+  animal's 3D body projected into a camera with the image scale per end, and
+  how far its 2D pose lies from it: `{tubes, tubeError}`), `bodyMirrors(group,
+  camera, edges, chain, cage)` (its mirror images in the cage's surfaces as the
+  camera sees them: `[{plane, tubes}]`). `animalsInView` gives each grouped
+  animal with 3D its `tubes`/`tubeError`, and `mirrors` when
+  `session.campyCage` is set; `refitAreaModels` keeps a model's `mirrors`.
 - **Pool**: up to 4 module workers (half the cores); inline on the page
   (`handleOutlineMessage`) without Worker/OffscreenCanvas, after a worker fails,
   or with `window.LUCID_OUTLINE_INLINE`.
@@ -13797,11 +13856,16 @@ TDZ for whichever side initializes second.
 - `REBASED_CALIBRATION_NAME` — `'calibration-rebased.toml'`, the file BOTH
   origin actions write (byte-identical TOML for a given origin). Deliberately not
   `calibration.toml`: that one is usually shared with tools outside LUCID.
-- `pickCalibrationFile(matches)` → `{file, ambiguous}`. Prefers
+- `pickCalibrationFile(matches)` → `{file, ambiguous, cage}`. Prefers
   `REBASED_CALIBRATION_NAME` (case-insensitively), else the lexicographically
   first match, so the choice is DETERMINISTIC across loads of the same folder.
   `ambiguous` is the NAMES of the candidates passed over, so a caller can say
   what it ignored. Does not mutate its argument: the loaders keep scanning.
+  A campy cage (`*.cage.json`, campy's `campy-cage`) matches `*calib*.json` and
+  sorts before `calibration.toml`, so it used to be loaded AS the calibration
+  (no cameras); it is never a candidate, and the picked file's own cage
+  (`<its name without extension>.cage.json`) comes back as `cage` (none for a
+  re-based calibration: the original's cage is in another frame).
 
 **Why it exists.** With two matches, last-scanned-wins depends on an
 enumeration order neither the File System Access API nor `webkitdirectory`
@@ -14173,6 +14237,11 @@ filesystem enumeration, decoder rebuild.
   deferVideos, folderHandle)` takes the handle as its third argument, which
   `handleLoadMultiSession` passes for each session subfolder. Test:
   `tests/e2e/save-opens-in-recording-folder.mjs`.
+- **campy cage** (`adoptCampyCage(session, file)`): the cage `pickCalibrationFile`
+  returns beside the calibration the load read, parsed (`pose/cage-mirrors.js`)
+  onto `session.campyCage` (in memory only, never written; null without one or
+  when it does not parse). Called by the per-camera and single-SLP loaders,
+  needing no session.json. Animal outlines use its walls and floor as mirrors.
 - **campy recordings** (`loading/campy-session.js`):
   `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
   reads a picked folder's session.json (+ campy-live's manifests) onto
