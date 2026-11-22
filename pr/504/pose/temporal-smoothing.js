@@ -139,7 +139,7 @@ import {
     isPoints3dSmoothed,
     unsmoothedPoints3d,
     clearPoints3dSmoothed,
-} from './pose-data.js?v=938dc4738f1c';
+} from './pose-data.js?v=4df93f327025';
 import {
     ATA_DEFAULT_K,
     ATA_DEFAULT_HMAX,
@@ -147,9 +147,9 @@ import {
     ataSmoothSeriesInto,
     dltPointCovarianceInto,
     secondDifferenceSigma,
-} from './adaptive-temporal-averaging.js?v=938dc4738f1c';
-import { cameraIncludedInSolves, solveReprojErrorThreshold } from './triangulation-core.js?v=938dc4738f1c';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js?v=938dc4738f1c';
+} from './adaptive-temporal-averaging.js?v=4df93f327025';
+import { cameraIncludedInSolves, solveReprojErrorThreshold } from './triangulation-core.js?v=4df93f327025';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js?v=4df93f327025';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;
@@ -329,7 +329,7 @@ export function smoothSignalInto(src, dst, segments, opts, scratchV, scratchW) {
 }
 
 /**
- * `smoothMethod` values (Settings stores a number): 0 = windows, 1 = adaptive.
+ * `smoothingMethod` values (Settings stores a number): 0 = windows, 1 = adaptive.
  * Params without one resolve to the windows (direct callers, tests); the app's
  * default, Adaptive, is Settings' (`ui/settings.js` `getSmoothingParam`).
  */
@@ -339,7 +339,7 @@ export const SMOOTH_METHOD_ADAPTIVE = 'adaptive';
 /**
  * Resolve the effective smoothing configuration from a loose params object.
  *
- * `smoothMethod` 1 (or 'adaptive') selects 3D adaptive temporal averaging, with
+ * `smoothingMethod` 1 (or 'adaptive') selects 3D adaptive temporal averaging, with
  * `smoothAtaK` (the gate, standard deviations, > 0) and `smoothAtaHmax` (the
  * longest half-window in frames; 0 = off). `smoothAtaCovariance: 'sigma'`
  * (not in Settings; for comparisons) skips the views and weighs every point by
@@ -352,7 +352,7 @@ export const SMOOTH_METHOD_ADAPTIVE = 'adaptive';
  */
 export function resolveSmoothingParams(params) {
     params = params || {};
-    var method = (params.smoothMethod === 1 || params.smoothMethod === SMOOTH_METHOD_ADAPTIVE)
+    var method = (params.smoothingMethod === 1 || params.smoothingMethod === SMOOTH_METHOD_ADAPTIVE)
         ? SMOOTH_METHOD_ADAPTIVE : SMOOTH_METHOD_WINDOWS;
     var medianWindow = normalizeWindow(params.smoothMedianWindow);
     var gaussianWindow = normalizeWindow(params.smoothGaussianWindow);
@@ -941,7 +941,7 @@ function addTally(result, acc) {
  * Smooth a whole session's 3D tracks in place.
  *
  * @param {Session} session
- * @param {Object} params raw `{ smoothMethod, smoothMedianWindow,
+ * @param {Object} params raw `{ smoothingMethod, smoothMedianWindow,
  *   smoothGaussianWindow, smoothMaxGap, smoothMinSegment, smoothAtaK,
  *   smoothAtaHmax }` (`resolveSmoothingParams`)
  * @param {{writeFrames?: Set<number>|null}} [opts]

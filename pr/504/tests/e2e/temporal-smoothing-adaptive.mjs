@@ -3,8 +3,8 @@
  * adaptive temporal averaging, pose/adaptive-temporal-averaging.js) through
  * the real toolbar, on the shared BA rig fixture (3 distorted cameras, 2 px
  * noise on every 2D observation, two animals drifting):
- *   A. Adaptive is the default, except for someone who had set a window (no
- *      method stored); the Smooth menu's Method radio sets Settings ▸
+ *   A. Adaptive is the default, also with a median or Gaussian window
+ *      stored; the Smooth menu's Method radio sets Settings ▸
  *      Temporal Smoothing's Method (a toggle: one method or the other), and
  *      the Settings panel shows only the chosen method's rows and figure
  *      cards;
@@ -90,21 +90,23 @@ try {
     // ---- A. the Method radio and the Settings panel --------------------------------
     console.log('\n-- A. Method --');
     const methodNow = () => page.evaluate(async () => ({
-        stored: (await import('/ui/settings.js')).getSmoothingParams().smoothMethod,
+        stored: (await import('/ui/settings.js')).getSmoothingParams().smoothingMethod,
         radio: (document.querySelector('#smoothingDropdown input[name="tbSmoothMethod"]:checked') || {}).value,
     }));
     const fresh = await methodNow();
     check(fresh.stored === 1 && fresh.radio === '1', 'Adaptive is the default (Settings and the menu radio)', fresh);
-    // Someone who set a window before the method existed (no stored method) keeps the windows.
+    // Someone with a window stored (and no method chosen) still gets Adaptive; the
+    // window is kept.
     const legacy = await page.evaluate(async () => {
         const S = await import('/ui/settings.js');
         S.setSmoothingParams({ smoothGaussianWindow: 9 });
-        const r = { method: S.getSmoothingParams().smoothMethod,
+        const r = { method: S.getSmoothingParams().smoothingMethod, gauss: S.getSmoothingParams().smoothGaussianWindow,
             radio: document.querySelector('#smoothingDropdown input[name="tbSmoothMethod"]:checked').value };
         S.setSmoothingParams({});
         return r;
     });
-    check(legacy.method === 0 && legacy.radio === '0', 'a Gaussian window set before (no method stored) keeps the windows', legacy);
+    check(legacy.method === 1 && legacy.radio === '1' && legacy.gauss === 9,
+        'a Gaussian window stored still opens on Adaptive, the window kept', legacy);
     await page.hover('#tbSmooth');
     await page.click('#smoothingDropdown input[name="tbSmoothMethod"][value="0"]');
     await page.click('#smoothingDropdown input[name="tbSmoothMethod"][value="1"]');
@@ -123,8 +125,8 @@ try {
         return {
             toggle: [...p.querySelectorAll('.settings-choice-opt')].map(b => b.textContent).join(' | '),
             method: lit ? lit.dataset.value : null,
-            windows: rows.filter(r => r.dataset.smoothMethod === 'windows').map(vis),
-            adaptive: rows.filter(r => r.dataset.smoothMethod === 'adaptive').map(vis),
+            windows: rows.filter(r => r.dataset.smoothingMethod === 'windows').map(vis),
+            adaptive: rows.filter(r => r.dataset.smoothingMethod === 'adaptive').map(vis),
             cards: [...p.querySelectorAll('.smooth-fig-col')].filter(vis).map(c => c.dataset.stage).join(),
         };
     });
@@ -138,7 +140,7 @@ try {
         'toggling to Median + Gaussian shows only its rows and its three cards', p2);
     await page.keyboard.press('Escape');
     await page.waitForTimeout(200);
-    const after = await page.evaluate(async () => (await import('/ui/settings.js')).getSmoothingParams().smoothMethod);
+    const after = await page.evaluate(async () => (await import('/ui/settings.js')).getSmoothingParams().smoothingMethod);
     check(after === 1, 'Esc discards the panel\'s edit (still Adaptive)', after);
 
     // ---- B. all frames ------------------------------------------------------------
@@ -272,7 +274,7 @@ try {
     await page.waitForTimeout(450);
     await page.hover('#tbSmooth');
     await page.click('#smoothingDropdown input[name="tbSmoothMethod"][value="0"]');
-    const back = await page.evaluate(async () => (await import('/ui/settings.js')).getSmoothingParams().smoothMethod);
+    const back = await page.evaluate(async () => (await import('/ui/settings.js')).getSmoothingParams().smoothingMethod);
     check(back === 0, 'the Windows radio sets the windows back', back);
     await page.keyboard.press('Escape');
 

@@ -58,7 +58,7 @@ try {
     // The figure is the windows method's; Adaptive is the default. The method
     // stays stored for the reopenings below.
     await page.evaluate(async () => {
-        (await import('/ui/settings.js')).setSmoothingParams({ smoothMethod: 0 });
+        (await import('/ui/settings.js')).setSmoothingParams({ smoothingMethod: 0 });
         document.getElementById('menuSettings').click();
         document.querySelector('.settings-nav-item[data-panel="smoothing"]').click();
     });
@@ -373,7 +373,7 @@ try {
         out.back = cards();
         document.querySelector('.settings-modal-close').click();
         const S = await import('/ui/settings.js');
-        out.stored = [S.getSmoothingParam('smoothMethod'), S.getSmoothingParam('smoothAtaK')];
+        out.stored = [S.getSmoothingParam('smoothingMethod'), S.getSmoothingParam('smoothAtaK')];
         return out;
     });
     check(ad.windowsOnly === 'median,gaussian,gaps', `with Median + Gaussian chosen, only its three cards show (${ad.windowsOnly})`);

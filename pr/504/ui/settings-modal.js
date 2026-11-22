@@ -46,16 +46,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=938dc4738f1c';
-import { getActiveSession, state, timeline } from './app-state.js?v=938dc4738f1c';
-import { drawAllOverlays } from './rendering.js?v=938dc4738f1c';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=938dc4738f1c';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=938dc4738f1c';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=938dc4738f1c';
-import { installModalGeometry } from './modal-geometry.js?v=938dc4738f1c';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=938dc4738f1c';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=938dc4738f1c';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=938dc4738f1c';
+} from './settings.js?v=4df93f327025';
+import { getActiveSession, state, timeline } from './app-state.js?v=4df93f327025';
+import { drawAllOverlays } from './rendering.js?v=4df93f327025';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=4df93f327025';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=4df93f327025';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=4df93f327025';
+import { installModalGeometry } from './modal-geometry.js?v=4df93f327025';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=4df93f327025';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=4df93f327025';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=4df93f327025';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -858,7 +858,7 @@ export function showSettingsModal(initialPanel) {
 
     // The method, one or the other: a toggle above the figure. The figure and
     // the parameters below show only the chosen method's.
-    const methodDef = smoothingDefs.find(function (d) { return d.id === 'smoothMethod'; });
+    const methodDef = smoothingDefs.find(function (d) { return d.id === 'smoothingMethod'; });
     const smMethod = buildChoiceToggle(methodDef, working.smoothing, function () { showSmoothingMethod(); });
     smPanel.appendChild(smMethod.el);
 
@@ -884,17 +884,17 @@ export function showSettingsModal(initialPanel) {
     smPanel.appendChild(smSection.root);
     const smRows = [];
     function showSmoothingMethod() {
-        const method = working.smoothing.smoothMethod === 1 ? 'adaptive' : 'windows';
+        const method = working.smoothing.smoothingMethod === 1 ? 'adaptive' : 'windows';
         smRows.forEach(function (r) { r.row.hidden = !!r.method && r.method !== method; });
         smMethod.sync();
         smFigure.update(working.smoothing);
     }
     smoothingDefs.forEach(function (def) {
-        if (def.id === 'smoothMethod') return;     // the toggle above the figure
+        if (def.id === 'smoothingMethod') return;     // the toggle above the figure
         const row = buildParamRow(def, working.smoothing, function () {
             smFigure.update(working.smoothing);
         });
-        row.dataset.smoothMethod = def.method || '';
+        row.dataset.smoothingMethod = def.method || '';
         smRows.push({ row: row, method: def.method });
         smSection.body.appendChild(row);
     });
