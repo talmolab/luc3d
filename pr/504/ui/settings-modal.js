@@ -46,16 +46,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=2ad23d37d359';
-import { getActiveSession, state, timeline } from './app-state.js?v=2ad23d37d359';
-import { drawAllOverlays } from './rendering.js?v=2ad23d37d359';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=2ad23d37d359';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=2ad23d37d359';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=2ad23d37d359';
-import { installModalGeometry } from './modal-geometry.js?v=2ad23d37d359';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=2ad23d37d359';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=2ad23d37d359';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=2ad23d37d359';
+} from './settings.js?v=938dc4738f1c';
+import { getActiveSession, state, timeline } from './app-state.js?v=938dc4738f1c';
+import { drawAllOverlays } from './rendering.js?v=938dc4738f1c';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=938dc4738f1c';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=938dc4738f1c';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=938dc4738f1c';
+import { installModalGeometry } from './modal-geometry.js?v=938dc4738f1c';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=938dc4738f1c';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=938dc4738f1c';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=938dc4738f1c';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -149,26 +149,6 @@ function buildParamRow(def, bag, onEdit) {
         return row;
     }
 
-    if (def.kind === 'choice') {             // one of `def.options` ({value, label}), stored as the value
-        const select = document.createElement('select');
-        select.className = 'settings-num-input settings-choice-input';
-        select.setAttribute('aria-label', def.label);
-        (def.options || []).forEach(function (opt) {
-            const o = document.createElement('option');
-            o.value = String(opt.value);
-            o.textContent = opt.label;
-            select.appendChild(o);
-        });
-        select.value = String(bag[def.id]);
-        select.addEventListener('change', function () {
-            bag[def.id] = Number(select.value);
-            if (onEdit) onEdit();
-        });
-        row.appendChild(labelWrap);
-        row.appendChild(select);
-        return row;
-    }
-
     const input = document.createElement('input');
     input.type = 'number';
     input.className = 'settings-num-input';
@@ -196,6 +176,57 @@ function buildParamRow(def, bag, onEdit) {
     row.appendChild(labelWrap);
     row.appendChild(input);
     return row;
+}
+
+/**
+ * A one-of-N toggle for a `kind: 'choice'` setting (Temporal Smoothing's
+ * Method): a row of buttons, the chosen one lit, under the setting's name, with
+ * its description below. A click sets `bag[def.id]` to the option's value and
+ * calls `onEdit`. `sync()` re-lights it from `bag`.
+ *
+ * @returns {{el: HTMLElement, sync: function(): void}}
+ */
+function buildChoiceToggle(def, bag, onEdit) {
+    const wrap = document.createElement('div');
+    wrap.className = 'settings-choice';
+    wrap.dataset.setting = def.id;
+    const title = document.createElement('div');
+    title.className = 'settings-threshold-title';
+    title.textContent = def.label;
+    const opts = document.createElement('div');
+    opts.className = 'settings-choice-opts';
+    opts.setAttribute('role', 'radiogroup');
+    opts.setAttribute('aria-label', def.label);
+    const buttons = (def.options || []).map(function (opt) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'settings-choice-opt';
+        b.setAttribute('role', 'radio');
+        b.dataset.value = String(opt.value);
+        b.textContent = opt.label;
+        b.addEventListener('click', function () {
+            bag[def.id] = opt.value;
+            sync();
+            if (onEdit) onEdit();
+        });
+        opts.appendChild(b);
+        return b;
+    });
+    const desc = document.createElement('div');
+    desc.className = 'settings-threshold-desc';
+    desc.textContent = def.desc;
+    wrap.appendChild(title);
+    wrap.appendChild(opts);
+    wrap.appendChild(desc);
+    function sync() {
+        buttons.forEach(function (b) {
+            const on = Number(b.dataset.value) === Number(bag[def.id]);
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+    }
+    sync();
+    return { el: wrap, sync: sync };
 }
 
 /**
@@ -818,12 +849,18 @@ export function showSettingsModal(initialPanel) {
     smHint.className = 'settings-kbd-hint';
     smHint.style.marginTop = '0';
     smHint.style.marginBottom = '8px';
-    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation, by one of two methods: adaptive ' +
-        'windows (the default) or fixed windows (a median first, then a Gaussian; both off (0) by default). ' +
+    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation, by one of two methods, never both: ' +
+        'Adaptive (the default) or Median + Gaussian (fixed windows: a median first, then a Gaussian; both off (0) by default). ' +
         '2D labels and predictions never change; the reprojections follow the smoothed 3D. ' +
         'Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame, the method and ' +
         'Remove smoothing). Changes here apply when you click Apply.';
     smPanel.appendChild(smHint);
+
+    // The method, one or the other: a toggle above the figure. The figure and
+    // the parameters below show only the chosen method's.
+    const methodDef = smoothingDefs.find(function (d) { return d.id === 'smoothMethod'; });
+    const smMethod = buildChoiceToggle(methodDef, working.smoothing, function () { showSmoothingMethod(); });
+    smPanel.appendChild(smMethod.el);
 
     // What the two windows do, redrawn as they are typed
     // (`ui/smoothing-windows-figure.js`). Its sliders only redraw the sketch;
@@ -834,30 +871,28 @@ export function showSettingsModal(initialPanel) {
         onParam: function (id, value) {
             working.smoothing[id] = value;
             const def = smoothingDefs.find(function (d) { return d.id === id; });
-            // A number field, or the Method's select.
-            const field = def && smSection.body.querySelector('[aria-label="' + def.label + '"]');
+            const field = def && smSection.body.querySelector('input[aria-label="' + def.label + '"]');
             if (field) field.value = String(value);
-            if (id === 'smoothMethod') showSmoothingMethod();
         },
     });
     smFigure.update(working.smoothing);
     smPanel.appendChild(smFigure.el);
 
-    // One section; the method's row first, then only the chosen method's
-    // parameters (`def.method`), shown again as the method changes. The figure
-    // shows both methods, dimming the one not in use.
+    // One section with only the chosen method's parameters (`def.method`),
+    // shown again as the method changes, as the figure's cards are.
     const smSection = buildSection('Filter Parameters', null);
     smPanel.appendChild(smSection.root);
     const smRows = [];
     function showSmoothingMethod() {
         const method = working.smoothing.smoothMethod === 1 ? 'adaptive' : 'windows';
         smRows.forEach(function (r) { r.row.hidden = !!r.method && r.method !== method; });
+        smMethod.sync();
         smFigure.update(working.smoothing);
     }
     smoothingDefs.forEach(function (def) {
+        if (def.id === 'smoothMethod') return;     // the toggle above the figure
         const row = buildParamRow(def, working.smoothing, function () {
             smFigure.update(working.smoothing);
-            if (def.id === 'smoothMethod') showSmoothingMethod();
         });
         row.dataset.smoothMethod = def.method || '';
         smRows.push({ row: row, method: def.method });

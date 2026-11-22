@@ -5,9 +5,9 @@
  * noise on every 2D observation, two animals drifting):
  *   A. Adaptive is the default, except for someone who had set a window (no
  *      method stored); the Smooth menu's Method radio sets Settings ▸
- *      Temporal Smoothing's Method, and the Settings panel shows only the
- *      chosen method's rows; its figure shows both methods, the one not in
- *      use dimmed;
+ *      Temporal Smoothing's Method (a toggle: one method or the other), and
+ *      the Settings panel shows only the chosen method's rows and figure
+ *      cards;
  *   B. Smooth (all frames) with Adaptive smooths every group, weighing every
  *      point by its views (no fallback), lowers frame-to-frame jitter, and
  *      says so in the status (method, mean window);
@@ -109,7 +109,7 @@ try {
     await page.click('#smoothingDropdown input[name="tbSmoothMethod"][value="0"]');
     await page.click('#smoothingDropdown input[name="tbSmoothMethod"][value="1"]');
     const stored = (await methodNow()).stored;
-    check(stored === 1, 'the radios set Settings ▸ Temporal Smoothing ▸ Method (Windows, then Adaptive)', stored);
+    check(stored === 1, 'the radios set Settings ▸ Temporal Smoothing ▸ Method (Median + Gaussian, then Adaptive)', stored);
     await page.mouse.move(700, 600);
     await page.waitForTimeout(450);
     await page.hover('#tbSmooth');
@@ -119,23 +119,23 @@ try {
         const p = document.querySelector('.settings-panel[data-panel="smoothing"]');
         const vis = (el) => !!el && el.offsetParent !== null;
         const rows = [...p.querySelectorAll('.settings-threshold-row')];
-        const idle = (s) => p.querySelector(`.smooth-fig [data-stage="${s}"]`).classList.contains('is-idle');
+        const lit = p.querySelector('.settings-choice-opt.is-on');
         return {
-            select: p.querySelector('select[aria-label="Method"]').value,
+            toggle: [...p.querySelectorAll('.settings-choice-opt')].map(b => b.textContent).join(' | '),
+            method: lit ? lit.dataset.value : null,
             windows: rows.filter(r => r.dataset.smoothMethod === 'windows').map(vis),
             adaptive: rows.filter(r => r.dataset.smoothMethod === 'adaptive').map(vis),
-            figure: vis(p.querySelector('.smooth-fig')),
-            idle: { median: idle('median'), adaptive: idle('adaptive') },
+            cards: [...p.querySelectorAll('.smooth-fig-col')].filter(vis).map(c => c.dataset.stage).join(),
         };
     });
     const p1 = await panel();
-    check(p1.select === '1' && p1.adaptive.length === 2 && p1.adaptive.every(Boolean) &&
-        p1.windows.length === 4 && !p1.windows.some(Boolean) && p1.figure && p1.idle.median && !p1.idle.adaptive,
-        'Settings shows Adaptive: its gate and half-window rows, and the figure with the window cards dimmed', p1);
-    await page.selectOption('.settings-panel[data-panel="smoothing"] select[aria-label="Method"]', '0');
+    check(p1.toggle === 'Adaptive | Median + Gaussian' && p1.method === '1' && p1.adaptive.length === 2 && p1.adaptive.every(Boolean) &&
+        p1.windows.length === 4 && !p1.windows.some(Boolean) && p1.cards === 'adaptive',
+        'Settings: the Method toggle reads Adaptive, and only Adaptive\'s rows and figure card show', p1);
+    await page.click('.settings-panel[data-panel="smoothing"] .settings-choice-opt[data-value="0"]');
     const p2 = await panel();
-    check(p2.windows.every(Boolean) && !p2.adaptive.some(Boolean) && p2.figure && !p2.idle.median && p2.idle.adaptive,
-        'switching the select to the windows shows their rows, and dims the Adaptive card instead', p2);
+    check(p2.method === '0' && p2.windows.every(Boolean) && !p2.adaptive.some(Boolean) && p2.cards === 'median,gaussian,gaps',
+        'toggling to Median + Gaussian shows only its rows and its three cards', p2);
     await page.keyboard.press('Escape');
     await page.waitForTimeout(200);
     const after = await page.evaluate(async () => (await import('/ui/settings.js')).getSmoothingParams().smoothMethod);
