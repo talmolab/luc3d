@@ -160,6 +160,7 @@ export function showTrackSummaryModal(summary, checks, opts) {
     // ---- what each identity looks like, and where it went (filled in after the box opens) ----
     var gallery = opts && opts.session ? renderIdentityGallery(modal, opts.session, {
         onPick: function (frame) { close(); if (_navigate) _navigate(frame); },
+        onEmpty: function () { modal.classList.remove('has-gallery'); },
     }) : null;
     if (gallery) modal.classList.add('has-gallery');
     plan.notes.forEach(function (t) { modal.appendChild(el('p', 'track-summary-note', t)); });

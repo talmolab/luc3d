@@ -62,6 +62,39 @@ console.log('2. identityTracks');
     eq(G.identityTracks(null).size, 0, 'no session: empty');
 }
 
+console.log('2b. identitiesWith3d');
+{
+    const s = session([
+        [10, [group(1, 0, 0, 100)]],
+        [20, [Object.assign(group(0, 5, 0, 100), { points3d: new Float64Array([NaN, NaN, NaN]) }), group(2, 9, 0, 100)]],
+        [30, [group(0, 7, 0, 100), group(-1, 0, 0, 100)]],
+    ]);
+    s.identities = [{ id: 0, name: 'a' }, { id: 1, name: 'b' }, { id: 2, name: 'c' }, { id: 3, name: 'd' }];
+    eq(G.identitiesWith3d(s).map(i => i.name), ['a', 'b', 'c'], 'the identities with a 3D point, in identities order; one with none left out');
+    eq(G.identitiesWith3d({ identities: [], instanceGroups: new Map() }), [], 'no identities: none');
+    // it agrees with identityTracks when no frame holds an identity twice
+    const t = G.identityTracks(s);
+    eq(G.identitiesWith3d(s).map(i => i.id), [0, 1, 2].filter(id => t.has(id)), 'the same identities identityTracks finds');
+}
+
+console.log('2c. identityTracksAsync = identityTracks');
+{
+    // 3,000 frames, three identities, one of them twice on every 7th frame (left out there)
+    const by = [];
+    for (let f = 0; f < 3000; f++) {
+        const gs = [group(0, f % 50, 0, 100), group(1, 300, f % 30, 100), group(2, 600, 0, 100 + (f % 11))];
+        if (f % 7 === 0) gs.push(group(2, 610, 0, 100));
+        by.push([f, gs]);
+    }
+    const s = session(by);
+    const once = G.identityTracks(s);
+    let pauses = 0;
+    const sliced = await G.identityTracksAsync(s, async () => { pauses++; }, 1e-6);   // a pause every 1,024 frames
+    const same = (a, b) => [...a.keys()].join() === [...b.keys()].join() && [...a.keys()].every(k =>
+        a.get(k).frames.join() === b.get(k).frames.join() && a.get(k).xyz.every((v, i) => Object.is(v, b.get(k).xyz[i])));
+    ok(pauses >= 2 && same(once, sliced), `the same tracks in slices (${pauses} pauses), value for value`);
+}
+
 console.log('3. pickSampleFrames');
 {
     // identity 0 tracked on frames 0..999; identity 1 sits ON it at every slot middle (frames 100, 300, ...)
@@ -114,6 +147,23 @@ console.log('3. pickSampleFrames');
     ok(three.some(f => f < 50) && three.some(f => f >= 9000 && f < 9050) && three.some(f => f >= 17950), 'and all three are shown');
     eq(G.pickSampleFrames(alone, stretches([100, 106]), 0, 5).length, 5, 'one more frame than samples: five');
     eq(G.pickSampleFrames(alone, { frames: new Int32Array(0), xyz: new Float64Array(0) }, 0, 5), [], 'no frames: none');
+
+    // keyframes: a slot's candidates are its tracked keyframes when it has any
+    const kf = (every, upTo) => Int32Array.from({ length: Math.ceil(upTo / every) }, (_, i) => i * every);
+    const onKf = G.pickSampleFrames(alone, ta.get(0), 0, 5, { maxCandidates: 1000, keyframes: kf(25, 1000) });
+    eq(onKf, [100, 300, 500, 700, 900], 'alone, a keyframe every 25: the keyframe nearest each slot\'s middle');
+    // the huddle at each slot's middle (frames 100, 300, ...) is on a keyframe too: the nearest ISOLATED keyframe wins
+    const offHuddle = G.pickSampleFrames(s, t.get(0), 0, 5, { keyframes: kf(50, 1000) });
+    ok(offHuddle.length === 5 && offHuddle.every(f => f % 50 === 0 && f % 200 !== 100),
+        `with a keyframe every 50, each sample is an isolated keyframe, not the huddle: ${offHuddle}`);
+    ok(offHuddle.every((f, i) => f >= 200 * i && f < 200 * (i + 1)), '…still one per fifth of the span');
+    // keyframes the identity was never tracked on, in some slots: those slots pick among their frames as before
+    const holes = stretches([0, 450], [460, 1000]);                    // keyframe 450 untracked
+    const mixed = G.pickSampleFrames(alone, holes, 0, 5, { maxCandidates: 1000, keyframes: Int32Array.from([450, 700]) });
+    const plain = G.pickSampleFrames(alone, holes, 0, 5, { maxCandidates: 1000 });
+    ok(mixed.includes(700) && mixed.filter(f => f !== 700).every(f => plain.includes(f)),
+        `a slot with a tracked keyframe takes it (700); the others, with none, pick as without keyframes: ${mixed} vs ${plain}`);
+    eq(G.pickSampleFrames(alone, ta.get(0), 0, 5, { maxCandidates: 1000, keyframes: new Int32Array(0) }), mids, 'no keyframes given: as before');
 }
 
 console.log('4. pickCamera');

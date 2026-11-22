@@ -8,6 +8,7 @@ A legacy /convert-slp endpoint is still available if h5py is installed.
 Usage:
     python3 server.py [port]             # normal: dependencies load from a CDN
     python3 server.py --offline          # serve the vendored copies in lib/
+    python3 server.py --isolated         # cross-origin isolated (live memory readings)
     # or simply: python3 -m http.server 8080   (online only)
 
 On Windows use `py` in place of `python3`.
@@ -18,6 +19,14 @@ for developing against the offline path; to hand someone a copy that runs offlin
 under any static server, build a pre-rewritten zip instead:
 
     python3 scripts/offline_deps.py bundle
+
+--isolated sends two headers on every response, COOP `same-origin` and COEP
+`credentialless`, which make the page cross-origin isolated. Chrome then allows
+`performance.measureUserAgentSpecificMemory()`, which counts the page's web
+workers too (Track All's, the Triangulate pool, the image check): the Memory
+panel (ui/memory-panel.js) shows it beside the JavaScript heap. It is
+opt-in because the deployed site sends neither header: a feature that needs it
+would work here and nowhere else. Combines with --offline.
 """
 
 import argparse
@@ -33,6 +42,16 @@ import offline_deps  # noqa: E402  (needs the path above)
 
 # Set from the CLI in main(); {} means "serve the CDN URLs unchanged".
 REWRITES = {}
+
+# Set from the CLI in main(): send ISOLATION_HEADERS on every response.
+ISOLATED = False
+# `credentialless`, not `require-corp`: the CDN scripts (jsdelivr, unpkg) and the
+# Hugging Face model downloads send no Cross-Origin-Resource-Policy header, and
+# under credentialless a cross-origin no-cors request simply goes without cookies.
+ISOLATION_HEADERS = (
+    ("Cross-Origin-Opener-Policy", "same-origin"),
+    ("Cross-Origin-Embedder-Policy", "credentialless"),
+)
 
 # Try to import h5py for the legacy /convert-slp endpoint. Nothing else needs it:
 # serving the app -- online or offline -- never touches h5py, so a broken install
@@ -63,6 +82,14 @@ class LucidHandler(SimpleHTTPRequestHandler):
     # one connection while the browser waits for responses on the others. Every
     # response here carries an accurate Content-Length, which HTTP/1.1 requires.
     protocol_version = "HTTP/1.1"
+
+    def end_headers(self):
+        # Every response, errors and 304s included: a worker script served
+        # without COEP would be refused by an isolated page.
+        if ISOLATED:
+            for name, value in ISOLATION_HEADERS:
+                self.send_header(name, value)
+        super().end_headers()
 
     def do_GET(self):
         rewritten = self._rewritten_body()
@@ -215,9 +242,14 @@ def main(argv=None):
     parser.add_argument("--offline", action="store_true",
                         default=os.environ.get("LUCID_OFFLINE") == "1",
                         help="serve lib/ instead of the CDN (also: LUCID_OFFLINE=1)")
+    parser.add_argument("--isolated", action="store_true",
+                        default=os.environ.get("LUCID_ISOLATED") == "1",
+                        help="send COOP/COEP so the page is cross-origin isolated: the Memory "
+                             "panel can count web workers too (also: LUCID_ISOLATED=1)")
     args = parser.parse_args(argv)
 
-    global REWRITES
+    global REWRITES, ISOLATED
+    ISOLATED = args.isolated
     if args.offline:
         REWRITES = enable_offline()
         if REWRITES is None:
@@ -236,6 +268,8 @@ def main(argv=None):
     mode = "OFFLINE (dependencies from lib/)" if args.offline else "online (dependencies from CDN)"
     print(f"LUCID server on http://0.0.0.0:{args.port}/")
     print(f"  Mode: {mode}")
+    if args.isolated:
+        print("  Cross-origin isolated: COOP same-origin + COEP credentialless")
     print("  SLP export: client-side via sleap-io.js (no server dependency)")
     if HAS_H5PY:
         print("  Legacy /convert-slp endpoint: available (h5py found)")

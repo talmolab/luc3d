@@ -36,6 +36,7 @@ import {
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
     adoptCampyRecording,
 } from '../loading/session-loader.js';
+import { setPageProject } from '../ui/page-title.js';
 import {
     preferNonCalibrationVideos, assignFolderVideos, isFolderPick, isVideoFileName,
 } from '../loading/video-file-pick.js';
@@ -542,6 +543,50 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  * @param {{onProgress?:(msg:string)=>void, batch?:number, yieldMs?:number, fileIdentities?:Array}} [opts]
  * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
  */
+/**
+ * The lazy store behind `labels`, when a group member can be read from its row
+ * exactly as `labels.frameAt(lfIdx)` would build it: a lazy `Labels` whose
+ * frames are all in the store and none materialized yet (a fresh reopen).
+ * Otherwise null, and members resolve through `instanceByCamera`.
+ */
+function lazyMemberStore(labels) {
+    var list = labels && labels._lazyFrameList;
+    var store = labels && labels._lazyDataStore;
+    if (!list || !store || list.store !== store || list.cache.size > 0 ||
+        (list._supplementary && list._supplementary.length > 0)) return null;
+    if (typeof labels.frameAt !== 'function' || typeof store.videoIndexFor !== 'function') return null;
+    if (!store.framesData || !store.instancesData || !store.framesData.instance_id_start) return null;
+    return store;
+}
+
+/**
+ * A group's members as `[camera, info]` pairs, in `refs` order, read from the
+ * store's rows the way `LazyDataStore.materializeFrame` reads them: `info` is
+ * `{ isPredicted, track, score }` (`instance_type` != 0; `tracks[track]` when
+ * the id is >= 0, else null; the `score` column, used for predictions only). A
+ * ref whose frame has no video or whose instance is past the frame's end is
+ * left out, as `instanceByCamera` leaves it out.
+ */
+function storeMembers(store, refs) {
+    var fd = store.framesData, id = store.instancesData;
+    var nFrames = store.frameCount;
+    var out = [];
+    for (var entry of refs) {
+        var lfIdx = entry[1][0], instIdx = entry[1][1];
+        if (!(lfIdx >= 0 && lfIdx < nFrames)) continue;
+        if (!store.videos[store.videoIndexFor(Number(fd.video ? fd.video[lfIdx] : 0))]) continue;
+        var row = Number(fd.instance_id_start[lfIdx]) + instIdx;
+        if (!(instIdx >= 0 && row < Number(fd.instance_id_end[lfIdx]))) continue;
+        var trackId = Number(id.track ? id.track[row] : -1);
+        out.push([entry[0], {
+            isPredicted: Number(id.instance_type ? id.instance_type[row] : 0) !== 0,
+            track: trackId >= 0 ? store.tracks[trackId] : null,
+            score: Number(id.score ? id.score[row] : 0),
+        }]);
+    }
+    return out;
+}
+
 export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
     opts = opts || {};
     var numNodes = nodeNames.length;
@@ -562,6 +607,11 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     // O(tracks) × 1.25M members ≈ billions of comparisons.
     var trackIdxByName = new Map();
     for (var _tn = 0; _tn < session.tracks.length; _tn++) trackIdxByName.set(session.tracks[_tn], _tn);
+    // Members read from the lazy store's rows (`storeMemberInfo`) instead of
+    // through `typedIG.instanceByCamera`, which materializes every grouped
+    // frame's typed instances, points and all, only for each member's type,
+    // track and score (1.2 s and most of the load's GC on an 8-camera project).
+    var memberStore = lazyMemberStore(opts.labels);
 
     var fgKeys = Array.from(typedSession.frameGroups.keys());
     for (var fki = 0; fki < fgKeys.length; fki++) {
@@ -584,8 +634,10 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
 
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
             var refs = typedIG._instanceRefsByCamera || null;
+            var members = (memberStore && refs && !typedIG._instanceByCamera)
+                ? storeMembers(memberStore, refs) : null;
 
-            for (var camEntry of typedIG.instanceByCamera) {
+            for (var camEntry of (members || typedIG.instanceByCamera)) {
                 var typedCam = camEntry[0];
                 var typedInst = camEntry[1];
                 var igCamName = (typedCam && typedCam.name) || '';
@@ -604,7 +656,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 var points = lazyPlaceholderXY(numNodes);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
-                var _isPred = PredI ? (typedInst instanceof PredI)
+                var _isPred = members ? typedInst.isPredicted : PredI ? (typedInst instanceof PredI)
                     : (typedInst && typedInst.pointScores !== undefined);
                 var _tName = (typedInst && typedInst.track && typedInst.track.name != null) ? typedInst.track.name : null;
                 var _derivedTrackIdx = (_tName != null && trackIdxByName.has(_tName)) ? trackIdxByName.get(_tName) : null;
@@ -883,7 +935,13 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
     return { hasSessionData: hasSessionData };
 }
 
-export async function handleLoadSlpFile(slpFile) {
+/**
+ * Open an `.slp` (or analysis `.h5`) as the project, replacing the open one.
+ * @param {File} slpFile
+ * @param {?FileSystemFileHandle} [fileHandle]  its handle, File ▸ Save's target
+ *   from then on; without one Save asks where to write.
+ */
+export async function handleLoadSlpFile(slpFile, fileHandle) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
@@ -959,6 +1017,9 @@ export async function handleLoadSlpFile(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
+        // Save writes back to THIS file, never the replaced project's.
+        state.slpFileHandle = fileHandle || null;
+        setPageProject(slpFile.name);
         // Plane state is project-scoped and lives on a module singleton, so
         // it does NOT go away with `state.sessions`. `readPlaneMetadata`
         // only restores into an EMPTY model, so without this the previous
@@ -1401,6 +1462,25 @@ export async function handleLoadSlpFile(slpFile) {
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 
+                // A campy recording folder (session.json,
+                // `loading/campy-session.js`): read it BEFORE any video is
+                // picked for a camera, and put campy's own video for each
+                // camera first. Both picks below take the first of equally
+                // good candidates, and a camera folder can hold another
+                // video beside campy's 0.mp4: read afterwards, the order the
+                // browser listed the folder in decided which one loaded.
+                var slpCampy = await adoptCampyRecording(session, videoFiles,
+                    { calibrationNames: cameraNames });
+                if (slpCampy) {
+                    var campyOwnFiles = new Set();
+                    slpCampy.cameras.forEach(function (c) {
+                        var own = campyVideoFile(slpCampy, c, vidFiles);
+                        if (own) campyOwnFiles.add(own);
+                    });
+                    vidFiles = vidFiles.filter(function (f) { return campyOwnFiles.has(f); })
+                        .concat(vidFiles.filter(function (f) { return !campyOwnFiles.has(f); }));
+                }
+
                 // The camera a picked video belongs to: parent directory, then
                 // exact stem, then the filename the SLP references for that
                 // camera. Hoisted out of the post-load assignment loop so the
@@ -1465,12 +1545,9 @@ export async function handleLoadSlpFile(slpFile) {
                     vidFiles = _slpPref.kept;
                 }
 
-                // A campy recording folder (session.json,
-                // `loading/campy-session.js`): its frame rate and details go
-                // on the session; a camera whose campy video was picked loads
-                // only that video; the views follow campy's camera order.
-                var slpCampy = await adoptCampyRecording(session, videoFiles,
-                    { calibrationNames: cameraNames });
+                // The campy recording read above: its frame rate and details
+                // are on the session; a camera whose campy video was picked
+                // loads only that video; the views follow campy's camera order.
                 if (slpCampy) {
                     var campyOwnByCam = new Map();
                     slpCampy.cameras.forEach(function (c) {
