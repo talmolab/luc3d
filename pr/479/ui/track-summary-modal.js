@@ -35,10 +35,10 @@
 // refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary), ui/identity-gallery.js,
 // pose/single-camera-tracking.js (singleCameraName, singleCameraCheckSession).
 
-import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=2fa0b6d23798';
-import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=2fa0b6d23798';
-import { renderIdentityGallery } from './identity-gallery.js?v=2fa0b6d23798';
-import { singleCameraName, singleCameraCheckSession } from '../pose/single-camera-tracking.js?v=2fa0b6d23798';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=61a14d3ebe87';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener, clickCheckFromSummary } from './id-switch-modal.js?v=61a14d3ebe87';
+import { renderIdentityGallery } from './identity-gallery.js?v=61a14d3ebe87';
+import { singleCameraName, singleCameraCheckSession } from '../pose/single-camera-tracking.js?v=61a14d3ebe87';
 
 /**
  * The session the summary counts and draws from: the session itself, or for a
@@ -160,6 +160,7 @@ export function showTrackSummaryModal(summary, checks, opts) {
     // ---- what each identity looks like, and where it went (filled in after the box opens) ----
     var gallery = opts && opts.session ? renderIdentityGallery(modal, opts.session, {
         onPick: function (frame) { close(); if (_navigate) _navigate(frame); },
+        onEmpty: function () { modal.classList.remove('has-gallery'); },
     }) : null;
     if (gallery) modal.classList.add('has-gallery');
     plan.notes.forEach(function (t) { modal.appendChild(el('p', 'track-summary-note', t)); });

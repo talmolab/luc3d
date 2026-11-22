@@ -46,6 +46,11 @@ export const RAIL_ICONS = {
     'folder-tree': '<path d="M20 10a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-2.5a1 1 0 0 1-.8-.4l-.9-1.2A1 1 0 0 0 15 3h-2a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1Z"/>' +
         '<path d="M20 21a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1h-2.9a1 1 0 0 1-.88-.55l-.42-.85a1 1 0 0 0-.92-.6H13a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1Z"/>' +
         '<path d="M3 5a2 2 0 0 0 2 2h3"/><path d="M3 3v13a2 2 0 0 0 2 2h3"/>',
+    // Memory (no sleap-app counterpart): a RAM module
+    'memory-stick': '<path d="M12 12v-2"/><path d="M12 18v-2"/><path d="M16 12v-2"/>' +
+        '<path d="M16 18v-2"/><path d="M2 11h1.5"/><path d="M20 18v-2"/>' +
+        '<path d="M20.5 11H22"/><path d="M4 18v-2"/><path d="M8 12v-2"/>' +
+        '<path d="M8 18v-2"/><rect x="2" y="6" width="20" height="10" rx="2"/>',
     // sleap-app's collapse / expand toggle (right-docked)
     'panel-right-close': '<rect width="18" height="18" x="3" y="3" rx="2"/>' +
         '<path d="M15 3v18"/><path d="m8 9 3 3-3 3"/>',

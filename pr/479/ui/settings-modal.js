@@ -46,16 +46,16 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=2fa0b6d23798';
-import { getActiveSession, state, timeline } from './app-state.js?v=2fa0b6d23798';
-import { drawAllOverlays } from './rendering.js?v=2fa0b6d23798';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=2fa0b6d23798';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=2fa0b6d23798';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=2fa0b6d23798';
-import { installModalGeometry } from './modal-geometry.js?v=2fa0b6d23798';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=2fa0b6d23798';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=2fa0b6d23798';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=2fa0b6d23798';
+} from './settings.js?v=61a14d3ebe87';
+import { getActiveSession, state, timeline } from './app-state.js?v=61a14d3ebe87';
+import { drawAllOverlays } from './rendering.js?v=61a14d3ebe87';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=61a14d3ebe87';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=61a14d3ebe87';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=61a14d3ebe87';
+import { installModalGeometry } from './modal-geometry.js?v=61a14d3ebe87';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=61a14d3ebe87';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=61a14d3ebe87';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=61a14d3ebe87';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -176,6 +176,57 @@ function buildParamRow(def, bag, onEdit) {
     row.appendChild(labelWrap);
     row.appendChild(input);
     return row;
+}
+
+/**
+ * A one-of-N toggle for a `kind: 'choice'` setting (Temporal Smoothing's
+ * Method): a row of buttons, the chosen one lit, under the setting's name, with
+ * its description below. A click sets `bag[def.id]` to the option's value and
+ * calls `onEdit`. `sync()` re-lights it from `bag`.
+ *
+ * @returns {{el: HTMLElement, sync: function(): void}}
+ */
+function buildChoiceToggle(def, bag, onEdit) {
+    const wrap = document.createElement('div');
+    wrap.className = 'settings-choice';
+    wrap.dataset.setting = def.id;
+    const title = document.createElement('div');
+    title.className = 'settings-threshold-title';
+    title.textContent = def.label;
+    const opts = document.createElement('div');
+    opts.className = 'settings-choice-opts';
+    opts.setAttribute('role', 'radiogroup');
+    opts.setAttribute('aria-label', def.label);
+    const buttons = (def.options || []).map(function (opt) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'settings-choice-opt';
+        b.setAttribute('role', 'radio');
+        b.dataset.value = String(opt.value);
+        b.textContent = opt.label;
+        b.addEventListener('click', function () {
+            bag[def.id] = opt.value;
+            sync();
+            if (onEdit) onEdit();
+        });
+        opts.appendChild(b);
+        return b;
+    });
+    const desc = document.createElement('div');
+    desc.className = 'settings-threshold-desc';
+    desc.textContent = def.desc;
+    wrap.appendChild(title);
+    wrap.appendChild(opts);
+    wrap.appendChild(desc);
+    function sync() {
+        buttons.forEach(function (b) {
+            const on = Number(b.dataset.value) === Number(bag[def.id]);
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+    }
+    sync();
+    return { el: wrap, sync: sync };
 }
 
 /**
@@ -798,11 +849,18 @@ export function showSettingsModal(initialPanel) {
     smHint.className = 'settings-kbd-hint';
     smHint.style.marginTop = '0';
     smHint.style.marginBottom = '8px';
-    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation: a median first, then a Gaussian. ' +
-        '2D labels and predictions never change; the reprojections follow the smoothed 3D. Both stages are off (0) ' +
-        'by default. Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame and ' +
+    smHint.textContent = 'Smooths each node\'s 3D over time, after triangulation, by one of two methods, never both: ' +
+        'Adaptive (the default) or Median + Gaussian (fixed windows: a median first, then a Gaussian; both off (0) by default). ' +
+        '2D labels and predictions never change; the reprojections follow the smoothed 3D. ' +
+        'Run it from the toolbar\'s Smooth ▾ (a click runs all frames; its menu also has This frame, the method and ' +
         'Remove smoothing). Changes here apply when you click Apply.';
     smPanel.appendChild(smHint);
+
+    // The method, one or the other: a toggle above the figure. The figure and
+    // the parameters below show only the chosen method's.
+    const methodDef = smoothingDefs.find(function (d) { return d.id === 'smoothingMethod'; });
+    const smMethod = buildChoiceToggle(methodDef, working.smoothing, function () { showSmoothingMethod(); });
+    smPanel.appendChild(smMethod.el);
 
     // What the two windows do, redrawn as they are typed
     // (`ui/smoothing-windows-figure.js`). Its sliders only redraw the sketch;
@@ -820,13 +878,27 @@ export function showSettingsModal(initialPanel) {
     smFigure.update(working.smoothing);
     smPanel.appendChild(smFigure.el);
 
-    const smSection = buildSection('Filter Parameters', smoothingDefs.length || null);
+    // One section with only the chosen method's parameters (`def.method`),
+    // shown again as the method changes, as the figure's cards are.
+    const smSection = buildSection('Filter Parameters', null);
     smPanel.appendChild(smSection.root);
+    const smRows = [];
+    function showSmoothingMethod() {
+        const method = working.smoothing.smoothingMethod === 1 ? 'adaptive' : 'windows';
+        smRows.forEach(function (r) { r.row.hidden = !!r.method && r.method !== method; });
+        smMethod.sync();
+        smFigure.update(working.smoothing);
+    }
     smoothingDefs.forEach(function (def) {
-        smSection.body.appendChild(buildParamRow(def, working.smoothing, function () {
+        if (def.id === 'smoothingMethod') return;     // the toggle above the figure
+        const row = buildParamRow(def, working.smoothing, function () {
             smFigure.update(working.smoothing);
-        }));
+        });
+        row.dataset.smoothingMethod = def.method || '';
+        smRows.push({ row: row, method: def.method });
+        smSection.body.appendChild(row);
     });
+    showSmoothingMethod();
 
     // The two dials of luc3d #134 pull against each other and the interaction is
     // the opposite of what tuning two sliders suggests, so say so here.

@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=2fa0b6d23798";
+} from "./chunk-H7G4PJNA.js?v=61a14d3ebe87";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=2fa0b6d23798";
+} from "./chunk-YS7Q6CO6.js?v=61a14d3ebe87";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -10651,6 +10651,34 @@ self.onmessage = async function(e) {
         respond(id, { success: true, data }, data.transferables);
         break;
 
+      // LUCID local patch (column reads): one column (rows r0..r1) of a flat
+      // 2-D table, narrowed here, its buffer transferred.
+      case 'lucidReadColumn':
+        const colPiece = lucidReadColumnW(payload.path, payload.col, payload.r0, payload.r1, payload.name, payload.raw);
+        respond(id, { success: true, data: { value: { type: 'typedarray', dtype: colPiece.constructor.name,
+          buffer: colPiece.buffer, byteOffset: colPiece.byteOffset, length: colPiece.length } } }, [colPiece.buffer]);
+        break;
+
+      // LUCID local patch (column reads): rows r0..r1 split into columns.
+      case 'lucidReadRowColumns':
+        const rowCols = lucidReadRowColumnsW(payload.path, payload.r0, payload.r1, payload.names);
+        respond(id, { success: true, data: { columns: rowCols.map(function(a) {
+          return { type: 'typedarray', dtype: a.constructor.name, buffer: a.buffer, byteOffset: a.byteOffset, length: a.length };
+        }) } }, rowCols.map(function(a) { return a.buffer; }));
+        break;
+
+      // LUCID local patch (column reads): entries r0..r1 of a 1-D vlen dataset
+      // (the /session_data meta blobs), through h5wasm's own slice: 0.10.3
+      // reclaims a count-sized dataspace after a hyperslab read (the heap
+      // corruption the vlen note in getDatasetValue avoids was a full-extent
+      // reclaim). getDatasetValue itself is unchanged.
+      case 'lucidReadVlenRange':
+        const vlenDs = currentFile && currentFile.get(payload.path);
+        if (!vlenDs) throw new Error('Dataset not found: ' + payload.path);
+        if (!(vlenDs.shape && vlenDs.shape.length === 1)) throw new Error('not a 1-D dataset: ' + payload.path);
+        respond(id, { success: true, data: { value: vlenDs.slice([[payload.r0, payload.r1]]) } });
+        break;
+
       case 'close':
         closeFile();
         respond(id, { success: true });
@@ -10948,11 +10976,93 @@ function getDatasetMeta(path) {
   };
 }
 
+// LUCID local patch (narrow columns): the worker's copy of the main thread's
+// LUCID_NARROW_COLUMNS (keep the two lists the same). 1 = Uint8Array,
+// 2 = Float32Array, 3 = Uint32Array, 0 = Float64Array. Only columns LUCID
+// never writes into a loaded store, and only when every value fits exactly.
+function lucidNarrowKindW(name) {
+  switch (name) {
+    case 'x': case 'y': case 'score': case 'tracking_score': return 2;
+    case 'visible': case 'complete': case 'instance_type': case 'skeleton': return 1;
+    case 'point_id_start': case 'point_id_end': return 3;
+    default: return 0;
+  }
+}
+
+// LUCID local patch (column reads): rows r0..r1 of column col of a flat 2-D
+// table (LUCID's layout), read straight from its one-column chunks with a
+// hyperslab, then narrowed like the main thread's lucidNarrowColumn (same
+// rule, same result): the narrow type when every value fits, else
+// Float64Array. A piece of a column narrows on its own; the main thread
+// widens the column when one piece does not fit.
+function lucidReadColumnW(path, col, r0, r1, name, raw) {
+  if (!currentFile) throw new Error('No file open');
+  const dataset = currentFile.get(path);
+  if (!dataset) throw new Error('Dataset not found: ' + path);
+  const src = dataset.slice([[r0, r1], [col, col + 1]]);
+  // raw: the dataset's own type, as a whole read returns it (a 3D matrix).
+  if (raw) return src;
+  return lucidNarrowW(src, 0, 1, src.length, lucidNarrowKindW(name));
+}
+
+// LUCID local patch (column reads): column \`off\` of the row-major \`src\`
+// (\`stride\` values per row, \`n\` rows), narrowed by \`kind\` with the main
+// thread's lucidNarrowColumn rule: the narrow type when every value fits
+// exactly (-0 never fits an integer type), else Float64Array (Number() of a
+// BigInt). A whole Float32/Float64 column of the right kind is returned as is.
+function lucidNarrowW(src, off, stride, n, kind) {
+  const isBig = (typeof BigInt64Array !== 'undefined' && src instanceof BigInt64Array) ||
+    (typeof BigUint64Array !== 'undefined' && src instanceof BigUint64Array);
+  const whole = off === 0 && stride === 1 && src.length === n;
+  if (kind === 2 && src instanceof Float32Array) {
+    if (whole) return src;
+    const f32 = new Float32Array(n);
+    for (let r = 0, p = off; r < n; r++, p += stride) f32[r] = src[p];
+    return f32;
+  }
+  if (whole && kind === 0 && src instanceof Float64Array) return src;
+  let out = null;
+  let r = 0;
+  if (kind !== 0) {
+    const isFloat = kind === 2;
+    out = kind === 1 ? new Uint8Array(n) : isFloat ? new Float32Array(n) : new Uint32Array(n);
+    for (let p = off; r < n; r++, p += stride) {
+      const v = isBig ? Number(src[p]) : src[p];
+      out[r] = v;
+      const w = out[r];
+      if (w === v) {
+        if (v === 0 && !isFloat && 1 / v < 0) break;
+      } else if (!(isFloat && v !== v)) {
+        break;
+      }
+    }
+    if (r === n) return out;
+  }
+  if (whole && src instanceof Float64Array) return src;
+  const f64 = new Float64Array(n);
+  if (r > 0) f64.set(out.subarray(0, r));
+  for (let p = off + r * stride; r < n; r++, p += stride) f64[r] = isBig ? Number(src[p]) : src[p];
+  return f64;
+}
+
+// LUCID local patch (column reads): rows r0..r1 of a flat 2-D table in any
+// layout, split here into one narrowed column per name (lucidNarrowW), so the
+// page gets columns instead of rows to split.
+function lucidReadRowColumnsW(path, r0, r1, names) {
+  if (!currentFile) throw new Error('No file open');
+  const dataset = currentFile.get(path);
+  if (!dataset) throw new Error('Dataset not found: ' + path);
+  const src = dataset.slice([[r0, r1]]);
+  const n = r1 - r0, cols = names.length;
+  if (!src || src.length !== n * cols) throw new Error('rows ' + r0 + '-' + r1 + ': got ' + (src && src.length) + ' values');
+  return names.map(function(nm, c) { return lucidNarrowW(src, c, cols, n, lucidNarrowKindW(nm)); });
+}
+
 // Read a fixed-size 1-D compound dataset column-wise straight from the record
 // blob, skipping h5wasm's Dataset.value (which allocates ~8 Uint8Array.slice per
 // record \u2014 the dominant cost of opening a large project). Mirrors
 // readCompoundColumnsManual in ./h5-compound.ts (keep them in lockstep). Returns
-// { columns: { memberName: Float64Array }, buffers: ArrayBuffer[] } \u2014 the buffers
+// { columns: { memberName: TypedArray }, buffers: ArrayBuffer[] } \u2014 the buffers
 // are the postMessage transfer list so the columns move to the main thread
 // instead of being structured-cloned. Returns null (caller falls back to .value)
 // for anything not a plain-numeric compound. Values match .value except int64
@@ -10973,9 +11083,9 @@ function readCompoundColumnsWorker(dataset, M) {
   }
   if (!(M && M._malloc && M.get_dataset_data && M.HEAPU8 && M._free)) return null;
   const n = shape[0];
-  // Columns are Float64Array (every SLEAP field \u2014 coords, scores, and integer
-  // id/index columns up to 2^53 \u2014 is exact in f64) so their backing buffers can
-  // be TRANSFERRED to the main thread instead of structured-cloned. \`buffers\`
+  // Columns are typed arrays (Float64Array, or a narrower type that holds every
+  // value exactly: lucidNarrowKindW) so their backing buffers can be
+  // TRANSFERRED to the main thread instead of structured-cloned. \`buffers\`
   // is the postMessage transfer list.
   const columns = {};
   const buffers = [];
@@ -11000,9 +11110,17 @@ function readCompoundColumnsWorker(dataset, M) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   for (let j = 0; j < members.length; j++) {
     const m = members[j];
-    const col = new Float64Array(n);
     const off = m.offset, sz = m.size, isFloat = (m.type === 1);
     const signed = (m.signed !== false), le = (m.littleEndian !== false);
+    // LUCID local patch (narrow columns): the narrowest typed array that holds
+    // every value of this column exactly, else Float64Array (see
+    // lucidNarrowKindW). A value that does not fit switches the column to
+    // Float64Array, keeping the values read so far (they all fit exactly).
+    const kind = lucidNarrowKindW(m.name);
+    const narrowFloat = (kind === 2);
+    let col = kind === 1 ? new Uint8Array(n) : kind === 2 ? new Float32Array(n) :
+      kind === 3 ? new Uint32Array(n) : new Float64Array(n);
+    let narrow = (kind !== 0);
     for (let i = 0; i < n; i++) {
       const p = i * recSize + off;
       let v;
@@ -11012,6 +11130,17 @@ function readCompoundColumnsWorker(dataset, M) {
       else if (sz === 4) v = signed ? dv.getInt32(p, le) : dv.getUint32(p, le);
       else v = Number(signed ? dv.getBigInt64(p, le) : dv.getBigUint64(p, le));
       col[i] = v;
+      if (narrow) {
+        const w = col[i];
+        const fits = (w === v) ? !(v === 0 && !narrowFloat && 1 / v < 0) : (narrowFloat && v !== v);
+        if (!fits) {
+          const wide = new Float64Array(n);
+          wide.set(col.subarray(0, i));
+          wide[i] = v;
+          col = wide;
+          narrow = false;
+        }
+      }
     }
     columns[m.name] = col;
     buffers.push(col.buffer);
@@ -11478,6 +11607,23 @@ var StreamingH5File = class {
       shape: data.shape,
       dtype: data.dtype
     };
+  }
+  // LUCID local patch (column reads): rows r0..r1 of column `col` of a flat
+  // 2-D table, narrowed in the worker by the column's name.
+  async lucidReadColumn(path, col, r0, r1, name, raw = false) {
+    const result = await this.send("lucidReadColumn", { path, col, r0, r1, name, raw });
+    return reconstructValue(result.data.value);
+  }
+  // LUCID local patch (column reads): rows r0..r1 of a flat 2-D table as one
+  // narrowed column per name, split in the worker.
+  async lucidReadRowColumns(path, r0, r1, names) {
+    const result = await this.send("lucidReadRowColumns", { path, r0, r1, names });
+    return result.data.columns.map(reconstructValue);
+  }
+  // LUCID local patch (column reads): entries r0..r1 of a 1-D vlen dataset.
+  async lucidReadVlenRange(path, r0, r1) {
+    const result = await this.send("lucidReadVlenRange", { path, r0, r1 });
+    return result.data.value;
   }
   /**
    * Close the file and terminate the worker.
@@ -12006,6 +12152,12 @@ async function readSlpStreaming(source, options) {
   const openVideos = options?.openVideos ?? false;
   const lazyVideoMetadata = options?.lazyVideoMetadata ?? false;
   const sourcePath = typeof source === "string" ? source : typeof File !== "undefined" && source instanceof File ? source.name : options?.filenameHint ?? "slp-data.slp";
+  // LUCID local patch (column reads): extra workers on the same File for the
+  // big tables' columns (options.lucidReadWorkers); opened on first use.
+  const lucidPool = lucidMakeReadPool(source, options);
+  // Opened while the metadata and the first tables are read, so the helpers
+  // are ready when a big table or /session_data needs them.
+  if (lucidPool) lucidPool.warm();
   try {
     return await readFromStreamingFile(
       file,
@@ -12017,15 +12169,17 @@ async function readSlpStreaming(source, options) {
       options?.lazy ?? false,
       lazyVideoMetadata,
       // LUCID local patch (open progress): bytes read of the four big tables
-      options?.onReadBytes
+      options?.onReadBytes,
+      lucidPool
     );
   } finally {
+    if (lucidPool) await lucidPool.close();
     if (!openVideos && !lazyVideoMetadata) {
       await file.close();
     }
   }
 }
-async function readFromStreamingFile(file, url, filenameHint, openVideos = false, onProgress, rawSessions = false, lazy = false, lazyVideoMetadata = false, onReadBytes = void 0) {
+async function readFromStreamingFile(file, url, filenameHint, openVideos = false, onProgress, rawSessions = false, lazy = false, lazyVideoMetadata = false, onReadBytes = void 0, lucidPool = null) {
   const STAGES = [
     "Reading metadata",
     // 0
@@ -12086,12 +12240,12 @@ async function readFromStreamingFile(file, url, filenameHint, openVideos = false
   // four big tables are read in row slices and every slice is counted, over
   // the tables' total size taken from their metadata first.
   const lucidRead = onReadBytes ? await lucidPlanTableReads(file, ["frames", "instances", "points", "pred_points"], onReadBytes) : null;
-  const framesData = await readStructDatasetStreaming(file, "frames", false, lucidRead);
+  const framesData = await readStructDatasetStreaming(file, "frames", false, lucidRead, lucidPool);
   report(5);
-  const instancesData = await readStructDatasetStreaming(file, "instances", false, lucidRead);
+  const instancesData = await readStructDatasetStreaming(file, "instances", false, lucidRead, lucidPool);
   report(6);
-  const pointsData = await readStructDatasetStreaming(file, "points", false, lucidRead);
-  const predPointsData = await readStructDatasetStreaming(file, "pred_points", false, lucidRead);
+  const pointsData = await readStructDatasetStreaming(file, "points", false, lucidRead, lucidPool);
+  const predPointsData = await readStructDatasetStreaming(file, "pred_points", false, lucidRead, lucidPool);
   report(7);
   const lazyStore = lazy ? new LazyDataStore({
     framesData,
@@ -12161,7 +12315,9 @@ async function readFromStreamingFile(file, url, filenameHint, openVideos = false
     videos,
     skeletons,
     identities,
-    rawSessions
+    rawSessions,
+    // LUCID local patch (column reads): /session_data's tables on the pool
+    lucidPool
   );
   onProgress?.(total, total, "Finalizing");
   const labels = new Labels({
@@ -12653,14 +12809,14 @@ async function readStreamingInstanceIdentity(file) {
     categoryCatalog
   };
 }
-async function readSessionsStreaming(file, videos, skeletons, identities, captureRaw = false) {
+async function readSessionsStreaming(file, videos, skeletons, identities, captureRaw = false, lucidPool = null) {
   try {
     const keys = file.keys();
     if (!keys.includes("sessions_json")) return [];
     const data = await file.getDatasetValue("sessions_json");
     const values = normalizeDatasetArray(data.value);
     if (values.length === 0) return [];
-    const sessionData = await readSessionDataStreaming(file);
+    const sessionData = await readSessionDataStreaming(file, lucidPool);
     const sessions = [];
     for (const entry of values) {
       let parsed;
@@ -12843,9 +12999,15 @@ async function readSessionsStreaming(file, videos, skeletons, identities, captur
     throw new Error(`Failed to read sessions_json: ${String(err)}`);
   }
 }
-async function readSessionDataStreaming(file) {
+async function readSessionDataStreaming(file, lucidPool = null) {
   if (!file.keys().includes("session_data")) return null;
   const children = new Set(await file.getKeys("session_data"));
+  // LUCID local patch (column reads): with a pool of more than one worker (a
+  // project reopen), every dataset is read in pieces spread over all of them.
+  if (lucidPool) {
+    const readers = await lucidPool.readers(file);
+    if (readers.length > 1) return lucidReadSessionDataPooled(file, children, readers, lucidPool);
+  }
   const struct = async (name) => {
     if (!children.has(name)) return null;
     const cols = await readStructDatasetStreaming(
@@ -12882,6 +13044,156 @@ async function readSessionDataStreaming(file) {
     instanceGroupMeta: await meta("instance_group_meta")
   };
 }
+// LUCID local patch (column reads): /session_data read on the pool. Every
+// dataset is read at once, and each in pieces spread over all the workers:
+//   - the three group tables through readStructDatasetStreaming with the pool
+//     and no size floor: one-column chunks are read in column pieces
+//     (lucidReadTableColumns), whole-row chunks in row blocks
+//     (lucidReadRowsPooled);
+//   - points_3d / unsmoothed_points_3d / pred_points_3d (lucidReadMatrixPooled):
+//     raw column pieces put back into rows, or row blocks;
+//   - the meta blobs (lucidReadVlenPooled): ranges of entries.
+// Each gives what one whole read gives; a matrix or meta read that fails is
+// read whole on the main worker instead. Missing group tables give null, as
+// in the one-worker read, whatever else failed.
+async function lucidReadSessionDataPooled(file, children, readers, pool) {
+  const P = (name) => `session_data/${name}`;
+  const struct = async (name) => {
+    if (!children.has(name)) return null;
+    const cols = await readStructDatasetStreaming(file, P(name), true, null, pool, 0);
+    return Object.keys(cols).length ? cols : null;
+  };
+  const matrix = async (name, ncolsDefault) => {
+    if (!children.has(name)) return null;
+    try {
+      const m = await lucidReadMatrixPooled(file, P(name), readers);
+      if (m) return m;
+    } catch (e) {
+      console.warn(`[sleap-io] pooled read of ${P(name)} failed, reading it whole instead:`, e);
+    }
+    const d = await file.getDatasetValue(P(name));
+    const ncols = d.shape && d.shape.length >= 2 ? d.shape[1] : ncolsDefault;
+    return { flat: d.value, ncols };
+  };
+  const meta = async (name) => {
+    if (!children.has(name)) return null;
+    try {
+      const v = await lucidReadVlenPooled(file, P(name), readers);
+      if (v) return normalizeDatasetArray(v);
+    } catch (e) {
+      console.warn(`[sleap-io] pooled read of ${P(name)} failed, reading it whole instead:`, e);
+    }
+    const d = await file.getDatasetValue(P(name));
+    return normalizeDatasetArray(d.value);
+  };
+  const settled = await Promise.allSettled([
+    struct("frame_groups"),
+    struct("instance_groups"),
+    struct("instance_group_members"),
+    matrix("points_3d", 3),
+    // LUCID local patch (smoothing source)
+    matrix("unsmoothed_points_3d", 3),
+    matrix("pred_points_3d", 4),
+    meta("frame_group_meta"),
+    meta("instance_group_meta")
+  ]);
+  const v = settled.map((r) => r.status === "fulfilled" ? r.value : null);
+  if (!v[0] || !v[1] || !v[2]) return null;
+  const failed = settled.find((r) => r.status === "rejected");
+  if (failed) throw failed.reason;
+  return {
+    frameGroups: v[0],
+    instanceGroups: v[1],
+    members: v[2],
+    points3d: v[3],
+    unsmoothedPoints3d: v[4],
+    predPoints3d: v[5],
+    frameGroupMeta: v[6],
+    instanceGroupMeta: v[7]
+  };
+}
+// Run `tasks` (functions of a reader) on `readers`, each reader taking the next
+// task when it is done; the first failure stops the rest and is thrown.
+async function lucidRunOnReaders(readers, tasks) {
+  let next = 0;
+  let failed = null;
+  await Promise.all(readers.map(async (reader) => {
+    while (!failed && next < tasks.length) {
+      const task = tasks[next++];
+      try {
+        await task(reader);
+      } catch (e) {
+        failed = failed || e;
+      }
+    }
+  }));
+  if (failed) throw failed;
+}
+// LUCID local patch (column reads): a 2-D /session_data matrix (points_3d and
+// kin) read in pieces on `readers`, as the row-major typed array one whole
+// read returns ({ flat, ncols }). One-column chunks: raw column pieces (the
+// dataset's own type, `lucidReadColumn(..., raw)`) of whole chunks, put back
+// into rows; any other layout: row blocks (lucidReadRowsPooled). Null for
+// anything else (the caller reads it whole).
+async function lucidReadMatrixPooled(file, path, readers) {
+  const meta = await file.getDatasetMeta(path);
+  if (!meta.shape || meta.shape.length !== 2 || !(Number(meta.shape[0]) > 0) || meta.metadata && meta.metadata.vlen) return null;
+  const rows = Number(meta.shape[0]), cols = Number(meta.shape[1]) || 1;
+  if (!lucidColumnChunked(meta) || !readers.every((r) => typeof r.lucidReadColumn === "function")) {
+    const m = await lucidReadRowsPooled(file, path, meta, null, { readers: async () => readers }, 0);
+    return m ? { flat: m.value, ncols: cols } : null;
+  }
+  const sliceElems = typeof globalThis !== "undefined" && globalThis.__lucidReadSliceElems || 524288;
+  const pieceRows = sliceElems >= LUCID_COLUMN_CHUNK_ROWS ? Math.floor(sliceElems / LUCID_COLUMN_CHUNK_ROWS) * LUCID_COLUMN_CHUNK_ROWS : Math.max(1, sliceElems);
+  let out = null;
+  const tasks = [];
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows; r += pieceRows) {
+      const end = Math.min(rows, r + pieceRows);
+      tasks.push(async (reader) => {
+        const piece = await reader.lucidReadColumn(path, c, r, end, "", true);
+        if (!ArrayBuffer.isView(piece) || piece.length !== end - r) {
+          throw new Error(`column ${c} rows ${r}-${end}: got ${piece && piece.length} values`);
+        }
+        if (!out) out = new piece.constructor(rows * cols);
+        else if (piece.constructor !== out.constructor) throw new Error(`column ${c} rows ${r}-${end}: ${piece.constructor.name}, not ${out.constructor.name}`);
+        for (let i = 0, p = r * cols + c; i < piece.length; i++, p += cols) out[p] = piece[i];
+      });
+    }
+  }
+  await lucidRunOnReaders(readers, tasks);
+  return { flat: out, ncols: cols };
+}
+// LUCID local patch (column reads): a 1-D /session_data dataset (the meta
+// blobs, vlen strings) read in ranges of entries on `readers`
+// (`lucidReadVlenRange`), joined in order: the array one whole read returns.
+// Null when it is too short to split or a reader cannot (read it whole).
+async function lucidReadVlenPooled(file, path, readers) {
+  if (!readers.every((r) => typeof r.lucidReadVlenRange === "function")) return null;
+  const meta = await file.getDatasetMeta(path);
+  if (!meta.shape || meta.shape.length !== 1) return null;
+  const rows = Number(meta.shape[0]);
+  const minRows = typeof globalThis !== "undefined" && globalThis.__lucidVlenRangeRows || 4096;
+  const per = Math.max(minRows, Math.ceil(rows / (readers.length * 2)));
+  if (!(rows > per)) return null;
+  const parts = [];
+  const tasks = [];
+  for (let r = 0, k = 0; r < rows; r += per, k++) {
+    const end = Math.min(rows, r + per), slot = k;
+    tasks.push(async (reader) => {
+      const part = await reader.lucidReadVlenRange(path, r, end);
+      if (!Array.isArray(part) || part.length !== end - r) {
+        throw new Error(`entries ${r}-${end}: got ${part && part.length}`);
+      }
+      parts[slot] = part;
+    });
+  }
+  await lucidRunOnReaders(readers, tasks);
+  const out = new Array(rows);
+  let o = 0;
+  for (const part of parts) for (let i = 0; i < part.length; i++) out[o++] = part[i];
+  return out;
+}
 // LUCID local patch (open progress): the byte plan `readFromStreamingFile`
 // counts the big tables' reads against — each table's size is its element
 // count times its element size (h5wasm metadata `size`), both layouts.
@@ -12899,7 +13211,10 @@ async function lucidPlanTableReads(file, paths, onReadBytes) {
     } catch {
     }
   }
-  const plan = { sizes, total, done: 0, onReadBytes };
+  // LUCID local patch (column reads): the count reported never goes down (a
+  // failed column read re-counts its table from the start through the rows).
+  let shown = 0;
+  const plan = { sizes, total, done: 0, onReadBytes: (d, t) => onReadBytes(shown = Math.max(shown, d), t) };
   await onReadBytes(0, total);
   return plan;
 }
@@ -12927,7 +13242,110 @@ async function lucidReadRowsChunked(file, path, shape, plan) {
   }
   return { value: out, shape: [rows, cols] };
 }
-async function readStructDatasetStreaming(file, path, assumePresent = false, lucidRead = null) {
+// LUCID local patch (column reads): a big flat 2-D table that is not in column
+// chunks, read in row blocks by the pool's workers side by side into one
+// pre-sized typed array: the same array a whole read returns. Blocks are whole
+// chunks (the table's chunk rows; any rows for a contiguous table) of about
+// 512K elements (`__lucidReadSliceElems`), each counted into the plan. Returns
+// null for a table under LUCID_POOL_TABLE_BYTES or a pool with one worker; a
+// failed or unexpected block throws, and the caller reads on one worker.
+async function lucidReadRowsPooled(file, path, meta, plan, pool, minBytes = null) {
+  const rows = Number(meta.shape[0]), cols = Number(meta.shape[1]) || 1;
+  const tableBytes = rows * cols * Number(meta.metadata && meta.metadata.size || 8);
+  const poolMin = minBytes != null ? minBytes : typeof globalThis !== "undefined" && globalThis.__lucidPoolTableBytes || LUCID_POOL_TABLE_BYTES;
+  if (tableBytes < poolMin) return null;
+  const readers = await pool.readers(file);
+  if (readers.length < 2) return null;
+  const ch = meta.metadata && meta.metadata.chunks;
+  const chunkRows = Array.isArray(ch) && Number(ch[0]) > 0 ? Number(ch[0]) : 1;
+  const sliceElems = typeof globalThis !== "undefined" && globalThis.__lucidReadSliceElems || 524288;
+  let rowsPer = Math.max(1, Math.floor(sliceElems / cols));
+  if (rowsPer >= chunkRows) rowsPer = Math.floor(rowsPer / chunkRows) * chunkRows;
+  const planBytes = plan ? plan.sizes.get(path) || 0 : 0;
+  let out = null;
+  let next = 0;
+  let failed = null;
+  await Promise.all(readers.map(async (reader) => {
+    while (!failed && next < rows) {
+      const r = next;
+      const end = Math.min(rows, r + rowsPer);
+      next = end;
+      try {
+        const v = (await reader.getDatasetValue(path, [[r, end]])).value;
+        if (!ArrayBuffer.isView(v) || v.length !== (end - r) * cols) {
+          throw new Error(`rows ${r}-${end}: got ${v && v.length} values`);
+        }
+        if (!out) out = new v.constructor(rows * cols);
+        else if (v.constructor !== out.constructor) throw new Error(`rows ${r}-${end}: ${v.constructor.name}, not ${out.constructor.name}`);
+        out.set(v, r * cols);
+        if (plan && !failed) {
+          plan.done += planBytes * (end - r) / rows;
+          await plan.onReadBytes(Math.round(plan.done), plan.total);
+        }
+      } catch (e) {
+        failed = failed || e;
+      }
+    }
+  }));
+  if (failed) throw failed;
+  return { value: out, shape: [rows, cols] };
+}
+// LUCID local patch (column reads): a big flat 2-D table not in column chunks,
+// read in row blocks by the pool's workers side by side (blocks as in
+// lucidReadRowsPooled), each block split by its worker into one narrowed
+// column per field (`lucidReadRowColumns`). Columns are assembled here;
+// blocks land in any order, so a block that comes back Float64Array widens
+// its whole column (values already placed are exact in f64, places not yet
+// filled are overwritten later). The result equals normalizeStructData's
+// columns of the whole matrix, type for type. Null when the table is under
+// the pool floor, the pool has one worker, or a worker lacks the message;
+// a failed block throws.
+async function lucidReadRowBlocksAsColumns(file, path, meta, names, plan, pool, minBytes = null) {
+  const rows = Number(meta.shape[0]), cols = Number(meta.shape[1]) || 1;
+  const tableBytes = rows * cols * Number(meta.metadata && meta.metadata.size || 8);
+  const poolMin = minBytes != null ? minBytes : typeof globalThis !== "undefined" && globalThis.__lucidPoolTableBytes || LUCID_POOL_TABLE_BYTES;
+  if (tableBytes < poolMin) return null;
+  const readers = await pool.readers(file);
+  if (readers.length < 2 || !readers.every((r) => typeof r.lucidReadRowColumns === "function")) return null;
+  const ch = meta.metadata && meta.metadata.chunks;
+  const chunkRows = Array.isArray(ch) && Number(ch[0]) > 0 ? Number(ch[0]) : 1;
+  const sliceElems = typeof globalThis !== "undefined" && globalThis.__lucidReadSliceElems || 524288;
+  let rowsPer = Math.max(1, Math.floor(sliceElems / cols));
+  if (rowsPer >= chunkRows) rowsPer = Math.floor(rowsPer / chunkRows) * chunkRows;
+  const planBytes = plan ? plan.sizes.get(path) || 0 : 0;
+  const outs = new Array(cols).fill(null);
+  const tasks = [];
+  for (let r = 0; r < rows; r += rowsPer) {
+    const end = Math.min(rows, r + rowsPer);
+    tasks.push(async (reader) => {
+      const parts = await reader.lucidReadRowColumns(path, r, end, names);
+      if (!Array.isArray(parts) || parts.length !== cols) throw new Error(`rows ${r}-${end}: got ${parts && parts.length} columns`);
+      for (let c = 0; c < cols; c++) {
+        const piece = parts[c];
+        if (!ArrayBuffer.isView(piece) || piece.length !== end - r) throw new Error(`column ${names[c]} rows ${r}-${end}: got ${piece && piece.length} values`);
+        let out = outs[c];
+        if (!out) {
+          out = outs[c] = new piece.constructor(rows);
+        } else if (piece.constructor !== out.constructor && !(out instanceof Float64Array)) {
+          if (!(piece instanceof Float64Array)) throw new Error(`column ${names[c]}: ${piece.constructor.name} after ${out.constructor.name}`);
+          const wide = new Float64Array(rows);
+          wide.set(out);
+          out = outs[c] = wide;
+        }
+        out.set(piece, r);
+      }
+      if (plan) {
+        plan.done += planBytes * (end - r) / rows;
+        await plan.onReadBytes(Math.round(plan.done), plan.total);
+      }
+    });
+  }
+  await lucidRunOnReaders(readers, tasks);
+  const result = {};
+  for (let c = 0; c < cols; c++) result[names[c]] = outs[c];
+  return result;
+}
+async function readStructDatasetStreaming(file, path, assumePresent = false, lucidRead = null, lucidPool = null, lucidPoolMin = null) {
   try {
     if (!assumePresent && !file.keys().includes(path)) return {};
     const meta = await file.getDatasetMeta(path);
@@ -12935,9 +13353,61 @@ async function readStructDatasetStreaming(file, path, assumePresent = false, luc
     // `field_names` attr, no compound members) is read in counted row slices
     // when a byte plan is given; anything else is one whole read, counted at
     // its end. Same values either way.
+    const lucidFlat2d = meta.shape && meta.shape.length === 2 && Number(meta.shape[0]) > 0 &&
+        getFieldNamesFromMeta(meta).length === 0 && !(meta.metadata && meta.metadata.vlen);
+    // LUCID local patch (column reads): a flat 2-D table stored in one-column
+    // chunks (every big table LUCID writes) is read a column at a time in the
+    // worker, which narrows each column and hands it over: no row-major
+    // matrix, no transpose here. Same columns as the row read below.
+    if (lucidFlat2d && lucidColumnChunked(meta) && typeof file.lucidReadColumn === "function" &&
+        !(typeof globalThis !== "undefined" && globalThis.__lucidColumnReads === false)) {
+      const names = await readFieldNamesAttrStreaming(file, path);
+      if (names.length === Number(meta.shape[1])) {
+        const doneBefore = lucidRead ? lucidRead.done : 0;
+        try {
+          return await lucidReadTableColumns(file, path, meta, names, lucidRead, lucidPool, lucidPoolMin);
+        } catch (e) {
+          console.warn(`[sleap-io] column read of ${path} failed, reading rows instead:`, e);
+          // The row read counts this table again from where it started (the
+          // plan never reports a count below one it already reported).
+          if (lucidRead) lucidRead.done = doneBefore;
+        }
+      }
+    }
     let data = null;
-    if (lucidRead && meta.shape && meta.shape.length === 2 && Number(meta.shape[0]) > 0 &&
-        getFieldNamesFromMeta(meta).length === 0 && !(meta.metadata && meta.metadata.vlen)) {
+    // LUCID local patch (column reads): a big flat table in another layout
+    // (whole-row chunks or contiguous: projects saved before the column chunks)
+    // is read in row blocks on the pool, side by side, each block split into
+    // narrowed columns by its worker (lucidReadRowBlocksAsColumns): the
+    // columns normalizeStructData would build from the rows. Where that cannot
+    // run (no field names for every column), the pool reads row blocks and
+    // the rows are split here, as below.
+    let lucidPoolFailed = false;
+    if (lucidFlat2d && lucidPool) {
+      const names = await readFieldNamesAttrStreaming(file, path);
+      if (names.length === Number(meta.shape[1])) {
+        const doneBefore = lucidRead ? lucidRead.done : 0;
+        try {
+          const cols = await lucidReadRowBlocksAsColumns(file, path, meta, names, lucidRead, lucidPool, lucidPoolMin);
+          if (cols) return cols;
+        } catch (e) {
+          console.warn(`[sleap-io] pooled row read of ${path} failed, reading on one worker instead:`, e);
+          if (lucidRead) lucidRead.done = doneBefore;
+          lucidPoolFailed = true;
+        }
+      }
+    }
+    if (lucidFlat2d && lucidPool && !lucidPoolFailed) {
+      const doneBefore = lucidRead ? lucidRead.done : 0;
+      try {
+        data = await lucidReadRowsPooled(file, path, meta, lucidRead, lucidPool, lucidPoolMin);
+      } catch (e) {
+        console.warn(`[sleap-io] pooled row read of ${path} failed, reading on one worker instead:`, e);
+        if (lucidRead) lucidRead.done = doneBefore;
+        data = null;
+      }
+    }
+    if (!data && lucidRead && lucidFlat2d) {
       data = await lucidReadRowsChunked(file, path, meta.shape, lucidRead);
     }
     if (!data) {
@@ -12949,34 +13419,158 @@ async function readStructDatasetStreaming(file, path, assumePresent = false, luc
     }
     let fieldNames = getFieldNamesFromMeta(meta);
     if (fieldNames.length === 0) {
-      try {
-        const attrs = await file.getAttrs(path);
-        const fnAttr = attrs.field_names ?? attrs.fieldNames;
-        if (fnAttr) {
-          let raw = Array.isArray(fnAttr) ? fnAttr : fnAttr?.value ?? fnAttr;
-          if (typeof raw === "string") {
-            try {
-              raw = JSON.parse(raw);
-            } catch {
-            }
-          }
-          if (raw instanceof Uint8Array) {
-            try {
-              raw = JSON.parse(new TextDecoder().decode(raw));
-            } catch {
-            }
-          }
-          if (Array.isArray(raw)) {
-            fieldNames = raw.map(String);
-          }
-        }
-      } catch {
-      }
+      fieldNames = await readFieldNamesAttrStreaming(file, path);
     }
     return normalizeStructData(data.value, data.shape, fieldNames);
   } catch {
     return {};
   }
+}
+// A flat table's `field_names` attribute (LUCID's layout); [] when absent.
+// (LUCID local patch (column reads): moved out of readStructDatasetStreaming
+// unchanged, to be read before the table.)
+async function readFieldNamesAttrStreaming(file, path) {
+  try {
+    const attrs = await file.getAttrs(path);
+    const fnAttr = attrs.field_names ?? attrs.fieldNames;
+    if (fnAttr) {
+      let raw = Array.isArray(fnAttr) ? fnAttr : fnAttr?.value ?? fnAttr;
+      if (typeof raw === "string") {
+        try {
+          raw = JSON.parse(raw);
+        } catch {
+        }
+      }
+      if (raw instanceof Uint8Array) {
+        try {
+          raw = JSON.parse(new TextDecoder().decode(raw));
+        } catch {
+        }
+      }
+      if (Array.isArray(raw)) {
+        return raw.map(String);
+      }
+    }
+  } catch {
+  }
+  return [];
+}
+// LUCID local patch (column reads): a table stored in chunks of one column
+// (LUCID_COLUMN_CHUNK_ROWS x 1, the column chunks patch). Older files (whole-row
+// chunks, or contiguous) keep the row read: a column read there would inflate
+// every chunk once per column, or read a contiguous table once per column.
+function lucidColumnChunked(meta) {
+  const ch = meta.metadata && meta.metadata.chunks;
+  return Array.isArray(ch) && ch.length === 2 && Number(ch[1]) === 1;
+}
+// LUCID local patch (column reads): a pool of extra workers with the same File
+// open, so a big table's columns are read side by side. Only for a File
+// (WORKERFS: each worker reads the file on its own) and only when the caller
+// asks (LUCID's project reopen, one big file read alone; a per-camera folder
+// load already reads its files side by side). A helper that fails to open is
+// left out; with none, the table is read by the main worker alone.
+function lucidMakeReadPool(source, options) {
+  const n = Math.floor(Number(options?.lucidReadWorkers) || 0);
+  if (n < 2 || !(typeof File !== "undefined" && source instanceof File)) return null;
+  let helpers = null;
+  const open = () => {
+    if (!helpers) {
+      helpers = Promise.allSettled(Array.from({ length: n - 1 }, () => openH5Worker(source, {
+        h5wasmUrl: options?.h5wasmUrl,
+        filenameHint: options?.filenameHint
+      }))).then((rs) => rs.filter((r) => r.status === "fulfilled").map((r) => r.value));
+    }
+    return helpers;
+  };
+  return {
+    // Start opening the helpers now (they take ~0.2 s), without waiting.
+    warm() {
+      open();
+    },
+    async readers(main) {
+      return [main, ...await open()];
+    },
+    async close() {
+      if (!helpers) return;
+      for (const h of await helpers) {
+        try {
+          await h.close();
+        } catch {
+        }
+      }
+    }
+  };
+}
+// A table at least this big is read by the pool (when there is one); smaller
+// ones are not worth the helpers' start-up. Tests lower it
+// (`globalThis.__lucidPoolTableBytes`).
+var LUCID_POOL_TABLE_BYTES = 64 * 1048576;
+// LUCID local patch (column reads): read a flat 2-D table a column at a time
+// through the worker (`lucidReadColumn`), each column already narrowed there
+// (lucidNarrowKindW, the same rule as lucidNarrowColumn), so the result equals
+// normalizeStructData's of a row read, column for column, type for type.
+// Reading columns skips the row-major matrix HDF5 would assemble from the
+// one-column chunks and the transpose normalizeStructData does here.
+//
+// Without a byte plan or a pool each column is one read. Otherwise a column is
+// read in pieces of whole chunks (~512K rows, `__lucidReadSliceElems`), and
+// each piece is counted into the plan. Each piece narrows on its own; a piece
+// that comes back Float64Array widens the column (the values of the narrow
+// pieces before it are exact in f64), so pieces give the same column as one
+// read. With a pool (a big table), each reader takes the next column; one
+// failure stops the others and the caller reads the rows instead.
+async function lucidReadTableColumns(file, path, meta, fieldNames, plan, pool, minBytes = null) {
+  const rows = Number(meta.shape[0]), cols = Number(meta.shape[1]);
+  const tableBytes = rows * cols * Number(meta.metadata && meta.metadata.size || 8);
+  const poolMin = minBytes != null ? minBytes : typeof globalThis !== "undefined" && globalThis.__lucidPoolTableBytes || LUCID_POOL_TABLE_BYTES;
+  const readers = pool && cols > 1 && tableBytes >= poolMin ? (await pool.readers(file)).slice(0, cols) : [file];
+  const planBytes = plan ? plan.sizes.get(path) || 0 : 0;
+  let pieceRows = rows;
+  if (plan || readers.length > 1) {
+    const sliceElems = typeof globalThis !== "undefined" && globalThis.__lucidReadSliceElems || 524288;
+    pieceRows = sliceElems >= LUCID_COLUMN_CHUNK_ROWS ? Math.floor(sliceElems / LUCID_COLUMN_CHUNK_ROWS) * LUCID_COLUMN_CHUNK_ROWS : Math.max(1, sliceElems);
+  }
+  const outs = new Array(cols);
+  let next = 0;
+  let failed = null;
+  const readColumn = async (reader, c) => {
+    let out = null;
+    for (let r = 0; r < rows && !failed; r += pieceRows) {
+      const end = Math.min(rows, r + pieceRows);
+      const piece = await reader.lucidReadColumn(path, c, r, end, fieldNames[c]);
+      if (!ArrayBuffer.isView(piece) || piece.length !== end - r) {
+        throw new Error(`column ${fieldNames[c]} rows ${r}-${end}: got ${piece && piece.length} values`);
+      }
+      if (!out) {
+        // A whole column read in one piece is used as it is (its own buffer).
+        out = end - r === rows && piece.byteOffset === 0 && piece.buffer.byteLength === piece.byteLength ? piece : new piece.constructor(rows);
+      } else if (piece.constructor !== out.constructor && !(out instanceof Float64Array)) {
+        const wide = new Float64Array(rows);
+        wide.set(out.subarray(0, r));
+        out = wide;
+      }
+      if (out !== piece) out.set(piece, r);
+      if (plan && !failed) {
+        plan.done += planBytes * (end - r) / rows / cols;
+        await plan.onReadBytes(Math.round(plan.done), plan.total);
+      }
+    }
+    outs[c] = out;
+  };
+  await Promise.all(readers.map(async (reader) => {
+    while (!failed && next < cols) {
+      const c = next++;
+      try {
+        await readColumn(reader, c);
+      } catch (e) {
+        failed = failed || e;
+      }
+    }
+  }));
+  if (failed) throw failed;
+  const result = {};
+  for (let c = 0; c < cols; c++) result[fieldNames[c]] = outs[c];
+  return result;
 }
 function getFieldNamesFromMeta(meta) {
   const dtype = meta.dtype;
@@ -13003,6 +13597,66 @@ function getFieldNamesFromMeta(meta) {
     }
   }
   return [];
+}
+// LUCID local patch (narrow columns): the lazy store's columns in the narrowest
+// typed array that holds EVERY value exactly, instead of Float64Array for all.
+// On the 8-camera 05mice project the stores were 2,770 MB of Float64Array, 87%
+// of it `pred_points` (63.3M points x 5 columns), whose file holds x/y/score as
+// f32 and visible/complete as 0/1.
+//
+// Only the columns named here narrow, and only when every value survives the
+// trip (checked value by value; the first one that does not makes that column
+// Float64Array, as before). So every read returns the same number as before;
+// only the element type changes. Everything else stays Float64Array, above all
+// the columns LUCID WRITES INTO a loaded store: `track` (remapTracksFromIdentity,
+// -1/NaN for trackless), `from_predicted` (deleteInstanceRows, -1), and every
+// `frames` column (re-ranged on delete). `instance_id`/`frame_id` stay f64 too.
+// Never add a column the app writes: an integer array turns NaN into 0 and -1
+// into 255 without a word.
+//   1 = Uint8Array (0..255 integers), 2 = Float32Array, 3 = Uint32Array.
+// -0 counts as not fitting an integer type (it would come back +0 and a re-save
+// would change the file's bytes); a Float32Array keeps -0 and NaN.
+// Mirrored in H5_WORKER_CODE's `lucidNarrowKindW` (Python-written compound
+// tables): keep the two lists the same.
+var LUCID_NARROW_COLUMNS = {
+  x: 2, y: 2, score: 2, tracking_score: 2,
+  visible: 1, complete: 1, instance_type: 1, skeleton: 1,
+  point_id_start: 3, point_id_end: 3
+};
+function lucidNarrowKind(name) {
+  return Object.prototype.hasOwnProperty.call(LUCID_NARROW_COLUMNS, name) ? LUCID_NARROW_COLUMNS[name] : 0;
+}
+// Column `col` of the row-major `src` (`stride` values per row), narrowed when
+// its name allows and every value fits. `isBig`: `src` is a BigInt64/BigUint64
+// view, converted with Number() (exact for every id/index column).
+function lucidNarrowColumn(src, rowCount, stride, col, name, isBig) {
+  const kind = lucidNarrowKind(name);
+  if (kind === 2 && src instanceof Float32Array) {
+    const f32 = new Float32Array(rowCount);
+    for (let r2 = 0, p = col; r2 < rowCount; r2++, p += stride) f32[r2] = src[p];
+    return f32;
+  }
+  let out = null;
+  let r = 0;
+  if (kind !== 0) {
+    const isFloat = kind === 2;
+    out = kind === 1 ? new Uint8Array(rowCount) : isFloat ? new Float32Array(rowCount) : new Uint32Array(rowCount);
+    for (let p = col; r < rowCount; r++, p += stride) {
+      const v = isBig ? Number(src[p]) : src[p];
+      out[r] = v;
+      const w = out[r];
+      if (w === v) {
+        if (v === 0 && !isFloat && 1 / v < 0) break;
+      } else if (!(isFloat && v !== v)) {
+        break;
+      }
+    }
+    if (r === rowCount) return out;
+  }
+  const f64 = new Float64Array(rowCount);
+  if (r > 0) f64.set(out.subarray(0, r));
+  for (let p = col + r * stride; r < rowCount; r++, p += stride) f64[r] = isBig ? Number(src[p]) : src[p];
+  return f64;
 }
 function normalizeStructData(value, shape, fieldNames) {
   if (!value) return {};
@@ -13052,25 +13706,22 @@ function normalizeStructData(value, shape, fieldNames) {
         //
         // f64 deliberately, not f32: `point_id_start/end` reach 21.7M on this
         // project and f32 is only exact to 2^24 = 16.7M — the same silent
-        // quantization as sleap-io.js#231.
-        const colData = new Float64Array(rowCount);
-        if (isBig) {
-          // A BigInt cannot be assigned into a Float64Array — it throws
-          // TypeError, and this whole function sits inside
-          // `readStructDatasetStreaming`'s catch-all, which would SWALLOW that
-          // and hand back `{}`: a silently EMPTY store rather than a visible
-          // failure. LUCID writes `frames` with dtype "<i8", so whether this
-          // branch is live depends purely on how h5wasm chooses to surface
-          // 64-bit ints. Convert explicitly instead of depending on that.
-          // Exact for every id/index column (well under 2^53).
-          for (let row = 0; row < rowCount; row++) {
-            colData[row] = Number(arr[row * colCount + col]);
-          }
-        } else {
-          for (let row = 0; row < rowCount; row++) {
-            colData[row] = arr[row * colCount + col];
-          }
-        }
+        // quantization as sleap-io.js#231. (The narrow-columns patch below
+        // stores them as Uint32Array, which is exact; never as f32.)
+        //
+        // A BigInt cannot be assigned into a typed number array — it throws
+        // TypeError, and this whole function sits inside
+        // `readStructDatasetStreaming`'s catch-all, which would SWALLOW that
+        // and hand back `{}`: a silently EMPTY store rather than a visible
+        // failure. LUCID writes `frames` with dtype "<i8", so whether this
+        // is live depends purely on how h5wasm chooses to surface 64-bit
+        // ints. `lucidNarrowColumn` converts explicitly (`isBig`). Exact for
+        // every id/index column (well under 2^53).
+        //
+        // LUCID local patch (narrow columns): the column is the narrowest
+        // typed array that holds every value exactly (`lucidNarrowColumn`),
+        // Float64Array otherwise; see LUCID_NARROW_COLUMNS.
+        const colData = lucidNarrowColumn(arr, rowCount, colCount, col, fieldNames[col], isBig);
         result[fieldNames[col]] = colData;
       }
       return result;
@@ -19654,22 +20305,19 @@ function normalizeStructDataset(dataset, module) {
       // `undefined` and are now zero-filled. Every consumer reads them as
       // `Number(col?.[i] ?? 0)`, which already mapped `undefined` to 0, so the
       // observable value is unchanged.
-      const cols = fieldNames.map(() => new Float64Array(rowCount));
       const fillCols = Math.min(fieldNames.length, colCount);
       // See the BigInt note in `normalizeStructData`: assigning a BigInt into a
-      // Float64Array throws, so convert explicitly when the source is a 64-bit
-      // int view. Hoisted out of the loops.
+      // typed number array throws, so convert explicitly when the source is a
+      // 64-bit int view. Hoisted out of the loops.
       const isBig = (typeof BigInt64Array !== 'undefined' && flat instanceof BigInt64Array) ||
         (typeof BigUint64Array !== 'undefined' && flat instanceof BigUint64Array);
-      for (let i = 0; i < rowCount; i += 1) {
-        const base = i * colCount;
-        for (let j = 0; j < fillCols; j += 1) {
-          cols[j][i] = isBig ? Number(flat[base + j]) : flat[base + j];
-        }
-      }
+      // LUCID local patch (narrow columns): same column types as
+      // `normalizeStructData` (`lucidNarrowColumn`).
       const data = {};
       for (let j = 0; j < fieldNames.length; j += 1) {
-        data[fieldNames[j]] = cols[j];
+        data[fieldNames[j]] = j < fillCols ?
+          lucidNarrowColumn(flat, rowCount, colCount, j, fieldNames[j], isBig) :
+          new Float64Array(rowCount);
       }
       return data;
     }

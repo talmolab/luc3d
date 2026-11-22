@@ -108,7 +108,26 @@
  * is exactly where this filter is weakest. Aggressive RPE plus aggressive
  * smoothing is a worse combination than either alone.
  *
- * Depends on: pose/pose-data.js
+ * ## The other method: adaptive (3D adaptive temporal averaging)
+ *
+ * `method: 'adaptive'` (Settings ▸ Temporal Smoothing ▸ Method) replaces both
+ * stages with `pose/adaptive-temporal-averaging.js`: per node, frame t's window
+ * grows each way while the added 3D point stays within k standard deviations
+ * of frame t's (Mahalanobis, under both points' covariances), is cut symmetric,
+ * and the output is the precision-weighted mean over it. Its windows adapt:
+ * long on a still node, a frame or two in fast motion, and they end at the
+ * first absent frame — so `maxGap` and `minSegment` do not apply, and each
+ * node's own gaps end its own windows. Every point's covariance comes from its
+ * views (`dltPointCovarianceInto`): the group members' 2D in the cameras the
+ * solve may use (Camera Views), the residuals of the 3D the pass reads (the
+ * pre-smoothing source), and the reprojection error threshold's drop rule. A
+ * released member of a lazy project is read straight from the store
+ * (`SioLazyLoader.storeRowPoints`), so the pass hydrates no frame. A point
+ * with fewer than 2 such views falls back to its node's sigma over the
+ * trajectory (`secondDifferenceSigma`, 3D only).
+ *
+ * Depends on: pose/pose-data.js, pose/adaptive-temporal-averaging.js,
+ * pose/triangulation-core.js, pose/lazy-residency.js
  */
 
 import {
@@ -120,7 +139,17 @@ import {
     isPoints3dSmoothed,
     unsmoothedPoints3d,
     clearPoints3dSmoothed,
-} from './pose-data.js?v=2fa0b6d23798';
+} from './pose-data.js?v=61a14d3ebe87';
+import {
+    ATA_DEFAULT_K,
+    ATA_DEFAULT_HMAX,
+    COV_STRIDE,
+    ataSmoothSeriesInto,
+    dltPointCovarianceInto,
+    secondDifferenceSigma,
+} from './adaptive-temporal-averaging.js?v=61a14d3ebe87';
+import { cameraIncludedInSolves, solveReprojErrorThreshold } from './triangulation-core.js?v=61a14d3ebe87';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js?v=61a14d3ebe87';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;
@@ -300,24 +329,61 @@ export function smoothSignalInto(src, dst, segments, opts, scratchV, scratchW) {
 }
 
 /**
+ * `smoothingMethod` values (Settings stores a number): 0 = windows, 1 = adaptive.
+ * Params without one resolve to the windows (direct callers, tests); the app's
+ * default, Adaptive, is Settings' (`ui/settings.js` `getSmoothingParam`).
+ */
+export const SMOOTH_METHOD_WINDOWS = 'windows';
+export const SMOOTH_METHOD_ADAPTIVE = 'adaptive';
+
+/**
  * Resolve the effective smoothing configuration from a loose params object.
+ *
+ * `smoothingMethod` 1 (or 'adaptive') selects 3D adaptive temporal averaging, with
+ * `smoothAtaK` (the gate, standard deviations, > 0) and `smoothAtaHmax` (the
+ * longest half-window in frames; 0 = off). `smoothAtaCovariance: 'sigma'`
+ * (not in Settings; for comparisons) skips the views and weighs every point by
+ * its node's sigma. The windows' keys are resolved either way.
+ *
  * @param {Object} params
- * @returns {{medianWindow:number, gaussianWindow:number, maxGap:number,
- *   minSegment:number, enabled:boolean}}
+ * @returns {{method:string, medianWindow:number, gaussianWindow:number,
+ *   maxGap:number, minSegment:number, k:number, hmax:number,
+ *   covariance:string, enabled:boolean}}
  */
 export function resolveSmoothingParams(params) {
     params = params || {};
+    var method = (params.smoothingMethod === 1 || params.smoothingMethod === SMOOTH_METHOD_ADAPTIVE)
+        ? SMOOTH_METHOD_ADAPTIVE : SMOOTH_METHOD_WINDOWS;
     var medianWindow = normalizeWindow(params.smoothMedianWindow);
     var gaussianWindow = normalizeWindow(params.smoothGaussianWindow);
     var maxGap = Math.max(0, Math.floor(params.smoothMaxGap) || 0);
     var minSegment = Math.max(1, Math.floor(params.smoothMinSegment) || 1);
+    var k = Number(params.smoothAtaK);
+    if (!(k > 0) || !isFinite(k)) k = ATA_DEFAULT_K;
+    var hmax = params.smoothAtaHmax == null ? ATA_DEFAULT_HMAX : Math.floor(Number(params.smoothAtaHmax));
+    if (!(hmax >= 0)) hmax = ATA_DEFAULT_HMAX;
     return {
+        method: method,
         medianWindow: medianWindow,
         gaussianWindow: gaussianWindow,
         maxGap: maxGap,
         minSegment: minSegment,
-        enabled: medianWindow > 0 || gaussianWindow > 0,
+        k: k,
+        hmax: hmax,
+        covariance: params.smoothAtaCovariance === 'sigma' ? 'sigma' : 'views',
+        enabled: method === SMOOTH_METHOD_ADAPTIVE ? hmax > 0 : (medianWindow > 0 || gaussianWindow > 0),
     };
+}
+
+/** A short description of what a run with `cfg` does, for status text. */
+export function describeSmoothingConfig(cfg) {
+    if (cfg.method === SMOOTH_METHOD_ADAPTIVE) {
+        return 'adaptive, gate ' + cfg.k + ' SD, up to ' + (2 * cfg.hmax + 1).toLocaleString('en-US') + ' frames';
+    }
+    var parts = [];
+    if (cfg.medianWindow) parts.push('median ' + cfg.medianWindow);
+    if (cfg.gaussianWindow) parts.push('Gaussian ' + cfg.gaussianWindow);
+    return parts.join(' + ');
 }
 
 /**
@@ -542,15 +608,347 @@ function* smoothTrajectorySteps(byFrame, cfg, writeFrames) {
     return { frames: framesWritten, nodes: nodesWritten };
 }
 
+// --------------------------------------------------------------------------
+// The adaptive method (3D adaptive temporal averaging; see the header)
+// --------------------------------------------------------------------------
+
+/**
+ * What an adaptive pass reads besides the 3D, read once per run so This frame
+ * and All frames see the same settings: the cameras a solve may use (Camera
+ * Views), by name; the reprojection error threshold; the lazy loader. With
+ * `covariance: 'sigma'` no camera is used, so every point takes its node's
+ * sigma.
+ */
+function ataContext(session, cfg) {
+    var cams = new Map();
+    if (cfg.covariance !== 'sigma' && session && Array.isArray(session.cameras)) {
+        for (var i = 0; i < session.cameras.length; i++) {
+            var c = session.cameras[i];
+            if (c && c.name != null && c.matrix && cameraIncludedInSolves(c.name)) cams.set(c.name, c);
+        }
+    }
+    return {
+        session: session,
+        cams: cams,
+        threshold: solveReprojErrorThreshold(),
+        loader: (session && session.lazyLoader) || null,
+        // Scratch: one group's usable members, and one node's views.
+        memCam: [], memInst: [], memRow: [],
+        viewCams: [], us: new Float64Array(16), vs: new Float64Array(16),
+        point: new Float64Array(3),
+    };
+}
+
+/** Can a released member's 2D be read straight from the store? */
+function canReadStoreRows(ctx) {
+    return !!ctx.loader && typeof ctx.loader.storeRowPoints === 'function';
+}
+
+/** Does `group` hold a released member the store cannot give back directly? */
+function groupNeedsHydration(ctx, group) {
+    if (canReadStoreRows(ctx)) return false;
+    for (var m of group.instances.values()) if (m && m._lazy2d) return true;
+    return false;
+}
+
+/**
+ * The covariance of each of `group`'s nodes (`dltPointCovarianceInto`), from
+ * its pre-smoothing 3D `data[base..]` and its members' 2D, into
+ * `cov[cbase + k * COV_STRIDE ..]`; a node with fewer than 2 usable views keeps
+ * NaN. A member's 2D is used where `triangulateAndReproject` would take it: a
+ * camera the solve may use, the node placed, not nulled. A released member
+ * (`_lazy2d`) is read from the store row it would be hydrated from; one the
+ * store cannot give back is skipped (callers hydrate such frames first).
+ * @returns {number} nodes given a covariance
+ */
+function groupCovariancesInto(ctx, frameIdx, group, data, base, nNodes, cov, cbase) {
+    if (ctx.cams.size < 2 || !group.instances) return 0;
+    var memCam = ctx.memCam, memInst = ctx.memInst, memRow = ctx.memRow;
+    var nm = 0;
+    for (var [camName, m] of group.instances) {
+        if (!m) continue;
+        var camera = ctx.cams.get(camName);
+        if (!camera) continue;
+        var row = null;
+        if (m._lazy2d) {
+            if (!canReadStoreRows(ctx) || m._rawInstIndex == null) continue;
+            row = ctx.loader.storeRowPoints(camName, frameIdx, m._rawInstIndex);
+            if (!row) continue;
+        }
+        memCam[nm] = camera; memInst[nm] = m; memRow[nm] = row;
+        nm++;
+    }
+    if (nm < 2) return 0;
+    if (ctx.us.length < nm) { ctx.us = new Float64Array(nm); ctx.vs = new Float64Array(nm); }
+    var us = ctx.us, vs = ctx.vs, viewCams = ctx.viewCams, point = ctx.point;
+    var given = 0;
+    for (var k = 0; k < nNodes; k++) {
+        var o = base + k * POINT3D_STRIDE;
+        if (Number.isNaN(data[o])) continue;      // gathered as a whole triple or not at all
+        var n = 0;
+        for (var i = 0; i < nm; i++) {
+            var mi = memInst[i];
+            if (!(k < mi.numNodes)) continue;
+            if (mi.nulledNodes && mi.nulledNodes.has(k)) continue;
+            var u, v;
+            var r = memRow[i];
+            if (r) {
+                var p = r.start + k;
+                if (!(p < r.end)) continue;
+                u = Number(r.x[p]); v = Number(r.y[p]);
+            } else {
+                if (!mi.hasPoint(k)) continue;
+                u = mi.getX(k); v = mi.getY(k);
+            }
+            if (Number.isNaN(u) || !isFinite(v)) continue;
+            viewCams[n] = memCam[i]; us[n] = u; vs[n] = v;
+            n++;
+        }
+        if (n < 2) continue;
+        point[0] = data[o]; point[1] = data[o + 1]; point[2] = data[o + 2];
+        var s = dltPointCovarianceInto(point, viewCams, us, vs, n,
+            { reprojErrorThreshold: ctx.threshold }, cov, cbase + k * COV_STRIDE);
+        if (isFinite(s)) given++;
+    }
+    return given;
+}
+
+/** `groupCovariancesInto`, hydrating the frame's members around it when needed. */
+function frameGroupCovariancesInto(ctx, frameIdx, group, data, base, nNodes, cov, cbase) {
+    if (!groupNeedsHydration(ctx, group)) {
+        return groupCovariancesInto(ctx, frameIdx, group, data, base, nNodes, cov, cbase);
+    }
+    var hydrated = hydrateFrameMembers2d(ctx.session, frameIdx) > 0;
+    try {
+        return groupCovariancesInto(ctx, frameIdx, group, data, base, nNodes, cov, cbase);
+    } finally {
+        if (hydrated) releaseFrameMembers2d(ctx.session, frameIdx);
+    }
+}
+
+/**
+ * An identity's trajectory as dense arrays over [minFrame, maxFrame]: each
+ * group's pre-smoothing 3D (`gatherGroupInto`; NaN where absent), the group per
+ * frame and whether it has any node.
+ */
+function gatherTrajectory(byFrame) {
+    var frameIdxs = Array.from(byFrame.keys()).sort(function (a, b) { return a - b; });
+    if (frameIdxs.length === 0) return null;
+    var minFrame = frameIdxs[0];
+    var T = frameIdxs[frameIdxs.length - 1] - minFrame + 1;
+    var nNodes = 0;
+    for (var fi = 0; fi < frameIdxs.length; fi++) {
+        var nc = sourceNodeCount(byFrame.get(frameIdxs[fi]));
+        if (nc > nNodes) nNodes = nc;
+    }
+    if (nNodes === 0) return null;
+    var stride = nNodes * POINT3D_STRIDE;
+    var data = new Float64Array(T * stride).fill(NaN);
+    var groupAt = new Array(T).fill(null);
+    var present = new Uint8Array(T);
+    for (var f = 0; f < frameIdxs.length; f++) {
+        var t = frameIdxs[f] - minFrame;
+        groupAt[t] = byFrame.get(frameIdxs[f]);
+        if (gatherGroupInto(groupAt[t], data, t * stride) > 0) present[t] = 1;
+    }
+    return { minFrame: minFrame, T: T, nNodes: nNodes, stride: stride, data: data, groupAt: groupAt, present: present };
+}
+
+/** Node `k`'s samples of a gathered `data` (`stride` per frame) as a contiguous T*3 series. */
+function nodeSeries(data, T, stride, k, xs) {
+    var o = k * POINT3D_STRIDE;
+    for (var t = 0; t < T; t++) {
+        var b = t * stride + o;
+        xs[t * 3] = data[b]; xs[t * 3 + 1] = data[b + 1]; xs[t * 3 + 2] = data[b + 2];
+    }
+    return xs;
+}
+
+/**
+ * Where a present sample of a node's series has no covariance, give it the
+ * node's sigma^2 I, `sigmaFor()` asked once and only if needed. A NaN sigma
+ * leaves those samples without one (missing: written as they were).
+ * @returns {number} samples given the fallback
+ */
+function fillFallbackCov(xs, cs, T, sigmaFor) {
+    var sig2 = null, n = 0;
+    for (var t = 0; t < T; t++) {
+        if (Number.isNaN(xs[t * 3]) || !Number.isNaN(cs[t * COV_STRIDE])) continue;
+        if (sig2 === null) { var s = sigmaFor(); sig2 = s * s; }
+        if (!(sig2 > 0)) return n;
+        var o = t * COV_STRIDE;
+        cs[o] = sig2; cs[o + 1] = 0; cs[o + 2] = 0; cs[o + 3] = sig2; cs[o + 4] = 0; cs[o + 5] = sig2;
+        n++;
+    }
+    return n;
+}
+
+/** Add one node's computed samples [from, to) to a run's window tally. */
+function tallyWindows(half, from, to, acc) {
+    for (var t = from; t < to; t++) {
+        if (half[t] < 0) continue;
+        acc.points++;
+        acc.windowSum += 1 + 2 * half[t];
+    }
+}
+
+/**
+ * `smoothTrajectorySteps` for the adaptive method: covariances of every
+ * sample, then each node's series through `ataSmoothSeriesInto`. Yields the
+ * fraction done; writes nothing before the last yield. `acc` gathers the
+ * run's tally (`points`, `windowSum`, `fallback`).
+ */
+function* smoothTrajectoryAtaSteps(byFrame, cfg, writeFrames, ctx, acc) {
+    var tr = gatherTrajectory(byFrame);
+    if (!tr) return { frames: 0, nodes: 0 };
+    var T = tr.T, nNodes = tr.nNodes, stride = tr.stride, data = tr.data;
+    var cstride = nNodes * COV_STRIDE;
+
+    // --- Covariances, frame by frame (half the work, by the progress) -----
+    var cov = new Float64Array(T * cstride).fill(NaN);
+    if (ctx.cams.size >= 2) {
+        for (var t = 0; t < T; t++) {
+            if (tr.present[t]) {
+                frameGroupCovariancesInto(ctx, t + tr.minFrame, tr.groupAt[t], data, t * stride, nNodes, cov, t * cstride);
+            }
+            if ((t & 1023) === 1023) yield 0.5 * (t + 1) / T;
+        }
+    }
+    yield 0.5;
+
+    // --- Each node's series ------------------------------------------------
+    var xs = new Float64Array(T * 3), cs = new Float64Array(T * COV_STRIDE);
+    var outS = new Float64Array(T * 3), half = new Int32Array(T);
+    for (var k = 0; k < nNodes; k++) {
+        nodeSeries(data, T, stride, k, xs);
+        var co = k * COV_STRIDE;
+        for (var t2 = 0; t2 < T; t2++) {
+            var src = t2 * cstride + co, dst = t2 * COV_STRIDE;
+            for (var j = 0; j < COV_STRIDE; j++) cs[dst + j] = cov[src + j];
+        }
+        acc.fallback += fillFallbackCov(xs, cs, T, function () { return secondDifferenceSigma(xs, T); });
+        ataSmoothSeriesInto(xs, cs, T, { k: cfg.k, hmax: cfg.hmax }, outS, half);
+        tallyWindows(half, 0, T, acc);
+        var o = k * POINT3D_STRIDE;
+        for (var t3 = 0; t3 < T; t3++) {
+            var b = t3 * stride + o;
+            data[b] = outS[t3 * 3]; data[b + 1] = outS[t3 * 3 + 1]; data[b + 2] = outS[t3 * 3 + 2];
+        }
+        yield 0.5 + 0.5 * (k + 1) / nNodes;
+    }
+
+    // --- Scatter (as the windows' pass) -------------------------------------
+    var framesWritten = 0, nodesWritten = 0;
+    for (var t4 = 0; t4 < T; t4++) {
+        var g = tr.groupAt[t4];
+        if (!g || !tr.present[t4]) continue;
+        if (writeFrames && !writeFrames.has(t4 + tr.minFrame)) continue;
+        var touched = writeGroupFrom(g, data, t4 * stride);
+        if (touched > 0) {
+            framesWritten++;
+            nodesWritten += touched;
+        }
+    }
+    return { frames: framesWritten, nodes: nodesWritten };
+}
+
+/**
+ * This frame for the adaptive method (`smoothFrame`'s body): per identity, the
+ * slice [frameIdx - hmax, frameIdx + hmax] is all the frame's value reads, so
+ * it is gathered (3D and covariances) and only the centre computed — the
+ * value All frames gives it, bit for bit. A sample needing the fallback sigma
+ * reads its node over the whole trajectory, as All frames does
+ * (`collectTrajectories`, only then).
+ */
+function smoothFrameAta(session, cfg, frameIdx, ids, result) {
+    var ctx = ataContext(session, cfg);
+    var acc = { points: 0, windowSum: 0, fallback: 0 };
+    var hmax = cfg.hmax;
+    var lo = frameIdx - hmax;
+    var T = 2 * hmax + 1;
+    var whole = null;    // collectTrajectories(session), once, if a fallback needs it
+    for (var ii = 0; ii < ids.length; ii++) {
+        var id = ids[ii];
+        if (!trajectoryPresentAt(session, frameIdx, id)) continue;
+        var at = new Array(T);
+        var nNodes = 0;
+        for (var t = 0; t < T; t++) {
+            at[t] = trajectoryGroupAt(session, lo + t, id);
+            if (at[t]) {
+                var nc = sourceNodeCount(at[t]);
+                if (nc > nNodes) nNodes = nc;
+            }
+        }
+        if (nNodes === 0) continue;
+        var stride = nNodes * POINT3D_STRIDE, cstride = nNodes * COV_STRIDE;
+        var data = new Float64Array(T * stride).fill(NaN);
+        var cov = new Float64Array(T * cstride).fill(NaN);
+        for (var t1 = 0; t1 < T; t1++) {
+            if (!at[t1]) continue;
+            if (gatherGroupInto(at[t1], data, t1 * stride) > 0 && ctx.cams.size >= 2) {
+                frameGroupCovariancesInto(ctx, lo + t1, at[t1], data, t1 * stride, nNodes, cov, t1 * cstride);
+            }
+        }
+        var wholeTr = undefined;   // this identity's whole trajectory, gathered once if needed
+        var xs = new Float64Array(T * 3), cs = new Float64Array(T * COV_STRIDE);
+        var outS = new Float64Array(T * 3), half = new Int32Array(T);
+        var out = new Float64Array(stride).fill(NaN);
+        for (var k = 0; k < nNodes; k++) {
+            nodeSeries(data, T, stride, k, xs);
+            var co = k * COV_STRIDE;
+            for (var t2 = 0; t2 < T; t2++) {
+                for (var j = 0; j < COV_STRIDE; j++) cs[t2 * COV_STRIDE + j] = cov[t2 * cstride + co + j];
+            }
+            // Tally the frame's own sample only (the slice's others are its neighbours').
+            var centreHadCov = !Number.isNaN(cs[hmax * COV_STRIDE]);
+            fillFallbackCov(xs, cs, T, (function (k, id) {
+                return function () {
+                    if (wholeTr === undefined) {
+                        whole = whole || collectTrajectories(session);
+                        var bf = whole.tracks.get(id);
+                        wholeTr = bf ? gatherTrajectory(bf) : null;
+                    }
+                    if (!wholeTr || k >= wholeTr.nNodes) return NaN;
+                    var wx = nodeSeries(wholeTr.data, wholeTr.T, wholeTr.stride, k, new Float64Array(wholeTr.T * 3));
+                    return secondDifferenceSigma(wx, wholeTr.T);
+                };
+            })(k, id));
+            if (!centreHadCov && !Number.isNaN(xs[hmax * 3]) && !Number.isNaN(cs[hmax * COV_STRIDE])) acc.fallback++;
+            ataSmoothSeriesInto(xs, cs, T, { k: cfg.k, hmax: hmax, from: hmax, to: hmax + 1 }, outS, half);
+            tallyWindows(half, hmax, hmax + 1, acc);
+            out[k * 3] = outS[hmax * 3]; out[k * 3 + 1] = outS[hmax * 3 + 1]; out[k * 3 + 2] = outS[hmax * 3 + 2];
+        }
+        var touched = writeGroupFrom(at[hmax], out, 0);
+        if (touched > 0) {
+            smoothedFramesOf(session).add(frameIdx);
+            result.tracks++;
+            result.frames++;
+            result.nodes += touched;
+        }
+    }
+    addTally(result, acc);
+    return result;
+}
+
+/** A run's adaptive tally onto its result: points computed, mean window, fallbacks. */
+function addTally(result, acc) {
+    result.points = acc.points;
+    result.meanWindow = acc.points ? acc.windowSum / acc.points : 0;
+    result.fallbackPoints = acc.fallback;
+}
+
 /**
  * Smooth a whole session's 3D tracks in place.
  *
  * @param {Session} session
- * @param {Object} params raw `{ smoothMedianWindow, smoothGaussianWindow,
- *   smoothMaxGap, smoothMinSegment }`
+ * @param {Object} params raw `{ smoothingMethod, smoothMedianWindow,
+ *   smoothGaussianWindow, smoothMaxGap, smoothMinSegment, smoothAtaK,
+ *   smoothAtaHmax }` (`resolveSmoothingParams`)
  * @param {{writeFrames?: Set<number>|null}} [opts]
  * @returns {{tracks:number, frames:number, nodes:number, skipped:number,
- *   config:Object, ran:boolean}}
+ *   config:Object, ran:boolean}} — the adaptive method adds `points` (node
+ *   samples computed), `meanWindow` (their mean window, frames) and
+ *   `fallbackPoints` (those weighed by their node's sigma, not their views)
  */
 export function smoothSession(session, params, opts) {
     var steps = smoothSessionSteps(session, params, opts);
@@ -600,8 +998,13 @@ function* smoothSessionSteps(session, params, opts) {
     for (var [, bf] of collected.tracks) total += bf.size;
     var done = 0;
     var smoothedFrames = smoothedFramesOf(session);
+    var adaptive = cfg.method === SMOOTH_METHOD_ADAPTIVE;
+    var ctx = adaptive ? ataContext(session, cfg) : null;
+    var acc = { points: 0, windowSum: 0, fallback: 0 };
     for (var [, byFrame] of collected.tracks) {
-        var steps = smoothTrajectorySteps(byFrame, cfg, writeFrames);
+        var steps = adaptive
+            ? smoothTrajectoryAtaSteps(byFrame, cfg, writeFrames, ctx, acc)
+            : smoothTrajectorySteps(byFrame, cfg, writeFrames);
         var r;
         while (!(r = steps.next()).done) {
             yield { done: done + byFrame.size * r.value, total: total };
@@ -618,6 +1021,7 @@ function* smoothSessionSteps(session, params, opts) {
         done += byFrame.size;
         yield { done: done, total: total };
     }
+    if (adaptive) addTally(result, acc);
     result.ran = true;
     return result;
 }
@@ -686,7 +1090,8 @@ function hasAmbiguousNoIdentity(session) {
  * The slice is filtered by the same `smoothSignalInto`, with the true segment
  * passed in slice coordinates (it may reach past the slice) and only the
  * samples the frame reads computed (`from`/`to`), so every sum runs in the same
- * order as the full pass.
+ * order as the full pass. The adaptive method reads [frameIdx - hmax,
+ * frameIdx + hmax] instead (`smoothFrameAta`).
  *
  * Identity bucketing follows `collectTrajectories` (first group per identity
  * per frame; unidentified groups only when no frame anywhere holds two of them
@@ -727,6 +1132,7 @@ export function smoothFrame(session, params, frameIdx) {
         ids.splice(ids.indexOf(NO_IDENTITY), 1);
         result.skipped++;
     }
+    if (cfg.method === SMOOTH_METHOD_ADAPTIVE) return smoothFrameAta(session, cfg, frameIdx, ids, result);
 
     var rm = cfg.medianWindow ? (cfg.medianWindow - 1) >> 1 : 0;
     var rg = cfg.gaussianWindow ? (cfg.gaussianWindow - 1) >> 1 : 0;
@@ -983,7 +1389,13 @@ function inputUnchanged(session, print) {
     return i === n;
 }
 
+/** Would `a` and `b` smooth alike? Only the chosen method's settings count. */
 function sameSmoothingConfig(a, b) {
+    var ma = a.method || SMOOTH_METHOD_WINDOWS, mb = b.method || SMOOTH_METHOD_WINDOWS;
+    if (ma !== mb) return false;
+    if (ma === SMOOTH_METHOD_ADAPTIVE) {
+        return a.k === b.k && a.hmax === b.hmax && (a.covariance || 'views') === (b.covariance || 'views');
+    }
     return a.medianWindow === b.medianWindow && a.gaussianWindow === b.gaussianWindow &&
         a.maxGap === b.maxGap && a.minSegment === b.minSegment;
 }
