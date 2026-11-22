@@ -10,10 +10,13 @@
 // each identity's tracked frames and 3D centroids, which frames to sample, which
 // camera to cut each sample from, the crop square, its 2D at a frame (hydrating a
 // lazy project's members for the read), and the projected path. The
-// drawing half decodes one frame per sample (`view.decoder.getFrame`) AFTER the
-// box is on screen, one queue per camera with the cameras side by side, so the
-// summary never waits on video, and stops
-// when the box closes. Resting the pointer on a sample shows it enlarged beside
+// drawing half decodes one frame per sample AFTER the box is on screen, one
+// queue per camera with the cameras side by side, so the summary never waits on
+// video, and stops when the box closes. Each frame is a caller-owned copy
+// (`view.decoder.peekFrame`, closed once drawn), never `getFrame`: a jump through
+// getFrame keeps the frame in the view's cache and warms the 24 frames before it
+// in the background, and 25 samples left ~1.1 GB of decoded video in Chrome's
+// GPU process after the summary closed (8 cameras, 1280x1024). Resting the pointer on a sample shows it enlarged beside
 // the tile: the crop is copied at up to the enlarged size when it is drawn (a
 // decoder's frame may be closed by the next decode), so the preview is a sharper
 // image, not the 88 px tile scaled up. A map enlarges the same way — its path
@@ -23,9 +26,26 @@
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=5b7b81048e0b';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=5b7b81048e0b';
-import { keyframeIndices } from './image-embedder.js?v=5b7b81048e0b';
+import { state } from './app-state.js?v=88c28524ee0f';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=88c28524ee0f';
+import { keyframeIndices } from './image-embedder.js?v=88c28524ee0f';
+
+/**
+ * Frame `frame` of `view` for drawing, and whether the caller must close it:
+ * `peekFrame`'s copy (no cache write, step cursor or back-warm; owned) when the
+ * decoder has one, else `getFrame`'s (the decoder's own; never closed here).
+ */
+export async function galleryFrame(view, frame) {
+    var d = view && view.decoder;
+    if (!d) return { img: null, owned: false };
+    if (typeof d.peekFrame === 'function') return { img: await d.peekFrame(frame), owned: true };
+    return { img: await d.getFrame(frame), owned: false };
+}
+
+/** Close a `galleryFrame` result the caller owns. */
+function releaseFrame(got) {
+    if (got && got.owned && got.img && typeof got.img.close === 'function') { try { got.img.close(); } catch (e) { /* ignore */ } }
+}
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;
@@ -81,6 +101,29 @@ function groupCentroidInto(p3, out) {
  * @returns {Map<number, {frames: Int32Array, xyz: Float64Array}>}
  */
 export function identityTracks(session) {
+    var steps = identityTrackSteps(session, 0), r;
+    while (!(r = steps.next()).done) { /* no pauses */ }
+    return r.value;
+}
+
+/** The longest stretch of `identityTracksAsync` between two pauses, in ms. */
+export const TRACKS_SLICE_MS = 20;
+
+/**
+ * `identityTracks` in slices: `await pause()` whenever `sliceMs` (default
+ * TRACKS_SLICE_MS) of it have passed (the clock is read every 1,024 frames).
+ * The same pass in the same order: the same tracks.
+ * @param {function(): Promise} pause
+ * @returns {Promise<Map<number, {frames: Int32Array, xyz: Float64Array}>>}
+ */
+export async function identityTracksAsync(session, pause, sliceMs) {
+    var steps = identityTrackSteps(session, sliceMs > 0 ? sliceMs : TRACKS_SLICE_MS), r;
+    while (!(r = steps.next()).done) await pause();
+    return r.value;
+}
+
+/** identityTracks' body: yields (to be resumed) whenever `sliceMs` > 0 have passed. */
+function* identityTrackSteps(session, sliceMs) {
     var acc = new Map();
     if (!session || !session.instanceGroups) return new Map();
     // Runs once per Track All summary over every group (~540,000 on an 8-camera,
@@ -89,8 +132,15 @@ export function identityTracks(session) {
     // centroid goes into `c`. Each identity is pushed in the order of its group
     // among the frame's groups, as the Map of first appearances gave.
     var c = [0, 0, 0];
-    session.instanceGroups.forEach(function (groups, frame) {
-        if (!groups) return;
+    var clock = typeof performance !== 'undefined' ? performance : Date, sliceStart = sliceMs > 0 ? clock.now() : 0;
+    var keys = session.instanceGroups.keys(), walked = 0;
+    for (var kr = keys.next(); !kr.done; kr = keys.next()) {
+        if (sliceMs > 0 && (++walked & 1023) === 0 && clock.now() - sliceStart >= sliceMs) {
+            yield walked;
+            sliceStart = clock.now();
+        }
+        var frame = kr.value, groups = session.instanceGroups.get(frame);
+        if (!groups) continue;
         for (var gi = 0; gi < groups.length; gi++) {
             var g = groups[gi];
             if (!g || g.identityId == null || g.identityId < 0) continue;
@@ -104,7 +154,7 @@ export function identityTracks(session) {
             if (!a) acc.set(id, a = { frames: [], xyz: [] });
             a.frames.push(+frame); a.xyz.push(c[0], c[1], c[2]);
         }
-    });
+    }
     var out = new Map();
     acc.forEach(function (a, id) {
         var n = a.frames.length, order = new Int32Array(n), sorted = true;
@@ -121,6 +171,30 @@ export function identityTracks(session) {
         out.set(id, { frames: frames, xyz: xyz });
     });
     return out;
+}
+
+/**
+ * The identities (in `session.identities` order) with a group that has a 3D
+ * point, found cheaply: the scan stops once every identity has one (usually
+ * within the first frames) and allocates nothing per group. `identityTracks`
+ * can still leave one out (3D only on frames where it has two groups).
+ * @returns {Object[]} identity objects
+ */
+export function identitiesWith3d(session) {
+    var idents = (session && session.identities) || [];
+    if (!idents.length || !session.instanceGroups) return [];
+    var want = new Map(), found = new Set(), c = [0, 0, 0];
+    idents.forEach(function (id) { want.set(id.id, true); });
+    var keys = session.instanceGroups.keys();
+    for (var r = keys.next(); !r.done && found.size < want.size; r = keys.next()) {
+        var groups = session.instanceGroups.get(r.value) || [];
+        for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (!g || !want.has(g.identityId) || found.has(g.identityId)) continue;
+            if (groupCentroidInto(g.points3d, c)) found.add(g.identityId);
+        }
+    }
+    return idents.filter(function (id) { return found.has(id.id); });
 }
 
 /** The identity's one group at `frame` (null when it has none, or two). */
@@ -621,17 +695,24 @@ function makeZoom(section) {
  * Build the section into `host` and fill it in the background. Nothing is drawn
  * for fewer than two identities with tracked 3D.
  *
+ * The rows are built at once from `identitiesWith3d`; every identity's track
+ * (`identityTracks`, a pass over every group: ~50 ms on an 8-camera,
+ * 108,000-frame project) is read AFTER the box paints, so opening the summary
+ * does not wait for it. A row whose identity then has no track is removed, and
+ * with fewer than two left so is the section (`opts.onEmpty()`).
+ *
  * @param {HTMLElement} host
  * @param {Object} session
- * @param {{onPick?: function(number)}} [opts]  a sample or a map point was clicked: go to that frame
+ * @param {{onPick?: function(number), onEmpty?: function()}} [opts]  onPick: a sample or a map point was
+ *   clicked, go to that frame; onEmpty: the section removed itself after all
  * @returns {{done: Promise<void>, element: HTMLElement}|null}
  */
 export function renderIdentityGallery(host, session, opts) {
     if (typeof document === 'undefined' || !host || !session) return null;
     opts = opts || {};
-    var tracks = identityTracks(session);
-    var ids = (session.identities || []).filter(function (id) { return tracks.has(id.id); });
+    var ids = identitiesWith3d(session);
     if (ids.length < 2) return null;
+    var tracks = null;   // identityTracks(session), read after the box paints (`done`)
     var cams = (session.cameras || []).filter(function (c) { return c && c.name; });
 
     var section = el('div', 'identity-gallery');
@@ -683,7 +764,7 @@ export function renderIdentityGallery(host, session, opts) {
         var map = el('div', 'identity-gallery-map');
         row.appendChild(map);
         section.appendChild(row);
-        return { id: id, color: color, slots: slots, map: map };
+        return { id: id, color: color, slots: slots, map: map, el: row };
     });
     if (ids.length > shown.length) {
         section.appendChild(el('div', 'track-summary-id-more', 'and ' + (ids.length - shown.length).toLocaleString('en-US') + ' more'));
@@ -699,18 +780,19 @@ export function renderIdentityGallery(host, session, opts) {
     // ---- maps --------------------------------------------------------------
     var mapToken = 0;
     var drawMaps = async function (camName) {
+        if (!tracks) return;   // before the tracks are read: `done` draws the view selected then
         var token = ++mapToken;
         var cam = cams.filter(function (c) { return c.name === camName; })[0];
         var view = viewFor(camName);
         var vw = (view && view.videoWidth) || (cam && cam.size && cam.size[0]) || 640;
         var vh = (view && view.videoHeight) || (cam && cam.size && cam.size[1]) || 480;
         var H = GALLERY_TILE, W = Math.max(48, Math.min(240, Math.round(H * vw / vh)));
-        var bg = null;
+        var bg = null, bgGot = null;
         if (view) {
-            try { bg = await view.decoder.getFrame(Math.max(0, Math.min((state.totalFrames || 1) - 1, state.currentFrame || 0))); }
+            try { bgGot = await galleryFrame(view, Math.max(0, Math.min((state.totalFrames || 1) - 1, state.currentFrame || 0))); bg = bgGot.img; }
             catch (e) { bg = null; }
         }
-        if (token !== mapToken || !alive()) return;
+        if (token !== mapToken || !alive()) { releaseFrame(bgGot); return; }
         var tile = zoom.tile();
         if (tile && tile.classList.contains('identity-gallery-map-canvas')) zoom.hide();   // that map is being replaced
         var last = Math.max(1, (state.totalFrames || 1) - 1);
@@ -785,6 +867,7 @@ export function renderIdentityGallery(host, session, opts) {
             r.map.appendChild(c);
             r.map.appendChild(tip);
         });
+        releaseFrame(bgGot);   // drawn into every map and copied into bgBig: nothing keeps it
     };
     if (select) {
         select.addEventListener('change', function () {
@@ -824,8 +907,8 @@ export function renderIdentityGallery(host, session, opts) {
         return jobs;
     };
 
-    // Draw a sample's image into its tile, as soon as it is decoded: a decoder's
-    // cached frame may be closed once another is decoded.
+    // Draw a sample's image into its tile, as soon as it is decoded (the image is
+    // closed right after: the tile and its preview keep copies of the crop).
     var drawSample = function (job, img) {
         var r = job.r, fig = job.fig, frame = job.frame, cam = job.cam, box = job.box, pts = job.pts;
         var c = hiDpiCanvas(GALLERY_TILE, GALLERY_TILE, 'identity-gallery-img'), ctx = c.getContext('2d');
@@ -883,11 +966,12 @@ export function renderIdentityGallery(host, session, opts) {
             q.sort(function (a, b) { return a.frame - b.frame; });
             for (var k = 0; k < q.length; k++) {
                 if (!alive()) return;
-                var img = null;
-                try { img = await q[k].view.decoder.getFrame(q[k].frame); } catch (e) { img = null; }
-                if (!alive()) return;
-                try { drawSample(q[k], img); }
+                var got = null;
+                try { got = await galleryFrame(q[k].view, q[k].frame); } catch (e) { got = null; }
+                if (!alive()) { releaseFrame(got); return; }
+                try { drawSample(q[k], got && got.img); }
                 catch (e) { console.warn('[identity-gallery] ' + q[k].r.id.name + ':', e); }
+                releaseFrame(got);   // drawSample copied the crop (tile + preview): nothing keeps it
             }
         }));
     };
@@ -895,7 +979,20 @@ export function renderIdentityGallery(host, session, opts) {
     var done = (async function () {
         await new Promise(function (res) { setTimeout(res, 0); });   // the box paints first
         if (!alive()) return;
-        await drawMaps(mapCam);
+        // in slices, the page painting between them (~50 ms in all on a large project)
+        tracks = await identityTracksAsync(session, function () { return new Promise(function (res) { setTimeout(res, 0); }); });
+        if (!alive()) return;
+        rows = rows.filter(function (r) {
+            if (tracks.has(r.id.id)) return true;
+            r.el.remove();
+            return false;
+        });
+        if (rows.length < 2) {
+            section.remove();
+            if (opts.onEmpty) opts.onEmpty();
+            return;
+        }
+        await drawMaps(select ? select.value : mapCam);
         if (!alive()) return;
         // The samples land on keyframes where they can (one decoded frame each,
         // not up to a keyframe gap's worth): the keyframes of one camera, read

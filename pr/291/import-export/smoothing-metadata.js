@@ -20,8 +20,11 @@
 //     calibration), and a re-solve would cost a Triangulate All on reopen.
 //   * Per session, `metadata.lucid.temporalSmoothing`: the scope of the last run
 //     ('all' | 'frame', which menu item `ui/smoothing-button.js` lights) and its
-//     resolved windows. Informational apart from the scope: a re-run always uses
-//     the current Settings.
+//     resolved settings: a windows run its four windows' keys, exactly as before
+//     the adaptive method existed (no `method` key); an adaptive run
+//     `method: 'adaptive'`, its gate `k`, its longest half-window `hmax`, and
+//     `covariance: 'sigma'` only when it skipped the views. Informational apart
+//     from the scope: a re-run always uses the current Settings.
 //
 // The smoothed state lapses per group exactly as before reopening: the mark is
 // keyed by the `points3d` array (`markPoints3dSmoothed`), and every re-solve or
@@ -31,8 +34,8 @@
 //
 // Depends on: pose/pose-data.js, pose/temporal-smoothing.js
 
-import { unsmoothedPoints3d, markPoints3dSmoothed, pooledPoints3d } from '../pose/pose-data.js?v=5b7b81048e0b';
-import { hasSmoothed3d, noteSmoothedFrames } from '../pose/temporal-smoothing.js?v=5b7b81048e0b';
+import { unsmoothedPoints3d, markPoints3dSmoothed, pooledPoints3d } from '../pose/pose-data.js?v=88c28524ee0f';
+import { hasSmoothed3d, noteSmoothedFrames } from '../pose/temporal-smoothing.js?v=88c28524ee0f';
 
 /** Every `metadata.lucid` key this module may write. */
 export const SMOOTHING_METADATA_KEYS = ['temporalSmoothing'];
@@ -95,7 +98,12 @@ export function writeSmoothingMetadata(lucid, session) {
     var run = smoothingRunOf(session);
     var out = { scope: run ? run.scope : 'all' };
     var cfg = run && run.config;
-    if (cfg) {
+    if (cfg && cfg.method === 'adaptive') {
+        out.method = 'adaptive';
+        out.k = cfg.k;
+        out.hmax = cfg.hmax;
+        if (cfg.covariance === 'sigma') out.covariance = 'sigma';
+    } else if (cfg) {
         out.medianWindow = cfg.medianWindow;
         out.gaussianWindow = cfg.gaussianWindow;
         out.maxGap = cfg.maxGap;
@@ -113,10 +121,19 @@ export function readSmoothingMetadata(session, lucid) {
     var ts = lucid && lucid.temporalSmoothing;
     if (!session || !ts || typeof ts !== 'object') return;
     var cfg = null;
-    if (['medianWindow', 'gaussianWindow', 'maxGap', 'minSegment'].every(function (k) {
+    if (ts.method === 'adaptive') {
+        if (Number.isFinite(ts.k) && Number.isFinite(ts.hmax)) {
+            cfg = {
+                method: 'adaptive', k: ts.k, hmax: ts.hmax,
+                covariance: ts.covariance === 'sigma' ? 'sigma' : 'views',
+                enabled: ts.hmax > 0,
+            };
+        }
+    } else if (['medianWindow', 'gaussianWindow', 'maxGap', 'minSegment'].every(function (k) {
         return Number.isFinite(ts[k]);
     })) {
         cfg = {
+            method: 'windows',
             medianWindow: ts.medianWindow, gaussianWindow: ts.gaussianWindow,
             maxGap: ts.maxGap, minSegment: ts.minSegment,
             enabled: ts.medianWindow > 0 || ts.gaussianWindow > 0,

@@ -65,8 +65,8 @@
  * app state.
  */
 
-import { Instance, lazyPlaceholderXY } from './pose-data.js?v=5b7b81048e0b';
-import { nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=5b7b81048e0b';
+import { Instance, lazyPlaceholderXY } from './pose-data.js?v=88c28524ee0f';
+import { nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=88c28524ee0f';
 
 /** Frames the playback loader keeps hydrated ahead of the playhead. */
 export const LAZY_PLAYBACK_AHEAD = 600;

@@ -148,12 +148,20 @@ async function serveStatic(root, req, res) {
  * @param {boolean} [options.cors]  allow any origin (a second, cross-origin
  *   server such as a model package's), answering preflights with 204
  * @param {(req: http.IncomingMessage) => void} [options.onRequest]  sees every request
+ * @param {boolean} [options.isolated]  send COOP/COEP as `server.py --isolated`
+ *   does, so the page is cross-origin isolated (default: `LUC3D_E2E_ISOLATED=1`,
+ *   which runs any e2e file, or the whole suite, isolated)
  * @returns {Promise<{port: number, url: string, close(): void, kill(): void}>}
  */
-export async function startServer(root = repoRoot, { port, cors = false, onRequest } = {}) {
+export async function startServer(root = repoRoot, { port, cors = false, onRequest,
+    isolated = process.env.LUC3D_E2E_ISOLATED === '1' } = {}) {
     if (port === undefined) port = process.env.PORT ? Number(process.env.PORT) : 0;
     const server = http.createServer((req, res) => {
         if (onRequest) onRequest(req);
+        if (isolated) {
+            res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+            res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+        }
         if (cors) {
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Access-Control-Allow-Headers', '*');
@@ -372,17 +380,19 @@ async function slowPageAnimations(page, rate) {
 }
 
 /**
- * True in the page while a CSS transition or a finite CSS animation is
- * running anywhere in it (pseudo-elements included). An infinite one (a
- * spinner) never ends, so it does not count; neither does a paused one.
- * Shared by `waitForAnimations` and tests that wait inside `page.evaluate`.
+ * True in the page while a CSS transition, a finite CSS animation or a finite
+ * script animation (`el.animate`: the progress bars' glides,
+ * ui/progress-delta.js) is running anywhere in it (pseudo-elements included).
+ * An infinite one (a spinner) never ends, so it does not count; neither does a
+ * paused one. Shared by `waitForAnimations` and tests that wait inside
+ * `page.evaluate`.
  */
 export const ANIMATING_IN_PAGE = `document.getAnimations().some(a =>
-    (a instanceof CSSTransition || a instanceof CSSAnimation) && a.playState === 'running' &&
+    (a instanceof CSSTransition || a instanceof CSSAnimation || a.constructor === Animation) && a.playState === 'running' &&
     a.effect && Number.isFinite(a.effect.getComputedTiming().endTime))`;
 
 /**
- * Wait until no CSS transition or finite CSS animation runs in the page.
+ * Wait until no CSS transition or finite animation runs in the page.
  * Read a size, an opacity or a colour that one is changing only after this,
  * never after a fixed `waitForTimeout`: under load (files in parallel) a fixed
  * wait reads the value part-way. `LUC3D_E2E_ANIM_RATE` finds checks that do.
