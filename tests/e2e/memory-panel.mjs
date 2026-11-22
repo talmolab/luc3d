@@ -164,6 +164,9 @@ try {
         await openPanel(page);
         s = await panelState(page);
         check(s.drawing && moves(s.path) === 1, 'reopened, its line runs through the time it was closed');
+        // off the rail first, as a person's mouse would be: the rail click left it hovering there, and a hovered rail
+        // widens over the right end of the panel headers, where the ✕ is (on CI it covered this one)
+        await page.mouse.move(400, 400);
         await page.click('.panel-section[data-tab="tabMemory"] .panel-section-close');
 
         const stored = await page.evaluate(() => Object.keys(localStorage));
