@@ -5625,6 +5625,35 @@ kbd {
   border-bottom: 1px solid var(--border-color);
 }
 
+/* Settings ▸ Temporal Smoothing shows only the chosen method's rows
+   (ui/settings-modal.js, showSmoothingMethod). */
+.settings-threshold-row[hidden] {
+  display: none;
+}
+
+/* A one-of-N toggle (Temporal Smoothing ▸ Method, `buildChoiceToggle`):
+   buttons in a row, the chosen one lit. */
+.settings-choice { margin: 0 0 12px; }
+.settings-choice-opts {
+  display: inline-flex;
+  margin: 6px 0 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.settings-choice-opt {
+  padding: 6px 16px;
+  border: 0;
+  background: var(--bg-button);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-choice-opt + .settings-choice-opt { border-left: 1px solid var(--border-color); }
+.settings-choice-opt:hover { color: var(--text-primary); }
+.settings-choice-opt.is-on { background: var(--accent); color: #fff; }
+.settings-choice-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
 .settings-threshold-label-wrap {
   flex: 1;
   min-width: 0;
@@ -6341,8 +6370,8 @@ kbd {
 .tri-methods .tm-key-band { width: 14px; height: 6px; border-radius: 1px; background: var(--success-color); opacity: 0.6; }
 .tri-methods .tm-true { stroke: var(--success-color); stroke-width: 1.6; stroke-linecap: round; }
 
-/* Settings ▸ Temporal Smoothing: what the Median and Gaussian windows do
-   (ui/smoothing-windows-figure.js). */
+/* Settings ▸ Temporal Smoothing: what the Median and Gaussian windows and the
+   Adaptive method do (ui/smoothing-windows-figure.js). */
 .smooth-fig {
   margin: 0 0 12px;
 }
@@ -6361,6 +6390,12 @@ kbd {
   gap: 10px;
   margin-top: 10px;
 }
+
+/* Only the method in use is shown: Median and Gaussian side by side, or the
+   Adaptive card alone, across the row. */
+.smooth-fig-col[hidden],
+.smooth-fig-lead [hidden] { display: none; }
+.smooth-fig-col[data-stage="adaptive"] { grid-column: 1 / -1; }
 
 .smooth-fig-col {
   border: 1px solid var(--border-color);
@@ -6514,6 +6549,27 @@ kbd {
 .smooth-fig .sf-key-seg-short { background: var(--text-muted); }
 .smooth-fig .sf-key-out-line { width: 16px; height: 2px; border-radius: 1px; background: var(--accent); }
 .smooth-fig .sf-key-left { width: 14px; height: 2px; border-radius: 1px; background: var(--text-muted); }
+
+/* The Adaptive card (violet). */
+.smooth-fig { --sf-ata: #c58af9; }
+.smooth-fig .sf-out.sf-out-ata { stroke: var(--sf-ata); }
+.smooth-fig .sf-ata-node { fill: var(--sf-ata); }
+.smooth-fig .sf-gate { stroke-width: 1.5; }
+.smooth-fig .sf-gate-in { stroke: var(--sf-ata); opacity: 0.8; }
+.smooth-fig .sf-gate-stop { stroke: var(--error-color); stroke-width: 2; }
+.smooth-fig .sf-gate-cut { stroke: var(--text-muted); opacity: 0.7; }
+.smooth-fig .sf-gate-line { stroke: var(--text-secondary); stroke-width: 0.8; stroke-dasharray: 3 2; }
+.smooth-fig .sf-key-ata { position: relative; width: 16px; height: 2px; border-radius: 1px; background: var(--sf-ata); }
+.smooth-fig .sf-key-ata::after {
+  content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 5px; height: 5px; border-radius: 50%; background: var(--sf-ata);
+}
+.smooth-fig .sf-key-gate-in,
+.smooth-fig .sf-key-gate-stop,
+.smooth-fig .sf-key-gate-cut { width: 2px; height: 10px; }
+.smooth-fig .sf-key-gate-in { background: var(--sf-ata); }
+.smooth-fig .sf-key-gate-stop { background: var(--error-color); }
+.smooth-fig .sf-key-gate-cut { background: var(--text-muted); }
 
 /* Card 3 (gaps and segments) spans both columns, with a wider, shorter chart. */
 .smooth-fig [data-try="pos"]:has(input:disabled) { opacity: 0.45; }

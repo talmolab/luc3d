@@ -16,8 +16,8 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=af07f7e9adf8';
-import { jacobiEigen } from './plane-fit.js?v=af07f7e9adf8';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=4a91784d7d04';
+import { jacobiEigen } from './plane-fit.js?v=4a91784d7d04';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -26,6 +26,22 @@ const _settingsHooks = { isCameraTracked: null, getTrackingThreshold: null };
 export function setTriangulationSettingsHooks(hooks) {
     _settingsHooks.isCameraTracked = (hooks && hooks.isCameraTracked) || null;
     _settingsHooks.getTrackingThreshold = (hooks && hooks.getTrackingThreshold) || null;
+}
+
+/**
+ * Whether camera `name` may contribute observations to a solve (Camera Views),
+ * as `triangulateAndReproject` decides it without `options.includedCameras`.
+ * For a reader that needs the solve's views (Temporal Smoothing's adaptive
+ * method, `pose/temporal-smoothing.js`).
+ */
+export function cameraIncludedInSolves(name) {
+    return _settingsHooks.isCameraTracked ? !!_settingsHooks.isCameraTracked(name) : true;
+}
+
+/** The reprojection error threshold (px) a solve uses without the option; 0 = off. */
+export function solveReprojErrorThreshold() {
+    var v = _settingsHooks.getTrackingThreshold ? _settingsHooks.getTrackingThreshold('reprojErrorThreshold') : 0;
+    return v > 0 ? v : 0;
 }
 
 // ============================================
@@ -1041,6 +1057,19 @@ function _projectAndJacobianCameraInto(point, camera, out) {
     out.Jv[1] = D10 * Ju1 + D11 * Jv1;
     out.Jv[2] = D10 * Ju2 + D11 * Jv2;
     return out;
+}
+
+/**
+ * Project `point` into `camera`'s native (distorted) pixels and write the
+ * Jacobian with respect to the point into caller-owned
+ * `out = {u, v, Ju: Float64Array(3), Jv: Float64Array(3)}`, allocation-free
+ * (the refinement's kernel). For the adaptive smoothing's point covariance
+ * (`pose/adaptive-temporal-averaging.js`).
+ * @returns {Object|null} `out`, or null when the point is on the camera's
+ *   principal plane
+ */
+export function projectAndJacobianCameraInto(point, camera, out) {
+    return _projectAndJacobianCameraInto(point, camera, out);
 }
 
 /**
