@@ -90,7 +90,16 @@ async function stepRanks(page, tag, video) {
         v = await stepTo(page, NEXT, frame);
         check(v.frame === frame && v.status === `Suggestion ${k} of 4: frame ${frame + 1}`, `${tag}: Next → frame ${frame} (rank ${k})`, [v.frame, v.status]);
     }
-    if (video) check(Math.abs(v.thumb - 100 * 42 / (v.total - 1)) < 0.01, `${tag}: the seekbar thumb is on frame 42`, [v.thumb, v.total]);
+    if (video) {
+        // A seek sets the frame before it decodes and moves the thumb once it has, so
+        // a step pressed while the last one still decodes leaves the thumb on that
+        // frame until the new one is drawn (CI's runner read 17 here). Wait for it.
+        const want = 100 * 42 / (v.total - 1);
+        await page.waitForFunction(t => Math.abs(parseFloat(document.getElementById('seekbarThumb').style.left) - t) < 0.01,
+            want, { timeout: 20000 }).catch(() => {});
+        v = await view(page);
+        check(Math.abs(v.thumb - want) < 0.01, `${tag}: the seekbar thumb is on frame 42`, [v.thumb, v.total]);
+    }
     v = await stepTo(page, NEXT, 42);
     check(v.frame === 42 && v.status === 'No next suggestion: 4 of 4 is the last', `${tag}: Next at the last stays there and says so`, [v.frame, v.status]);
     v = await stepTo(page, PREV, 17);
