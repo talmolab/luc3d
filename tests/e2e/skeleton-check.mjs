@@ -20,21 +20,13 @@
  *      Triangulate menu's tooltip names them, and Triangulate All checks with them.
  * Run: node tests/e2e/skeleton-check.mjs
  */
-import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
-import net from 'node:net';
+import { startServer, launchBrowser } from './lib/harness.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
-/** a port nothing listens on (a taken one would silently serve another checkout) */
-const freePort = () => new Promise((res, rej) => {
-  const s = net.createServer();
-  s.once('error', rej);
-  s.listen(0, () => { const p = s.address().port; s.close(() => res(p)); });
-});
-const PORT = Number(process.env.PORT) || await freePort();
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+const server = await startServer(repoRoot);
+const PORT = server.port;
 for (let i = 0; i < 120; i++) {
   try { if ((await fetch(`http://localhost:${PORT}/index.html`)).ok) break; } catch {}
   await new Promise(r => setTimeout(r, 250));
@@ -45,7 +37,7 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 const eq7 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 try {
-  const browser = await chromium.launch();
+  const browser = await launchBrowser();
   const page = await browser.newPage();
   const errs = [];
   page.on('pageerror', e => errs.push(String(e)));
