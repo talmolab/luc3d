@@ -58,6 +58,8 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 import { wireAnimalCountField } from './animal-count-field.js';
 import { wireTailMarkField } from './tail-mark-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
+import { wireVolumeFusionField } from './volume-fusion-field.js';
+import { handleLoadVolume3d } from '../import-export/volume3d-file.js';
 import { wireSkeletonCheckField } from './skeleton-check-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
@@ -1651,6 +1653,11 @@ export function setupMenus() {
         handleLoadPoints3dH5();
     });
 
+    document.getElementById('menuLoadVolume3d').addEventListener('click', function () {
+        closeMenus();
+        handleLoadVolume3d();
+    });
+
     document.getElementById('menuLoadSkeletonMenu').addEventListener('click', function () {
         closeMenus();
         document.getElementById('btnLoadSkeleton').click();
@@ -3232,6 +3239,7 @@ export function setupUI() {
     wireAnimalCountField();
     wireTailMarkField();
     wireReprojThresholdField();
+    wireVolumeFusionField();
     wireSkeletonCheckField();
 
     // Context menu for instance groups

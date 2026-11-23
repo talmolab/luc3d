@@ -13,7 +13,7 @@
  *
  *     const solver = createGroupSolver(cameras, { method, triangulateOnly, summaryOnly, expectedGroups });
  *     for (...) {
- *         solver.submit(group, groupCameras, (result) => { ...apply... });
+ *         solver.submit(group, groupCameras, (result) => { ...apply... }, volume);   // volume: optional
  *         solver.mark(() => { ...per-frame bookkeeping... });
  *         await solver.throttle();            // bounded in-flight work
  *     }
@@ -164,10 +164,12 @@ export function createGroupSolver(cameras, opts) {
     // Every call below spells the options out, `method: method` included, so the
     // source-level guard in tests/test-triangulation-method-propagation.mjs can
     // see that the method is threaded in rather than defaulted.
-    function solve(group, groupCameras, o) {
+    // `volume`: the group's frame of a volumetric model (pose/volume3d.js `volumeForFrame`), or none.
+    function solve(group, groupCameras, o, volume) {
         const r = triangulateAndReproject(group, groupCameras, {
             method: method, includedCameras: o.includedCameras,
             reprojErrorThreshold: o.reprojErrorThreshold, triangulateOnly: o.triangulateOnly,
+            volume: volume || undefined,
         });
         return o.summaryOnly ? triangulationSummary(r) : r;
     }
@@ -197,7 +199,7 @@ export function createGroupSolver(cameras, opts) {
                 if (src.nulled) inst.nulledNodes = new Set(src.nulled);
                 byCam.set(n, inst);
             });
-            it.entry.result = solve({ getInstance: (n) => byCam.get(n) }, it.groupCameras, it.options);
+            it.entry.result = solve({ getInstance: (n) => byCam.get(n) }, it.groupCameras, it.options, it.job.volume);
             it.entry.done = true;
         }
     }
@@ -280,12 +282,12 @@ export function createGroupSolver(cameras, opts) {
         cpuBusyMs() { return clock.ms(); },
 
         /** Queue `group` (with its usable `groupCameras`); `cb(result)` runs in order. */
-        submit(group, groupCameras, cb) {
+        submit(group, groupCameras, cb, volume) {
             const entry = { kind: 'job', cb, result: null, done: false };
             entries.push(entry);
             const options = optionsFor(groupCameras);
             if (!P) {
-                entry.result = solve(group, groupCameras, options);
+                entry.result = solve(group, groupCameras, options, volume);
                 entry.done = true;
                 drain();
                 return;
@@ -300,7 +302,7 @@ export function createGroupSolver(cameras, opts) {
                     nulled: (nn && nn.size) ? Array.from(nn) : null,
                 };
             });
-            batch.push({ entry, groupCameras, options, job: { camNames, insts, options } });
+            batch.push({ entry, groupCameras, options, job: { camNames, insts, options, volume: volume || undefined } });
             if (batch.length >= BATCH) flushBatch();
         },
 

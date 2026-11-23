@@ -889,7 +889,7 @@ let _h5wasmReady = null;
  * Initialize h5wasm (loads WASM binary once).
  * @returns {Promise<Object>} The h5wasm module
  */
-async function initH5wasm() {
+export async function initH5wasm() {
     if (typeof h5wasm === 'undefined') {
         throw new Error('h5wasm script not loaded — check CDN script tag');
     }

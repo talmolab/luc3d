@@ -52,6 +52,7 @@ function solveJob(job) {
     const r = triangulateAndReproject(group, cams, {
         method: method, includedCameras: o.includedCameras,
         reprojErrorThreshold: o.reprojErrorThreshold, triangulateOnly: o.triangulateOnly,
+        volume: job.volume,
     });
     return o.summaryOnly ? triangulationSummary(r) : r;
 }

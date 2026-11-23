@@ -271,6 +271,7 @@ export function fillLazyReprojections(fi, instanceGroups) {
                 if (_threshold == null) _threshold = getTrackingThreshold('reprojErrorThreshold') || 0;
                 var _triRes;
                 if (!_grp.dirty && (isPoints3dFromFile(_grp.points3d) || isPoints3dSmoothed(_grp.points3d) ||
+                    _grp.volumeFused ||    // fused with a volume: a re-solve here would drop it (pose/volume3d.js)
                     _grp.skeletonRepaired ||   // a re-solve would undo Triangulate's skeleton check
                     (_grp.triangulationMethod != null && !(_threshold > 0)))) {
                     _triRes = reprojectStoredPoints3d(_grp, state.session.cameras);
