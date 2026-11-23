@@ -353,8 +353,17 @@
                         <button class="tri-dropdown-item" id="tbSmoothToggle" data-scope="toggle" role="menuitem"
                             title="Remove temporal smoothing: put back the 3D from before smoothing, on every frame" disabled>Remove smoothing</button>
                         <div class="tri-dropdown-sep"></div>
+                        <!-- Settings ▸ Temporal Smoothing's Method, one or the other (smoothingMethod:
+                             1 adaptive, the default; 0 median + Gaussian). Wired in ui/ui-wiring.js (wireSmoothMethodRadios). -->
+                        <div class="tri-dropdown-setting" role="radiogroup" aria-label="Smoothing method">
+                            <span class="tri-dropdown-setting-label">Method</span>
+                            <span class="tri-dropdown-setting-control">
+                                <label title="Adaptive (the default): each node's window grows while its 3D stays within the gate, judged by each point's views; no window crosses a jump or a gap"><input type="radio" name="tbSmoothMethod" value="1"> Adaptive</label>
+                                <label title="Median + Gaussian: a median, then a Gaussian, over the windows set in Settings"><input type="radio" name="tbSmoothMethod" value="0"> Median + Gaussian</label>
+                            </span>
+                        </div>
                         <button class="tri-dropdown-item" data-scope="settings" role="menuitem"
-                            title="Settings ▸ Temporal Smoothing: the median and Gaussian windows">Settings…</button>
+                            title="Settings ▸ Temporal Smoothing: the method, its windows or its gate">Settings…</button>
                     </div>
                 </div>
                 <!-- Inside the proofreading group so it stays on this side of
@@ -725,6 +734,22 @@
                         <input type="range" id="visSymmetryEdgeWeight" min="1" max="10" value="1" step="1">
                         <span class="vis-val" id="visSymmetryEdgeWeightVal">1</span>
                     </div>
+                    <!-- Animal outlines (ui/animal-outlines.js): per camera and
+                         animal, idtracker.ai-style blobs split by the poses.
+                         Browser-local like the rest of this panel's toggles. -->
+                    <h3>Animal Outlines</h3>
+                    <div class="vis-slider-row">
+                        <span title="Outline each animal in every camera view: pixels brighter than the camera&#39;s empty arena, given to the animal whose pose is in them. Shortcut O; flag a bad one with Shift+O.">Show in 2D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visOutlines">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Fill</span>
+                        <input type="range" id="visOutlineFill" min="0" max="100" value="25" step="1">
+                        <span class="vis-val" id="visOutlineFillVal">25%</span>
+                    </div>
                     <!-- Planes. The planes the user annotated are scene geometry
                          and are drawn in EVERY mode, so these four say which of
                          their parts survive OUTSIDE Defining Plane Mode. Inside
@@ -853,6 +878,13 @@
                      Tracks ▸ Check ID Switches results for the active session. -->
                 <div class="panel-tab-content" id="tabIdSwitches">
                     <div id="idSwitchPanel"></div>
+                </div>
+
+                <!-- ==================== Outlines Panel ==================== -->
+                <!-- Animal outlines (Visibility > Animal Outlines) per camera, and
+                     the flags on bad ones: ui/outline-flags-panel.js. -->
+                <div class="panel-tab-content" id="tabOutlines">
+                    <div id="outlinePanel"></div>
                 </div>
 
                 <!-- ==================== Videos Tab ==================== -->

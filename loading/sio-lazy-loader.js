@@ -928,6 +928,45 @@ export class SioLazyLoader {
     }
 
     /**
+     * The 2D of the store row at in-frame offset `offsetInFrame` (the value an
+     * `Instance._rawInstIndex` carries), read straight from the columns, with
+     * nothing materialized: node `k` is at `x[start + k]`, `y[start + k]` while
+     * `start + k < end` (NaN = absent) — what `lazyRowInstance` would give a
+     * released group member back (`hydrateFrameMembers2d`). For a reader of
+     * many frames' member 2D (Temporal Smoothing's adaptive method,
+     * `pose/temporal-smoothing.js`).
+     *
+     * @param {string} camName
+     * @param {number} frameIdx
+     * @param {number} offsetInFrame
+     * @returns {{x: ArrayLike<number>, y: ArrayLike<number>, start: number, end: number}|null}
+     */
+    storeRowPoints(camName, frameIdx, offsetInFrame) {
+        var labels = this.labelsByCam.get(camName);
+        var rowMap = this.frameRowByCam.get(camName);
+        var store = labels && labels._lazyDataStore;
+        if (!store || !rowMap) return null;
+        var row = rowMap.get(frameIdx);
+        if (row === undefined) return null;
+        var fd = store.framesData || {};
+        var idn = store.instancesData || {};
+        if (!idn.point_id_start) return null;
+        var iStart = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
+        var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[row] : 0) || 0;
+        var j = iStart + offsetInFrame;
+        if (!Number.isInteger(offsetInFrame) || offsetInFrame < 0 || j >= iEnd) return null;
+        // Same rule as `materializeFrame`: type 0 is a user instance.
+        var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
+        var pts = Number(rawType == null ? 0 : rawType) === 0 ? store.pointsData : store.predPointsData;
+        if (!pts || !pts.x || !pts.y) return null;
+        return {
+            x: pts.x, y: pts.y,
+            start: Number(idn.point_id_start[j]) || 0,
+            end: Number(idn.point_id_end ? idn.point_id_end[j] : 0) || 0,
+        };
+    }
+
+    /**
      * The model's score for one node of the store's prediction at in-frame
      * offset `offsetInFrame` (the value `Instance._rawInstIndex` carries), read
      * straight from `pred_points.score` — the lazy half of

@@ -77,10 +77,11 @@ import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
 import { getDefaultTriangulationMethod, setDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
-         dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js';
+         dispatchEvent, getActions, formatBinding, getSmoothingParams, setSmoothingParams,
+         onSmoothingParamsChange } from './settings.js';
 // luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
 import { smoothSessionAsync, smoothFrame, unsmoothSession, resolveSmoothingParams, hasSmoothed3d,
-    removeSmoothing, restoreSmoothing } from '../pose/temporal-smoothing.js';
+    removeSmoothing, restoreSmoothing, describeSmoothingConfig, SMOOTH_METHOD_ADAPTIVE } from '../pose/temporal-smoothing.js';
 import { syncSmoothingButton, noteSmoothingScope } from './smoothing-button.js';
 import { smoothingRunOf } from '../import-export/smoothing-metadata.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from './loading-overlay.js';
@@ -123,6 +124,8 @@ import {
 } from './track-identity-ops.js';
 import { setSessionRotation } from './video-filters.js';
 import { stepSuggestionNav } from './suggestions-panel.js';
+import { refreshOutlinePanel, flagOutlineUnderPointer } from './outline-flags-panel.js';
+import { toggleOutlineBrush } from './outline-brush.js';
 
 /**
  * The handle File ▸ Save may write back to for a file opened with
@@ -2362,6 +2365,9 @@ export function setupUI() {
     setHandler('togglePredicted', function () { toggleVisCheckbox('visPredicted'); });
     setHandler('toggleReproj', function () { toggleVisCheckbox('visReprojections'); });
     setHandler('toggleErrors', function () { toggleVisCheckbox('visErrors'); });
+    setHandler('toggleOutlines', function () { toggleVisCheckbox('visOutlines'); });
+    setHandler('flagOutline', function () { flagOutlineUnderPointer(); });
+    setHandler('outlineBrush', function () { toggleOutlineBrush(); });
     setHandler('singleViewMode', function () { enterSingleViewMode(); showViewIndicator(); });
     setHandler('gridMode', function () { setGridMode(); showViewIndicator(); });
     // Triangulate uses the Settings default method (DLT/BA).
@@ -2563,6 +2569,13 @@ export function setupUI() {
                 nPairs > 0 ? 'info' : 'warning');
         });
     }
+    setupVisSlider('visOutlineFill', 'visOutlineFillVal', 'pct');
+    // Animal outlines: what is painted only, plus the Outlines tab's on/off line.
+    var visOutlinesEl = document.getElementById('visOutlines');
+    if (visOutlinesEl) visOutlinesEl.addEventListener('change', function () {
+        drawAllOverlays(state.currentFrame);
+        refreshOutlinePanel();
+    });
 
     // Checkbox toggles. `visUnlinkedBadge` only changes what is PAINTED — it
     // cannot hide the instance a selection points at, so the deselect sweep below
@@ -2654,9 +2667,10 @@ export function setupUI() {
         'vis3dLabelSize', 'vis3dSphereSize', 'vis3dPyramidLength',
         'vis3dNodeSize', 'vis3dEdgeWeight', 'vis3dBrightness',
         'visSymmetryEdgeWeight',
+        'visOutlineFill',
     ];
     var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
-        'visUnlinkedBadge', 'visSymmetryEdges',
+        'visUnlinkedBadge', 'visSymmetryEdges', 'visOutlines',
         'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
         'vis3dNodeShow', 'vis3dEdgeShow'].concat(planeVisCheckIds);
     var visStyleIds = [
@@ -2954,8 +2968,10 @@ export function setupUI() {
     // current settings in the removed run's scope (`restoreSmoothing`).
     //
     // Touches only `points3d` on the already-resident `session.instanceGroups`
-    // — no 2D hydration, no lazy sweep. On the main thread; All frames runs in
-    // steps (`smoothSessionAsync`) with the shared progress card.
+    // — no 2D hydration, no lazy sweep (the adaptive method reads the members'
+    // 2D for its covariances: resident, or straight from a lazy store). On the
+    // main thread; All frames runs in steps (`smoothSessionAsync`) with the
+    // shared progress card.
     var smoothingRunning = false;
     async function runTemporalSmoothing(currentFrameOnly, toggle) {
         var session = state.session;
@@ -3006,7 +3022,9 @@ export function setupUI() {
             // smoothed there is nothing to do, so point at the settings.
             stats = unsmoothSession(session, { writeFrames: writeFrames });
             if (stats.frames === 0) {
-                setStatus('Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
+                setStatus(cfg.method === SMOOTH_METHOD_ADAPTIVE
+                    ? 'Temporal smoothing is off — set a longest half-window above 0 in Settings ▸ Temporal Smoothing'
+                    : 'Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
                 showSettingsModal('smoothing');
                 syncSmoothingButton();
                 return;
@@ -3014,23 +3032,27 @@ export function setupUI() {
             summary = 'Removed temporal smoothing from ' + stats.frames.toLocaleString('en-US') + ' pose' +
                 (stats.frames === 1 ? '' : 's');
         } else {
-            var parts = [];
-            if (cfg.medianWindow) parts.push('median ' + cfg.medianWindow);
-            if (cfg.gaussianWindow) parts.push('Gaussian ' + cfg.gaussianWindow);
+            var described = describeSmoothingConfig(cfg);
             // Each run filters the 3D from before ANY smoothing
             // (`unsmoothedPoints3d`), so it replaces the last run, never stacks.
             // All frames shows the progress card at once and paints it before
             // the pass holds the thread. This frame reads a few dozen frames
             // (well under a millisecond), so it shows no card.
             if (frameList) {
-                stats = { frames: 0, tracks: 0 };
+                stats = { frames: 0, tracks: 0, points: 0, windowSum: 0, fallbackPoints: 0 };
                 frameList.forEach(function (fi) {
                     var r = smoothFrame(session, params, fi);
                     stats.frames += r.frames;
                     stats.tracks = Math.max(stats.tracks, r.tracks);
+                    if (r.points) {
+                        stats.points += r.points;
+                        stats.windowSum += r.meanWindow * r.points;
+                        stats.fallbackPoints += r.fallbackPoints;
+                    }
                 });
+                if (stats.points) stats.meanWindow = stats.windowSum / stats.points;
             } else {
-                var title = { title: 'Temporal Smoothing', unit: 'poses', detail: parts.join(' + ') };
+                var title = { title: 'Temporal Smoothing', unit: 'poses', detail: described };
                 smoothingRunning = true;
                 try {
                     showLoadingProgress('Smoothing', 0, 1, title);
@@ -3057,9 +3079,19 @@ export function setupUI() {
             }
             noteSmoothingScope(session, frameList ? 'frame' : 'all', cfg);
             // `frames` counts groups written: one pose per animal per frame.
+            // The adaptive method also says how long its windows came out, and
+            // how many points had too few views and took their node's sigma.
+            var windowNote = '';
+            if (cfg.method === SMOOTH_METHOD_ADAPTIVE && stats.points) {
+                windowNote = '; mean window ' + stats.meanWindow.toFixed(1) + ' frames' +
+                    (stats.fallbackPoints
+                        ? ', ' + stats.fallbackPoints.toLocaleString('en-US') + ' of ' + stats.points.toLocaleString('en-US') +
+                          ' points weighed by their node\'s spread (under 2 views)'
+                        : '');
+            }
             summary = 'Smoothed ' + stats.frames.toLocaleString('en-US') + ' pose' + (stats.frames === 1 ? '' : 's') +
                 ' across ' + stats.tracks.toLocaleString('en-US') + ' track' + (stats.tracks === 1 ? '' : 's') +
-                ' (' + parts.join(' + ') + ')' +
+                ' (' + described + windowNote + ')' +
                 (resmooth ? ' — recomputed, since the settings or 3D changed after Remove smoothing' : '');
         }
 
@@ -3159,6 +3191,26 @@ export function setupUI() {
         frame: function () { triangulateCurrentFrame(getDefaultTriangulationMethod()); },
         settings: function () { showSettingsModal('triangulation'); },
     });
+
+    // The Smooth menu's Method radios show and set Settings ▸ Temporal
+    // Smoothing's Method (`smoothingMethod`), the one setting behind them, and
+    // follow its Apply.
+    function wireSmoothMethodRadios() {
+        var radios = document.querySelectorAll('#smoothingDropdown input[name="tbSmoothMethod"]');
+        function sync() {
+            var m = getSmoothingParams().smoothingMethod === 1 ? '1' : '0';
+            radios.forEach(function (r) { r.checked = r.value === m; });
+        }
+        radios.forEach(function (r) {
+            r.addEventListener('change', function () {
+                if (!r.checked) return;
+                setSmoothingParams(Object.assign(getSmoothingParams(), { smoothingMethod: Number(r.value) }));
+            });
+        });
+        sync();
+        onSmoothingParamsChange(sync);
+    }
+    wireSmoothMethodRadios();
 
     // Temporal Smoothing; its blue state is `syncSmoothingButton`
     // (ui/smoothing-button.js).

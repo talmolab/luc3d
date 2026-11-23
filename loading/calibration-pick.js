@@ -52,16 +52,28 @@ export const REBASED_CALIBRATION_NAME = 'calibration-rebased.toml';
  *     that changes between sessions would move a project's frame with nothing
  *     said about it.
  *
+ * A campy cage (`*.cage.json`, campy's `campy-cage`: the box's floor and walls,
+ * saved beside the calibration it was made with) matches `*calib*.json` too,
+ * and sorts before `calibration.toml`: it is never a calibration. The cage of
+ * the picked file (`<its name without extension>.cage.json`) comes back as
+ * `cage`; a cage made with another calibration (the original beside a
+ * re-based one) is in another frame, and none comes back.
+ *
  * Does not mutate its argument: the loaders keep scanning afterwards, and
  * re-ordering their list under them would be a nasty thing to debug.
  *
  * @param {Array<{name: string}>} matches - every candidate found at the folder root
- * @returns {{file: Object|null, ambiguous: string[]}} the pick, plus the names
- *   of the also-present candidates when there was more than one, so the caller
- *   can say which file it used and which it ignored.
+ * @returns {{file: Object|null, ambiguous: string[], cage: Object|null}} the
+ *   pick, plus the names of the also-present candidates when there was more
+ *   than one, so the caller can say which file it used and which it ignored,
+ *   and the pick's campy cage when the folder has it.
  */
 export function pickCalibrationFile(matches) {
-    if (!matches || !matches.length) return { file: null, ambiguous: [] };
+    if (!matches || !matches.length) return { file: null, ambiguous: [], cage: null };
+    var isCage = function (f) { return /\.cage\.json$/i.test(String(f && f.name || '')); };
+    var cages = matches.filter(isCage);
+    matches = matches.filter(function (f) { return !isCage(f); });
+    if (!matches.length) return { file: null, ambiguous: [], cage: null };
     var sorted = matches.slice().sort(function (a, b) {
         return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
     });
@@ -77,5 +89,8 @@ export function pickCalibrationFile(matches) {
     for (var j = 0; j < sorted.length; j++) {
         if (sorted[j] !== pick) others.push(sorted[j].name);
     }
-    return { file: pick, ambiguous: others };
+    var stem = pick.name.replace(/\.[^.]*$/, '').toLowerCase();
+    var cage = null;
+    for (var k = 0; k < cages.length; k++) if (cages[k].name.toLowerCase() === stem + '.cage.json') { cage = cages[k]; break; }
+    return { file: pick, ambiguous: others, cage: cage };
 }

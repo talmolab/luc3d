@@ -18,10 +18,12 @@
 //     same tens of nanoseconds per iteration whatever the work is.
 //
 // Why the bar moves smoothly between infrequent updates: the fill is scaled
-// with `transform` under a CSS transition about as long as the pacer interval.
-// Transform transitions run on the compositor thread, so the bar keeps gliding
-// while the main thread is busy computing the next chunk — the same reason the
-// spinner keeps spinning.
+// with `transform`, glided to each new fraction for up to about the pacer
+// interval (ui/progress-delta.js, which moves the fill, its playhead and the
+// lit stretch together; the `.loading-progress-fill` transition in styles.css
+// sets that longest glide). Transform animations run on the compositor thread,
+// so the bar keeps gliding while the main thread is busy computing the next
+// chunk — the same reason the spinner keeps spinning.
 //
 // An operation that can clock its CPU time (Triangulate All's worker pool) — or
 // that runs on the main thread alone (Track All) — also gets a CPU line and a
@@ -36,7 +38,7 @@ import { renderBraveFingerprintingHint } from './browser-hints.js';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
- *  `.loading-progress-fill` transition in styles.css is matched to it. */
+ *  `.loading-progress-fill` transition in styles.css (the longest glide) is matched to it. */
 export var PROGRESS_INTERVAL_MS = 250;
 
 /** Time-remaining estimate (the second text line, #loadingEta).
@@ -270,13 +272,14 @@ function _setFill(frac, animate) {
     fill.classList.toggle('no-anim', !animate);
     fill.style.transform = 'scaleX(' + frac + ')';
     fill.dataset.fraction = String(frac);
-    noteProgress(fill, frac, { animate: animate });   // light up the stretch just gained
     // the playhead at the fill's leading edge: its full-width wrapper translated by the same fraction
     var head = _el('loadingProgressHead');
     if (head) {
         head.classList.toggle('no-anim', !animate);
         head.style.transform = 'translateX(' + (100 * frac) + '%)';
     }
+    // One glide for the fill, the playhead and the lit stretch just gained, so they stay together
+    noteProgress(fill, frac, { animate: animate, head: head });
     var wrap = _el('loadingProgress');
     if (wrap) wrap.setAttribute('aria-valuenow', String(Math.round(frac * 100)));
 }

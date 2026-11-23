@@ -70,7 +70,7 @@ try {
         AS.state.currentFrame = 0;
         AS.state.triangulationResults = new Map();
         AS.state.views = [];
-        (await import('/ui/settings.js')).setSmoothingParams({ smoothGaussianWindow: 3, smoothMedianWindow: 0 });
+        (await import('/ui/settings.js')).setSmoothingParams({ smoothingMethod: 0, smoothGaussianWindow: 3, smoothMedianWindow: 0 });
     });
 
     // [Track blue, Triangulate blue, Smooth blue] after a redraw, as on screen.

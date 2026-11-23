@@ -71,6 +71,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
+import { readOutlineFlagsMetadata } from './outline-flags-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { readSuggestions } from './suggestions-io.js';
 
@@ -1209,6 +1210,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
         readVisibilityMetadata(session, earlyVisibility);
+        readOutlineFlagsMetadata(session, earlyVisibility);   // flags on bad outlines
         // Temporal Smoothing's last run (the groups' sources come with the 3D).
         readSmoothingMetadata(session, earlyVisibility);
         // Define Planes state — pool/planes/origin from the first session that
@@ -1465,6 +1467,25 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 
+                // A campy recording folder (session.json,
+                // `loading/campy-session.js`): read it BEFORE any video is
+                // picked for a camera, and put campy's own video for each
+                // camera first. Both picks below take the first of equally
+                // good candidates, and a camera folder can hold another
+                // video beside campy's 0.mp4: read afterwards, the order the
+                // browser listed the folder in decided which one loaded.
+                var slpCampy = await adoptCampyRecording(session, videoFiles,
+                    { calibrationNames: cameraNames });
+                if (slpCampy) {
+                    var campyOwnFiles = new Set();
+                    slpCampy.cameras.forEach(function (c) {
+                        var own = campyVideoFile(slpCampy, c, vidFiles);
+                        if (own) campyOwnFiles.add(own);
+                    });
+                    vidFiles = vidFiles.filter(function (f) { return campyOwnFiles.has(f); })
+                        .concat(vidFiles.filter(function (f) { return !campyOwnFiles.has(f); }));
+                }
+
                 // The camera a picked video belongs to: parent directory, then
                 // exact stem, then the filename the SLP references for that
                 // camera. Hoisted out of the post-load assignment loop so the
@@ -1529,12 +1550,9 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
                     vidFiles = _slpPref.kept;
                 }
 
-                // A campy recording folder (session.json,
-                // `loading/campy-session.js`): its frame rate and details go
-                // on the session; a camera whose campy video was picked loads
-                // only that video; the views follow campy's camera order.
-                var slpCampy = await adoptCampyRecording(session, videoFiles,
-                    { calibrationNames: cameraNames });
+                // The campy recording read above: its frame rate and details
+                // are on the session; a camera whose campy video was picked
+                // loads only that video; the views follow campy's camera order.
                 if (slpCampy) {
                     var campyOwnByCam = new Map();
                     slpCampy.cameras.forEach(function (c) {
