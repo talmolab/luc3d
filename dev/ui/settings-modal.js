@@ -2,7 +2,8 @@
 // Builds and shows the LUCID "Settings" modal.
 //
 // The modal has four panels (selected via a left nav): the Triangulation Wizard
-// (default method), an editable list of keyboard shortcuts, the Tracking
+// (default method, and the custom parts Triangulate's skeleton check judges, built
+// from node tiles: ui/skeleton-chain-editor.js), an editable list of keyboard shortcuts, the Tracking
 // Wizard, and Temporal Smoothing (the post-triangulation 3D filter's
 // hyperparameters, luc3d #134). All edits are kept in a local working
 // state object and the visual DOM only — nothing is committed to settings.js
@@ -46,16 +47,18 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=9b5658fec914';
-import { getActiveSession, state, timeline } from './app-state.js?v=9b5658fec914';
-import { drawAllOverlays } from './rendering.js?v=9b5658fec914';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=9b5658fec914';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=9b5658fec914';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=9b5658fec914';
-import { installModalGeometry } from './modal-geometry.js?v=9b5658fec914';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=9b5658fec914';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=9b5658fec914';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=9b5658fec914';
+} from './settings.js?v=5611a1bb19c2';
+import { getActiveSession, state, timeline } from './app-state.js?v=5611a1bb19c2';
+import { drawAllOverlays } from './rendering.js?v=5611a1bb19c2';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=5611a1bb19c2';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=5611a1bb19c2';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=5611a1bb19c2';
+import { installModalGeometry } from './modal-geometry.js?v=5611a1bb19c2';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=5611a1bb19c2';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=5611a1bb19c2';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=5611a1bb19c2';
+import { getSkeletonCheckSettings, setSkeletonCheckSettings, sessionSkeletonChains } from '../pose/skeleton-check-run.js?v=5611a1bb19c2';
+import { buildSkeletonChainEditor } from './skeleton-chain-editor.js?v=5611a1bb19c2';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -319,6 +322,7 @@ export function showSettingsModal(initialPanel) {
         cameraWeights: watched({}),
         thresholds: watched({}),
         smoothing: watched({}),
+        skeletonChains: getSkeletonCheckSettings().chains || '',
     });
     const actions = getActions();
     // Only editable actions are user-rebindable; the working map tracks those.
@@ -469,6 +473,47 @@ export function showSettingsModal(initialPanel) {
     triFigure.update({ threshold: working.thresholds.reprojErrorThreshold, saved: working.thresholds.reprojErrorThreshold });
     pickMethod(working.method);
     triPanel.appendChild(triFigure.el);
+
+    // Triangulate ▸ Skeleton check's custom parts (pose/skeleton-check-run.js), built from node tiles
+    // (ui/skeleton-chain-editor.js): each part a row of nodes in order along the body. Below them, the parts the check
+    // will judge and any it has to leave out. Applied with the rest; the check is turned on in the Triangulate menu.
+    const skSection = buildSection('Skeleton check', null);
+    const skHint = document.createElement('div');
+    skHint.className = 'settings-kbd-hint';
+    skHint.textContent = 'The check judges each body part by its bone lengths. The parts come from the skeleton\'s ' +
+        'links. To judge a part bone by bone along the body instead (a tail whose points all link to one node), drag ' +
+        'its nodes into a part, in order. The check then links each node to the next and ignores the skeleton\'s ' +
+        'links between them. The skeleton itself is not changed. Turn the check on in the Triangulate menu.';
+    skSection.body.appendChild(skHint);
+    const skNodes = (activeSession && activeSession.skeleton && Array.isArray(activeSession.skeleton.nodes))
+        ? activeSession.skeleton.nodes.map(function (n) { return (n && n.name != null) ? n.name : String(n); }) : [];
+    const skEditor = buildSkeletonChainEditor({
+        nodes: skNodes,
+        text: working.skeletonChains,
+        onChange: function (text) { working.skeletonChains = text; paintSkeletonChains(); },
+    });
+    skSection.body.appendChild(skEditor.el);
+    const skPreview = document.createElement('div');
+    skPreview.className = 'settings-kbd-hint settings-chains-preview';
+    skSection.body.appendChild(skPreview);
+    function paintSkeletonChains() {
+        skPreview.textContent = '';
+        if (!activeSession || !activeSession.skeleton) return;
+        const chains = sessionSkeletonChains(activeSession, working.skeletonChains);
+        const parts = document.createElement('div');
+        parts.textContent = chains.length
+            ? 'Parts checked: ' + chains.map(function (c) { return c.name + (c.custom ? ' (custom)' : ''); }).join(', ') + '.'
+            : 'No part to check: the skeleton needs links.';
+        skPreview.appendChild(parts);
+        for (const p of chains.problems) {
+            const bad = document.createElement('div');
+            bad.className = 'settings-chains-problem';
+            bad.textContent = 'Left out: ' + p + '.';
+            skPreview.appendChild(bad);
+        }
+    }
+    paintSkeletonChains();
+    triPanel.appendChild(skSection.root);
 
     // Docs link for additional information on triangulation methods.
     const triDocsNote = document.createElement('div');
@@ -1077,6 +1122,7 @@ export function showSettingsModal(initialPanel) {
         setCameraWeights(working.cameraWeights);
         setTrackingThresholds(working.thresholds);
         setSmoothingParams(working.smoothing);
+        setSkeletonCheckSettings({ chains: working.skeletonChains });
         storedSnapshot = JSON.stringify(working);
         appliedOnce = true;
         paintFooter();
