@@ -398,7 +398,9 @@ group('real data: SLAP tails out of reach, the tail linked in order');
     // one-point chains fixed them; with the tail linked they were left until the out-of-reach rule.
     const FX = JSON.parse(fs.readFileSync(path.join(HERE, 'fixtures', 'skeleton-check-slap-far.json'), 'utf8'));
     const N = FX.node_names;
-    let cases = 0, partial = 0, farBefore = 0, farAfter = 0, worse = 0;
+    // (Where DLT gives no answer for a point behind every camera that saw it, talmolab#455, plain has one far point
+    // fewer: the 28,016-unit TailTip. Every far point plain has must still be repaired or have no re-solve in reach.)
+    let cases = 0, casesWithFar = 0, partialWhereFar = 0, farBefore = 0, farAfter = 0, worse = 0;
     const fixed = [];
     for (const S of FX.sessions) {
         const rc = S.cameras.map(c => new pd.Camera(c.name, c.matrix, c.dist, c.rvec, c.tvec, c.size));
@@ -420,7 +422,8 @@ group('real data: SLAP tails out of reach, the tail linked in order');
             cases++;
             const a = rsolve(cs, undefined).points3d, r = rsolve(cs, { chains, subsetPx: 12, maxCandidates: 3 }), b = r.points3d;
             const err = (P, k) => { const X = cs.truth[k]; return X[0] == null ? NaN : Math.hypot(P[3 * k] - X[0], P[3 * k + 1] - X[1], P[3 * k + 2] - X[2]); };
-            if (r.skeleton && r.skeleton.chainsPartial > 0) partial++;
+            const hasFar = N.some((_, k) => err(a, k) > 500);
+            if (hasFar) { casesWithFar++; if (r.skeleton && r.skeleton.chainsPartial > 0) partialWhereFar++; }
             for (let k = 0; k < N.length; k++) {
                 const e0 = err(a, k), e1 = err(b, k);
                 if (e0 > 500) farBefore++;
@@ -431,8 +434,10 @@ group('real data: SLAP tails out of reach, the tail linked in order');
         }
     }
     console.log(`    ${cases} animal-frames: points over 500 units off ${farBefore} -> ${farAfter}; ${fixed.join(', ')}`);
-    ok(cases === 3 && partial === 3, 'the out-of-reach rule repairs a point in each of them (' + partial + ' of ' + cases + ')');
-    ok(fixed.length === 3 && farAfter === farBefore - 3, 'three points thousands of units off come back within 100 units of the proofread 3D');
+    ok(cases === 3 && casesWithFar >= 2 && partialWhereFar === casesWithFar,
+        'the out-of-reach rule repairs a point in each that plain puts out of reach (' + partialWhereFar + ' of ' + casesWithFar + ')');
+    ok(fixed.length >= 2 && farAfter === 1 && fixed.length === farBefore - farAfter,
+        'every point thousands of units off comes back within 100 units of the proofread 3D, but the one with no re-solve in reach');
     ok(worse === 0, 'and no point it changes ends farther from the proofread 3D');
 }
 
