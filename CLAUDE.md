@@ -93,14 +93,15 @@ Loaded via `index.html` script tags / importmap (mirrored in `tests/test-runner.
 
 **Memory rule behind #185–#193 and eager-save:** the renderer's V8 heap is hard-capped near 4 GB; big per-row data must live in typed arrays (outside the cage) or be flushed incrementally — never one boxed JS array per keypoint/row.
 
-## Project state in `metadata.lucid` (Visibility + Temporal Smoothing + Define Planes)
+## Project state in `metadata.lucid` (Visibility + Temporal Smoothing + Define Planes + Outline flags)
 
-Per-session state, written to each session's dict by exactly three modules:
+Per-session state, written to each session's dict by exactly four modules:
 - `import-export/visibility-metadata.js` (`VISIBILITY_METADATA_KEYS`): `videoBrightness`/`videoContrast`/`videoRotation`, `hiddenCameras`/`hiddenTracks`/`hiddenIdentities`, `idSwitchReview`, `numAnimals` (a count or `"auto"`; absent until asked, so a reopened session asks again; changing it marks the project dirty), `tailMarkedIdentity` (which identity Track All gives the tail marks, `pose/tail-mark.js`; absent = off), `identityMarks` (per identity cue, what each identity shows, `pose/identity-cues.js`; absent = none), `imageModel` (the image check's model package choice, `ui/image-model-dialog.js`; absent = the built-in model).
 - `import-export/smoothing-metadata.js` (`SMOOTHING_METADATA_KEYS`): `temporalSmoothing` (last run's scope + windows, or `method: 'adaptive'` + gate `k` + `hmax`), written only while something is smoothed. Each smoothed group's source 3D goes with the 3D instead (`/session_data/unsmoothed_points_3d`, the `(smoothing source)` patch); readers re-mark it with `adoptSmoothingSource` once `points3d` is final.
 - `import-export/plane-metadata.js` (`PLANE_METADATA_KEYS`, mapping in DOM-free `pose/plane-serialization.js`). `planeNodes`/`planes`/`meshObjects`/`planeOrigin` are project-scoped: the same in every session, read from the first one ingested. `planePlacements` is per session and must not leak.
+- `import-export/outline-flags-metadata.js` (`OUTLINE_FLAGS_METADATA_KEYS`): `outlineFlags` (`{v: 1, flags}`: the Outlines panel's flags on bad animal outlines, `pose/outline-flags.js`) and `outlineEdits` (`{v: 1, edits}`: outlines corrected with the brush, run-length label images, `pose/outline-edits.js`), each only when the session has some. See "Animal outlines" below.
 
-Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call ALL THREE readers (visibility, smoothing, plane), or settings, smoothing and planes silently reset to defaults.
+Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call ALL FOUR readers (visibility, outline flags, smoothing, plane), or settings, outline flags, smoothing and planes silently reset to defaults.
 
 `frameIdentityMap` (one entry per grouped detection after Track All: 101 MB of JSON on an 8-camera project) is written by `import-export/frame-identity-metadata.js` as only the entries the instance groups do not imply, plus `frameIdentityMapFromGroups: true` and `frameIdentityMapDropped`; the two `.slp` readers that rebuild groups call `readFrameIdentityMetadata` AFTER doing so. Never larger than the full list (falls back to it, without the marker); the project JSON keeps the full list. `Session._derivedFrameIdentity` (save) and `stampFrameIdentitiesFromGroups` (load) must keep the same rule. Test: e2e `frame-identity-compact-roundtrip`.
 
@@ -115,6 +116,21 @@ Rules:
 - Global appearance prefs stay in `localStorage.visibilitySettings`, never the `.slp`.
 
 Tests: `test-visibility-metadata.js`, `test-plane-serialization.mjs`, e2e `visibility-settings-roundtrip`, `plane-persistence-roundtrip`, `reopen-folder-session-settings`.
+
+## Animal outlines (Visibility ▸ Animal Outlines, the Outlines panel)
+
+An outline per camera and animal, the idtracker.ai way (`pose/outline-core.js`, run on workers by `ui/animal-outlines.js`): blobs brighter than each camera's empty arena (per-pixel median of 39 sampled frames, each frame's animals left out by their poses, hysteresis 8/22 grey levels, open 3 + close 5, ≥ 150 px, holes filled), what one animal looks like learnt from the sampled blobs holding exactly one pose (`poseAreaModel`: area median + 4 robust s.d., and its reach from the pose), each blob to the animal whose body keypoints are in it, crossings split by nearest BODY skeleton, tails traced along their keypoints except through another animal's body core. A camera with no detection of an animal uses its 3D projected (`groupReprojection`). Flags on bad outlines (`Shift+O`) and outlines corrected with the brush (`B`: hold left to draw, right to erase; `ui/outline-brush.js`) are project state; Export… writes the flagged and corrected frames with their outlines (`import-export/outline-export.js`).
+- **A corrected outline wins** over the computed one on its camera frame, and is never recomputed. Keep a camera frame's whole label image only while it is the newest; older ones stay run-length encoded (`entryLabels` decodes).
+- **Never use tails in the split**: a tail lying across another animal pulls its back pixels (the topC 6,250 case). A tail takes another animal's pixels only in a crossing blob, never its core. Fill holes BEFORE tracing tails, or a curled tail encloses floor.
+- **Tail node order** (`tailChain`): edges only when the tail nodes form one path; otherwise by name. DoublePoke's skeleton hangs every tail node off TTI.
+- **Keypoints check the outlines**: keypoints off their own outline make a suspect (red rings; the Outlines panel's Suspect outlines and Check…), which one click turns into a flag.
+- **Poses decide, the area model checks**: two animals' poses in one blob make a crossing even when its area looks like one animal; one stray keypoint does not (an animal is in a blob only with ≥ a quarter of its body keypoints).
+- **An animal gets only what lies near its pose**: with 3D, within `envelope3d` (1.25) x its camera's learnt body half-width (`reach3d`, calibration units) of its 3D body projected into the camera (`bodyTubes`, `tubeReach`); without 3D, or with 3D more than half that off its 2D pose, within `envelope` (1.5) x the camera's learnt reach (px) of its 2D body skeleton; either way also `tailWidth` of its tail line. The rest of a blob stays nobody's (dashed). Something bright touching an animal is not the animal: its reflection where a wall meets the floor, wall lit up beside it. Learn the area and reaches from blobs holding one pose, never by counting blobs: a camera that sees reflections never has a frame with as many blobs as animals. Don't cap how far dim pixels join bright ones instead: side views' bodies are up to 59 % dim.
+- **Reflections touching the animal need the walls** (a campy cage): each animal's 3D body is mirrored across the floor and walls and projected where the camera sees that image in the surface (`bodyMirrors`), and a pixel nearer a mirror image than the animal's own body is nobody's. Only surfaces the sampled frames show reflecting in that camera count (`mirrorEvidence`, `reflectingSurfaces`: images landing on bright pixels); never assume one reflects, since a matt floor's image lies right under the body in a top camera. No distance limit can do this: the body's own width takes in the image's near half.
+- **Compute only while paused**, from `decoder.peekFrame` (never the playback path); cache by camera, frame and a signature of the poses.
+- Animal colours come from `getGroupColor` / `unlinkedBaseColor`, as everywhere.
+- Display settings are browser-local (`visOutlines`, `visOutlineFill`); `save-golden-digest.mjs` must not move.
+Tests: `tests/test-outline-core.mjs`, `tests/test-outline-flags.mjs`, e2e `animal-outlines` (fixture `tests/fixtures/outline-mice/`, `make_fixture.sh`).
 
 ## Lazy projects: resident frames are a window, and eviction must be lossless
 
@@ -237,7 +253,8 @@ campy writes `<recording>/session.json` (`campy-session/1`); campy-live writes `
 - The frame rate is `config.effective.frameRate.value` over the video estimate (`updateTotalFrames`). Views follow campy's camera order, but the calibration's camera list keeps its order. Each camera loads the file at campy's `video` path (campy names every video `0.mp4`, so never name a view by video stem when campy names the camera).
 - A calibration FILE is hashed (`checkCampyCalibration`, through `readBlobArrayBuffer`) and compared with campy-live's `calibration.sha256`. A status other than `complete`, a mismatch, or cameras in only one of the two files go on the load's final status (`withCampyWarnings`) and in the section. Never a modal.
 - A folder prompt that keeps only videos must also pass the root-level manifests through (`campyManifestsAmong`).
-Tests: `tests/test-campy-session.mjs`, `tests/e2e/campy-session-folder.mjs`.
+- **A campy cage beside the calibration** (`<calibration>.cage.json`, campy's `campy-cage`: the floor's corners, up, height) is never a calibration: `pickCalibrationFile` leaves it out (it matches `*calib*.json` and sorts first, so it used to load AS the calibration) and returns the picked file's own as `cage`; a re-based calibration takes none (another frame). `adoptCampyCage` reads it onto `session.campyCage` (`pose/cage-mirrors.js`), needing no session.json. Read, never written. Animal outlines use it (below).
+Tests: `tests/test-campy-session.mjs`, `tests/test-calibration-file-pick.mjs` §6, `tests/test-cage-mirrors.mjs`, `tests/e2e/campy-session-folder.mjs`.
 
 ## UI conventions
 

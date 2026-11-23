@@ -50,6 +50,7 @@ export const PANEL_RAIL_PANELS = [
     { tab: 'tabInstances', label: 'Instances', icon: 'users' },
     { tab: 'tabVisibility', label: 'Visibility', icon: 'eye' },
     { tab: 'tabIdSwitches', label: 'ID Switches', icon: 'arrow-left-right' },
+    { tab: 'tabOutlines', label: 'Outlines', icon: 'lasso' },
     { tab: 'tabVideos', label: 'Videos', icon: 'film' },
     { tab: 'tabCameras', label: 'Cameras', icon: 'camera' },
     { tab: 'tabSkeleton', label: 'Skeleton', icon: 'bone' },

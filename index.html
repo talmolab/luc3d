@@ -740,6 +740,22 @@
                         <input type="range" id="visSymmetryEdgeWeight" min="1" max="10" value="1" step="1">
                         <span class="vis-val" id="visSymmetryEdgeWeightVal">1</span>
                     </div>
+                    <!-- Animal outlines (ui/animal-outlines.js): per camera and
+                         animal, idtracker.ai-style blobs split by the poses.
+                         Browser-local like the rest of this panel's toggles. -->
+                    <h3>Animal Outlines</h3>
+                    <div class="vis-slider-row">
+                        <span title="Outline each animal in every camera view: pixels brighter than the camera&#39;s empty arena, given to the animal whose pose is in them. Shortcut O; flag a bad one with Shift+O.">Show in 2D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visOutlines">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Fill</span>
+                        <input type="range" id="visOutlineFill" min="0" max="100" value="25" step="1">
+                        <span class="vis-val" id="visOutlineFillVal">25%</span>
+                    </div>
                     <!-- Planes. The planes the user annotated are scene geometry
                          and are drawn in EVERY mode, so these four say which of
                          their parts survive OUTSIDE Defining Plane Mode. Inside
@@ -868,6 +884,13 @@
                      Tracks ▸ Check ID Switches results for the active session. -->
                 <div class="panel-tab-content" id="tabIdSwitches">
                     <div id="idSwitchPanel"></div>
+                </div>
+
+                <!-- ==================== Outlines Panel ==================== -->
+                <!-- Animal outlines (Visibility > Animal Outlines) per camera, and
+                     the flags on bad ones: ui/outline-flags-panel.js. -->
+                <div class="panel-tab-content" id="tabOutlines">
+                    <div id="outlinePanel"></div>
                 </div>
 
                 <!-- ==================== Videos Tab ==================== -->
