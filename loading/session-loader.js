@@ -55,6 +55,7 @@ import { chooseCameraSlp } from './percam-slp-choice.js';
 import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js';
 import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js';
 import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js';
+import { parseCampyCage } from '../pose/cage-mirrors.js';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
     isVideoFileName,
@@ -108,6 +109,7 @@ import {
 } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
+import { readOutlineFlagsMetadata } from '../import-export/outline-flags-metadata.js';
 import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
 import { readSuggestions, suggestionEntriesFromLabels } from '../import-export/suggestions-io.js';
@@ -1527,6 +1529,27 @@ export function updateTotalFrames() {
  *   session.json's cameras). `record`: one this load already read with
  *   `readCampyRecording(files)`, so it is not read twice.
  */
+/**
+ * The arena's floor and walls from the campy cage beside the calibration this
+ * load read (`pickCalibrationFile`'s `cage`: `<calibration>.cage.json`, made
+ * by campy's `campy-cage`), on `session.campyCage` (pose/cage-mirrors.js):
+ * animal outlines use them as mirrors. Read, never written; a file that does
+ * not parse leaves none. -> the cage or null
+ */
+export async function adoptCampyCage(session, file) {
+    if (!session) return null;
+    session.campyCage = null;
+    if (!file) return null;
+    try {
+        session.campyCage = parseCampyCage(await file.text());
+    } catch (e) {
+        console.warn('[campy] could not read ' + file.name + ':', e);
+    }
+    if (session.campyCage) console.log('[campy] ' + session.name + ': cage from ' + file.name + ' (floor and 4 walls, ' + session.campyCage.height + ' high)');
+    else console.warn('[campy] ' + file.name + ' is not a campy cage: ignored');
+    return session.campyCage;
+}
+
 export async function adoptCampyRecording(session, files, opts) {
     if (!session || !files) return null;
     var rec;
@@ -2425,6 +2448,7 @@ export async function handleLoadSessionFolderSingleSlp() {
         if (startsProject) resetPlaneState();
         if (startsProject) setPageProject(folderName);
         readVisibilityMetadata(session, sessLucid);
+        readOutlineFlagsMetadata(session, sessLucid);   // flags on bad outlines
         readSmoothingMetadata(session, sessLucid);   // Temporal Smoothing's last run
         var planeConflict = startsProject ? null : planeMetadataConflict(sessLucid);
         if (planeConflict) {
@@ -2595,6 +2619,8 @@ export async function handleLoadSessionFolderSingleSlp() {
                 calibrationNames: cameras.map(function (c) { return c.name; }),
             });
         }
+        // The arena's floor and walls, when campy saved a cage beside this calibration.
+        await adoptCampyCage(session, hasCalibration && _calibPick ? _calibPick.cage : null);
 
         // No calibration (no .toml, nothing embedded): give every view and
         // every 2D camera key a placeholder camera and assign the videos, so
@@ -3062,6 +3088,7 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         // Session-scoped Visibility-panel state — the lazy-reopen mirror of the
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
+        readOutlineFlagsMetadata(session, lucid);   // flags on bad outlines
         readSmoothingMetadata(session, lucid);   // Temporal Smoothing's last run
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
@@ -4096,6 +4123,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 calibrationNames: hasCalibration ? cameras.map(function (c) { return c.name; }) : null,
             });
         }
+        // The arena's floor and walls, when campy saved a cage beside this calibration.
+        if (state.session) await adoptCampyCage(state.session, hasCalibration && _calibPick ? _calibPick.cage : null);
 
         // 6. Finalize
         if (state.views.length > 0) {

@@ -28,6 +28,22 @@ export function setTriangulationSettingsHooks(hooks) {
     _settingsHooks.getTrackingThreshold = (hooks && hooks.getTrackingThreshold) || null;
 }
 
+/**
+ * Whether camera `name` may contribute observations to a solve (Camera Views),
+ * as `triangulateAndReproject` decides it without `options.includedCameras`.
+ * For a reader that needs the solve's views (Temporal Smoothing's adaptive
+ * method, `pose/temporal-smoothing.js`).
+ */
+export function cameraIncludedInSolves(name) {
+    return _settingsHooks.isCameraTracked ? !!_settingsHooks.isCameraTracked(name) : true;
+}
+
+/** The reprojection error threshold (px) a solve uses without the option; 0 = off. */
+export function solveReprojErrorThreshold() {
+    var v = _settingsHooks.getTrackingThreshold ? _settingsHooks.getTrackingThreshold('reprojErrorThreshold') : 0;
+    return v > 0 ? v : 0;
+}
+
 // ============================================
 // Matrix utilities (minimal linear algebra)
 // ============================================
@@ -1041,6 +1057,19 @@ function _projectAndJacobianCameraInto(point, camera, out) {
     out.Jv[1] = D10 * Ju1 + D11 * Jv1;
     out.Jv[2] = D10 * Ju2 + D11 * Jv2;
     return out;
+}
+
+/**
+ * Project `point` into `camera`'s native (distorted) pixels and write the
+ * Jacobian with respect to the point into caller-owned
+ * `out = {u, v, Ju: Float64Array(3), Jv: Float64Array(3)}`, allocation-free
+ * (the refinement's kernel). For the adaptive smoothing's point covariance
+ * (`pose/adaptive-temporal-averaging.js`).
+ * @returns {Object|null} `out`, or null when the point is on the camera's
+ *   principal plane
+ */
+export function projectAndJacobianCameraInto(point, camera, out) {
+    return _projectAndJacobianCameraInto(point, camera, out);
 }
 
 /**

@@ -5038,11 +5038,14 @@ input[type="range"]::-moz-range-track {
 /* Determinate progress bar (ui/loading-overlay.js), the image check's bar: a
    track that clips the fill, and a playhead line at the fill's leading edge
    standing proud of it. Both move with `transform`, not `width` / `left`: a
-   transform transition runs on the compositor thread, so the bar keeps gliding
+   transform animation runs on the compositor thread, so the bar keeps gliding
    between the pacer's ~250 ms updates even while the main thread is busy with
-   the next chunk. The transition length matches PROGRESS_INTERVAL_MS. The
-   playhead is a full-width wrapper translated by the fraction (a percentage
-   translate is of its own width, i.e. the bar's), its line at its left edge. */
+   the next chunk. ui/progress-delta.js glides the fill, the playhead and the
+   lit stretch together (one start, one length), and switches these
+   transitions off inline: it only reads the fill's as the longest glide, which
+   matches PROGRESS_INTERVAL_MS. The playhead is a full-width wrapper
+   translated by the fraction (a percentage translate is of its own width, i.e.
+   the bar's), its line at its left edge. */
 .loading-progress { position: relative; height: 6px; margin: 12px 0 0; }
 .loading-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
 .loading-progress-fill {
@@ -5072,8 +5075,8 @@ input[type="range"]::-moz-range-track {
 /* The stretch a progress bar gained on its last update (ui/progress-delta.js),
    on every progress bar: a translucent white tint over the fill, so it is a
    brighter shade of the bar's own colour, and a white flash as it appears. It
-   grows with the fill's own transition (set inline from the fill's computed
-   style) and stays lit until the next update. The flash is an OPACITY
+   grows in the same glide as the fill (its leading edge is the fill's) and
+   stays lit until the next update. The flash is an OPACITY
    animation on a pseudo-element so it runs on the compositor, as the bar's
    own transform does, even while the main thread is busy. */
 .progress-delta {
@@ -5915,6 +5918,35 @@ kbd {
   border-bottom: 1px solid var(--border-color);
 }
 
+/* Settings ▸ Temporal Smoothing shows only the chosen method's rows
+   (ui/settings-modal.js, showSmoothingMethod). */
+.settings-threshold-row[hidden] {
+  display: none;
+}
+
+/* A one-of-N toggle (Temporal Smoothing ▸ Method, `buildChoiceToggle`):
+   buttons in a row, the chosen one lit. */
+.settings-choice { margin: 0 0 12px; }
+.settings-choice-opts {
+  display: inline-flex;
+  margin: 6px 0 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.settings-choice-opt {
+  padding: 6px 16px;
+  border: 0;
+  background: var(--bg-button);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-choice-opt + .settings-choice-opt { border-left: 1px solid var(--border-color); }
+.settings-choice-opt:hover { color: var(--text-primary); }
+.settings-choice-opt.is-on { background: var(--accent); color: #fff; }
+.settings-choice-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
 .settings-threshold-label-wrap {
   flex: 1;
   min-width: 0;
@@ -6631,8 +6663,8 @@ kbd {
 .tri-methods .tm-key-band { width: 14px; height: 6px; border-radius: 1px; background: var(--success-color); opacity: 0.6; }
 .tri-methods .tm-true { stroke: var(--success-color); stroke-width: 1.6; stroke-linecap: round; }
 
-/* Settings ▸ Temporal Smoothing: what the Median and Gaussian windows do
-   (ui/smoothing-windows-figure.js). */
+/* Settings ▸ Temporal Smoothing: what the Median and Gaussian windows and the
+   Adaptive method do (ui/smoothing-windows-figure.js). */
 .smooth-fig {
   margin: 0 0 12px;
 }
@@ -6651,6 +6683,12 @@ kbd {
   gap: 10px;
   margin-top: 10px;
 }
+
+/* Only the method in use is shown: Median and Gaussian side by side, or the
+   Adaptive card alone, across the row. */
+.smooth-fig-col[hidden],
+.smooth-fig-lead [hidden] { display: none; }
+.smooth-fig-col[data-stage="adaptive"] { grid-column: 1 / -1; }
 
 .smooth-fig-col {
   border: 1px solid var(--border-color);
@@ -6804,6 +6842,27 @@ kbd {
 .smooth-fig .sf-key-seg-short { background: var(--text-muted); }
 .smooth-fig .sf-key-out-line { width: 16px; height: 2px; border-radius: 1px; background: var(--accent); }
 .smooth-fig .sf-key-left { width: 14px; height: 2px; border-radius: 1px; background: var(--text-muted); }
+
+/* The Adaptive card (violet). */
+.smooth-fig { --sf-ata: #c58af9; }
+.smooth-fig .sf-out.sf-out-ata { stroke: var(--sf-ata); }
+.smooth-fig .sf-ata-node { fill: var(--sf-ata); }
+.smooth-fig .sf-gate { stroke-width: 1.5; }
+.smooth-fig .sf-gate-in { stroke: var(--sf-ata); opacity: 0.8; }
+.smooth-fig .sf-gate-stop { stroke: var(--error-color); stroke-width: 2; }
+.smooth-fig .sf-gate-cut { stroke: var(--text-muted); opacity: 0.7; }
+.smooth-fig .sf-gate-line { stroke: var(--text-secondary); stroke-width: 0.8; stroke-dasharray: 3 2; }
+.smooth-fig .sf-key-ata { position: relative; width: 16px; height: 2px; border-radius: 1px; background: var(--sf-ata); }
+.smooth-fig .sf-key-ata::after {
+  content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 5px; height: 5px; border-radius: 50%; background: var(--sf-ata);
+}
+.smooth-fig .sf-key-gate-in,
+.smooth-fig .sf-key-gate-stop,
+.smooth-fig .sf-key-gate-cut { width: 2px; height: 10px; }
+.smooth-fig .sf-key-gate-in { background: var(--sf-ata); }
+.smooth-fig .sf-key-gate-stop { background: var(--error-color); }
+.smooth-fig .sf-key-gate-cut { background: var(--text-muted); }
 
 /* Card 3 (gaps and segments) spans both columns, with a wider, shorter chart. */
 .smooth-fig [data-try="pos"]:has(input:disabled) { opacity: 0.45; }
@@ -9195,7 +9254,7 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-progress-bar { position: relative; height: 6px; }
 .id-switch-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
 .id-switch-progress-fill { height: 100%; width: 0; background: #1f78b4; transition: width 0.2s; }   /* as .loading-progress-fill */
-.id-switch-progress-bar .id-switch-phead { left: 0; transition: left 0.2s; }   /* keep pace with the fill */
+.id-switch-progress-bar .id-switch-phead { left: 0; transition: left 0.2s; }   /* glides with the fill (ui/progress-delta.js) */
 /* .id-switch-progress-pct: one rule with .loading-pct (Loading Overlay, above). */
 /* The percentage and device line on the left, a sample crop on the right, above Cancel. */
 .id-switch-progress-row { display: flex; align-items: flex-start; gap: 16px; }
@@ -9367,3 +9426,46 @@ div.track-summary-steps { padding-left: 0; }
 .image-model-details dd { margin: 0; overflow-wrap: anywhere; }
 .image-model-modal.is-busy { cursor: progress; }
 .image-model-modal.is-busy button { pointer-events: none; opacity: 0.6; }
+
+/* ---- Animal outlines: the Outlines panel and the flag dialog (ui/outline-flags-panel.js) ---- */
+.outline-onoff { font-size: 12px; color: var(--text-secondary); margin: 4px 0 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.outline-cams td, .outline-flag-list td { font-size: 12px; }
+.outline-flag-tools { display: flex; gap: 6px; margin: 4px 0 8px; }
+.outline-flag-row { cursor: pointer; }
+.outline-flag-row:hover { background: rgba(255, 255, 255, 0.06); }
+.outline-flag-row.is-current { background: rgba(245, 166, 35, 0.18); }
+.outline-flag-note { font-size: 11px; color: var(--text-secondary); }
+.outline-flag-del { background: none; border: none; color: var(--text-secondary); cursor: pointer; padding: 0 4px; }
+.outline-flag-del:hover { color: var(--text-primary); }
+.outline-src { font-size: 10px; padding: 0 3px; border-radius: 3px; border: 1px solid var(--border-color); color: var(--text-secondary); }
+.outline-flag-modal { min-width: 360px; }
+.outline-flag-where { font-size: 13px; margin-bottom: 12px; }
+.outline-flag-where select { margin-left: 4px; }
+.outline-flag-label { font-size: 12px; color: var(--text-secondary); margin: 10px 0 4px; }
+.outline-flag-animals, .outline-flag-reasons { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.outline-flag-choice { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.outline-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.4); }
+.outline-flag-note-input { width: 100%; box-sizing: border-box; margin-top: 12px; padding: 5px 8px; font-size: 13px;
+  background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; }
+.outline-brush-tools { display: flex; align-items: center; gap: 10px; margin: 4px 0 6px; flex-wrap: wrap; }
+.outline-brush-tools .panel-btn.active { background: var(--accent-color); border-color: var(--accent-color); color: #fff; }
+.outline-brush-size { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.outline-brush-size input { width: 110px; }
+.outline-brush-help { font-size: 11px; color: var(--text-secondary); margin: 2px 0 6px; line-height: 1.4; }
+.outline-brush-animals { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; margin-bottom: 6px; }
+.outline-brush-animals > span { color: var(--text-secondary); }
+body.outline-brush-on .overlay-canvas { cursor: crosshair; }
+.outline-flag-where select { background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; padding: 2px 4px; }
+/* The Outlines panel's tables fit a narrow panel: fixed layout, text wraps. */
+.outline-cams, .outline-flag-list, .outline-suspect-list, .outline-edit-list { table-layout: fixed; }
+.outline-cams tbody td, .outline-flag-list tbody td, .outline-suspect-list tbody td, .outline-edit-list tbody td {
+  white-space: normal; overflow-wrap: break-word; max-width: none; vertical-align: top;
+}
+.outline-cams thead th, .outline-flag-list thead th, .outline-suspect-list thead th, .outline-edit-list thead th { white-space: normal; }
+.outline-flag-list th:nth-child(1), .outline-suspect-list th:nth-child(1), .outline-edit-list th:nth-child(1) { width: 44px; }
+.outline-flag-list th:last-child, .outline-edit-list th:last-child { width: 22px; }
+.outline-suspect-list th:last-child { width: 50px; }
+.outline-suspect-list .outline-suspect-flag { padding: 2px 6px; font-size: 11px; white-space: nowrap; }
+.outline-cams th:nth-child(3) { width: 48px; }
+#outlineScanN { width: 64px; }
+.outline-scan-summary { font-size: 12px; color: var(--text-secondary); margin: 2px 0 6px; }

@@ -14,12 +14,18 @@
  *        real screenshot, and flashes white as it appears (its `::after`
  *        opacity, from the computed style, then back to 0);
  *      - its leading edge moves WITH the fill's while the fill glides (sampled
- *        every frame of the transition), rather than running ahead of it;
+ *        every frame of the glide), rather than running ahead of it;
+ *      - a BURST of updates (videos finishing together, faster than the
+ *        250 ms glide): every frame, the fill's edge, the playhead and the
+ *        tint's edge agree, the tint never floats ahead of the fill, and the
+ *        bar reaches the last value within one glide of it (it used to trail
+ *        the percentage by a third of the bar, the playhead by more, with the
+ *        tint drawn as a block further on);
  *      - none is shown when the bar moves back, starts a new stage (snaps), or
  *        the overlay is hidden.
  *   2. The video-loading panel's bars (`ui/loading-progress-modal.js`) — a
- *      `width` fill: same stretch, and the tint grows with that fill's own
- *      transition (120 ms linear), read from its computed style.
+ *      `width` fill: same stretch, and the tint grows in one glide with the
+ *      fill, as long as that fill's own transition (120 ms).
  */
 import { startServer, launchBrowser, waitForAnimations, ANIMATING_IN_PAGE } from './lib/harness.mjs';
 import path from 'node:path';
@@ -60,9 +66,11 @@ try {
             return {
                 on: d.classList.contains('is-on'), opacity: getComputedStyle(d).opacity,
                 left: (r.left - t.left) / t.width, right: (r.right - t.left) / t.width,
-                transition: d.style.transition,
             };
         };
+        // The glides running on the fill and on its tint just after an update: their lengths (ms).
+        window.__glides = (fill) => [fill, fill.parentNode.querySelector('.progress-delta')].map(el =>
+            el.getAnimations().filter(a => a.constructor === Animation).map(a => a.effect.getTiming().duration));
     }, ANIMATING_IN_PAGE);
     const settle = () => waitForAnimations(page);
 
@@ -78,12 +86,18 @@ try {
     let d = await ovDelta();
     check(!d || !d.on, 'overlay: a bar that has just appeared shows no gained stretch', d);
 
-    await ov('showLoadingProgress', 'Working', 30, 100);
+    await page.waitForTimeout(300);   // a pause longer than the longest glide, so the next one is a full 250 ms
+    const glides30 = await page.evaluate(async () => {
+        const lo = await import('/ui/loading-overlay.js');
+        lo.showLoadingProgress('Working', 30, 100);
+        return window.__glides(document.getElementById('loadingProgressFill'));
+    });
     await settle();
     d = await ovDelta();
     check(d && d.on && Math.abs(d.left) < 0.005 && Math.abs(d.right - 0.30) < 0.005,
         'overlay: 0% → 30% lights up exactly 0–30%', d);
-    check(d && /transform 250ms linear/.test(d.transition), 'overlay: the tint grows with the fill\'s own transition (250 ms linear)', d);
+    check(glides30[0].length === 1 && glides30[1].length === 1 && glides30[0][0] === 250 && glides30[1][0] === 250,
+        'overlay: after a pause, the fill and its tint glide together for the fill\'s own 250 ms', glides30);
 
     // brightness from a real screenshot: tinted stretch vs plain fill
     // the flash: the tint's ::after, read from the computed style just after the update and once it is over
@@ -142,6 +156,61 @@ try {
     check(moving.length >= 3 && worst < 0.02,
         `overlay: the tint's edge moves with the fill's (${moving.length} frames mid-glide, worst gap ${(worst * 100).toFixed(2)}% of the bar)`, sync.slice(0, 8));
 
+    // A burst: updates every ~20 ms, and some in the same task, as videos finishing together send them.
+    // Every frame: the fill's edge, the playhead's line and the tint's edge, as fractions of the track.
+    const burst = await page.evaluate(async () => {
+        const lo = await import('/ui/loading-overlay.js');
+        lo.hideLoading();
+        lo.showLoadingProgress('Loading videos', 0, 40, { unit: 'videos' });
+        await window.__settled();
+        const track = document.querySelector('#loadingProgress .loading-progress-track');
+        const fill = document.getElementById('loadingProgressFill');
+        const head = document.getElementById('loadingProgressHead');
+        const t = track.getBoundingClientRect();
+        const x = (px) => (px - t.left) / t.width;
+        const out = [];
+        let running = true;
+        (async () => {
+            while (running) {
+                await new Promise(r => requestAnimationFrame(r));
+                const delta = track.querySelector('.progress-delta');
+                const f = fill.getBoundingClientRect(), h = head.getBoundingClientRect();
+                const dr = delta && delta.classList.contains('is-on') ? delta.getBoundingClientRect() : null;
+                out.push({ t: performance.now(), fill: x(f.right), head: x(h.left),
+                    dL: dr ? x(dr.left) : null, dR: dr ? x(dr.right) : null,
+                    pct: parseFloat(document.getElementById('loadingPct').textContent) / 100 });
+            }
+        })();
+        let done = 0;
+        while (done < 40) {
+            const n = done % 5 === 4 ? 3 : 1;      // now and then three in the same task
+            for (let k = 0; k < n && done < 40; k++) lo.showLoadingProgress('Loading videos', ++done, 40, { unit: 'videos' });
+            await new Promise(r => setTimeout(r, 20));
+        }
+        const tEnd = performance.now();
+        await window.__settled();
+        await new Promise(r => requestAnimationFrame(r));
+        running = false;
+        await new Promise(r => requestAnimationFrame(r));
+        return { out, tEnd };
+    });
+    const during = burst.out.filter(s => s.t < burst.tEnd);
+    const gapHead = Math.max(...burst.out.map(s => Math.abs(s.fill - s.head)));
+    const lit = burst.out.filter(s => s.dR != null);
+    const gapTint = Math.max(...lit.map(s => Math.abs(s.dR - s.fill)));
+    const ahead = Math.max(...lit.map(s => s.dL - s.fill));
+    const lag = Math.max(...during.map(s => s.pct - s.fill));
+    // the frames 250 ms (+ two frames) after the last update: the bar is at 100%
+    const late = burst.out.filter(s => s.t > burst.tEnd + 300);
+    check(during.length >= 10 && !(gapHead > 0.01),
+        `overlay burst: the playhead stays on the fill's edge (${during.length} frames, worst gap ${(gapHead * 100).toFixed(2)}% of the bar)`, burst.out.slice(0, 6));
+    check(lit.length >= 10 && !(gapTint > 0.01) && !(ahead > 0.005),
+        `overlay burst: the lit stretch ends at the fill's edge and never floats ahead of it (worst gap ${(gapTint * 100).toFixed(2)}%, ahead ${(ahead * 100).toFixed(2)}%)`, lit.slice(0, 6));
+    check(!(lag > 0.15),
+        `overlay burst: the fill keeps up with the percentage (at most ${(lag * 100).toFixed(1)} points behind)`, during.slice(-6));
+    check(late.length > 0 && late.every(s => Math.abs(s.fill - 1) < 0.005 && Math.abs(s.head - 1) < 0.005),
+        'overlay burst: the bar and the playhead reach 100% within one glide of the last update', late.slice(0, 3));
+
     await ov('showLoadingProgress', 'Working', 40, 100);
     await settle();
     d = await ovDelta();
@@ -172,7 +241,9 @@ try {
         await window.__settled();
         const wrap = document.querySelector('.lpm-bar-wrap');
         const out = { a: window.__delta(wrap) };
+        await new Promise(r => setTimeout(r, 200));            // longer than the bar's 120 ms, so the next glide is a full one
         m.updateTask(id, { phase: 'mp4box', ratio: 1 });      // 90%
+        out.glides = window.__glides(wrap.querySelector('.lpm-bar'));
         await window.__settled();
         out.b = window.__delta(wrap);
         m.dismiss();
@@ -182,8 +253,8 @@ try {
         'video panel: 5% → 47.5% lights up exactly that stretch', lpm.a);
     check(lpm.b && lpm.b.on && Math.abs(lpm.b.left - 0.475) < 0.005 && Math.abs(lpm.b.right - 0.9) < 0.005,
         'video panel: then 47.5% → 90%', lpm.b);
-    check(lpm.b && /transform 120ms linear/.test(lpm.b.transition),
-        'video panel: the tint grows with that bar\'s own width transition (120 ms linear)', lpm.b);
+    check(lpm.glides && lpm.glides[0].length === 1 && lpm.glides[1].length === 1 && lpm.glides[0][0] === 120 && lpm.glides[1][0] === 120,
+        'video panel: the fill and its tint glide together for that bar\'s own 120 ms', lpm.glides);
 } catch (e) {
     console.error('FATAL', e);
     fails++;

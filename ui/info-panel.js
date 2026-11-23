@@ -17,6 +17,7 @@ import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
          setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
 import { refreshSuggestedFrameMarks } from './suggested-frame-nav.js';
+import { refreshOutlinePanel } from './outline-flags-panel.js';
 import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
 import { createVideoTableCounter } from './video-table-counts.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
@@ -1150,6 +1151,8 @@ export function updateInfoPanel() {
     populateTimelineVisibility(state.session);
     // The ID Switches tab (and its timeline markers) for this session.
     refreshIdSwitchPanel(state.session);
+    // The Outlines panel (cameras' empty arenas, flags on bad outlines).
+    refreshOutlinePanel();
 
     // Wire Session tab buttons
     document.getElementById('btnAutoAssign').onclick = function () {

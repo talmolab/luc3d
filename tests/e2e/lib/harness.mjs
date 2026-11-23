@@ -380,17 +380,19 @@ async function slowPageAnimations(page, rate) {
 }
 
 /**
- * True in the page while a CSS transition or a finite CSS animation is
- * running anywhere in it (pseudo-elements included). An infinite one (a
- * spinner) never ends, so it does not count; neither does a paused one.
- * Shared by `waitForAnimations` and tests that wait inside `page.evaluate`.
+ * True in the page while a CSS transition, a finite CSS animation or a finite
+ * script animation (`el.animate`: the progress bars' glides,
+ * ui/progress-delta.js) is running anywhere in it (pseudo-elements included).
+ * An infinite one (a spinner) never ends, so it does not count; neither does a
+ * paused one. Shared by `waitForAnimations` and tests that wait inside
+ * `page.evaluate`.
  */
 export const ANIMATING_IN_PAGE = `document.getAnimations().some(a =>
-    (a instanceof CSSTransition || a instanceof CSSAnimation) && a.playState === 'running' &&
+    (a instanceof CSSTransition || a instanceof CSSAnimation || a.constructor === Animation) && a.playState === 'running' &&
     a.effect && Number.isFinite(a.effect.getComputedTiming().endTime))`;
 
 /**
- * Wait until no CSS transition or finite CSS animation runs in the page.
+ * Wait until no CSS transition or finite animation runs in the page.
  * Read a size, an opacity or a colour that one is changing only after this,
  * never after a fixed `waitForTimeout`: under load (files in parallel) a fixed
  * wait reads the value part-way. `LUC3D_E2E_ANIM_RATE` finds checks that do.
