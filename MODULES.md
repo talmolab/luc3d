@@ -4276,6 +4276,32 @@ selected, here, delta)` (Prev / Next, wraps).
 
 **User-facing features.** Suggestions panel. Tests: `tests/test-suggestions.mjs`.
 
+### pose/suggested-frames.js
+
+**Purpose.** The frames a session's suggestions name, in the list's order, and where
+Previous / Next suggested frame (Opt+Shift+← / →, `ui/suggested-frame-nav.js`) lands.
+`Session.suggestions` keeps the file's order (a relabel scan: rank 1 in every camera,
+then rank 2, ...), and these keys follow it, a frame once however many views suggest it,
+where the panel's Prev / Next (`stepSuggestion`) walk each view's rows in turn.
+Import-free and DOM-free.
+
+**Key exports.**
+- `suggestedFrameOrder(rows, cameraNames)` — the frames of `rows` (`{camera, frameIdx}`)
+  on any of the session's cameras, each once, where it first appears. A row on a camera
+  the session does not have, or a frame that is not a 0-based integer, is skipped.
+- `stepSuggestedFrame(frames, current, direction, lastFrame)` — `{index, frame}`, or null
+  without suggestions. On a suggested frame: its neighbour in the list. Off one: from the
+  suggestion last stepped to, as if just past it (Next → the one after it, Previous →
+  back to it); with none, both go to the first. Stops at the ends (no wrap): `frame` is
+  null and `index` is that end.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/suggested-frame-nav.js`.
+
+**User-facing features.** Previous / Next suggested frame. Tests:
+`tests/test-suggested-frames.mjs`, `tests/e2e/suggested-frame-nav.mjs`.
+
 ---
 
 ## ui/
@@ -5480,6 +5506,9 @@ In-memory only; see `ui/app-state.js`.
   `setSkeletonEditWarningSuppressed` for `#skeletonWarnOffNote`.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
   the ID Switches tab (and its seekbar markers) for the active session.
+- `./suggested-frame-nav.js` — `refreshSuggestedFrameMarks`: first thing in
+  `updateInfoPanel`, collapsed panel or not (the ticks are on the seekbar, and a load,
+  a session switch or a closed project does not otherwise reach them).
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
   `rememberSkeleton`, `buildRememberedSkeleton`, `setProjectSkeleton`,
   `getProjectSkeleton`.
@@ -8792,12 +8821,16 @@ for a selection); `tests/e2e/mesh-object-export.mjs` (the two export buttons).
 ### ui/seekbar-markers.js
 
 **Purpose.** Possible-ID-switch ticks on the transport seekbar (`#seekbarMarks`
-inside `#seekbar`), for the active session's ID Switches results.
+inside `#seekbar`), for the active session's ID Switches results; and the suggested
+frames' faint ticks (`#seekbarSuggestionMarks`, a layer under them), for
+`ui/suggested-frame-nav.js`.
 
-**Key exports.** `installSeekbarMarkers(layerEl, totalFrames)`;
+**Key exports.** `installSeekbarMarkers(layerEl, totalFrames, suggestionLayerEl)`;
 `setSeekbarSwitchMarkers(markers, totalFrames)` (`[]` clears) /
-`getSeekbarSwitchMarkers()`; `setSeekbarMarkerFrames(totalFrames)` (re-lays the
-ticks out only when the frame count changed — called from `updateSeekbarVisual`);
+`getSeekbarSwitchMarkers()`; `setSeekbarSuggestedFrames(frames, totalFrames)` (`[]`
+clears; a no-op when the frames and the frame count are the ones shown) /
+`getSeekbarSuggestedFrames()`; `setSeekbarMarkerFrames(totalFrames)` (re-lays both
+layers out only when the frame count changed — called from `updateSeekbarVisual`);
 `seekbarMarkerAt(frac, widthPx, tolPx = 5)` (the tick nearest the cursor; a change
 point beats a repeat); `describeSwitchMarker(m)` (the tooltip text).
 
@@ -8810,12 +8843,18 @@ mousedown/drag handlers (`ui/ui-wiring.js`) snap to a tick within 5 px, and the
 seekbar tooltip names it ("Frame 18,105 · 05:01.733 — possible ID switch: id_1 ↔
 id_2 (size score -1415)").
 
+**Suggested frames.** A 2 x 7 px violet tick per frame just above the track, at the
+same mapping. They never snap a click or name themselves in the tooltip: a ranked file
+can suggest so many frames that most of the bar would snap. Rebuilt only when the
+frames or the frame count change, never per repaint.
+
 **Imports from project modules.** None.
 
-**Imported by.** `ui/ui-wiring.js`, `ui/id-switch-modal.js`.
+**Imported by.** `ui/ui-wiring.js`, `ui/id-switch-modal.js`, `ui/suggested-frame-nav.js`.
 
 **Coverage.** `tests/e2e/size-switch-check.mjs` (ticks drawn, none on the
-timeline, hover text, click snaps to the tick's frame, reviewed dimming).
+timeline, hover text, click snaps to the tick's frame, reviewed dimming);
+`tests/e2e/suggested-frame-nav.mjs` (the suggested frames' ticks).
 
 ---
 
@@ -10213,7 +10252,10 @@ Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 **Catalog entries.** `{ id, label, category, binding, editable, dispatched }`.
 Two Navigation entries serve the Suggestions panel: `nextSuggestion` (`.`) and
 `prevSuggestion` (`,`), editable and dispatched (handlers wired in
-`ui/ui-wiring.js`; sleap-app's Space / Shift+Space is Play / Pause here).
+`ui/ui-wiring.js`; sleap-app's Space / Shift+Space is Play / Pause here). Two more,
+`prevSuggestedFrame` / `nextSuggestedFrame` (`Alt+Shift+ArrowLeft` / `ArrowRight`,
+editable and dispatched), step through the suggested FRAMES, every view at once, in the
+list's order (`ui/suggested-frame-nav.js`).
 `binding` is a "+"-joined accelerator (modifier tokens: `Mod` = Ctrl-or-Cmd,
 `Ctrl`, `Cmd`/`Meta`, `Shift`, `Alt`/`Option`/`Opt`; last token is the key) for
 dispatched entries, or a free-form display string (e.g. `← / →`, `1 – 9`) for
@@ -11766,6 +11808,13 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
   **Single-view ("solo") mode** below.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
+- **Previous / Next suggested frame** (`Alt+Shift+ArrowLeft` / `ArrowRight`,
+  catalog-dispatched `prevSuggestedFrame` / `nextSuggestedFrame`) call
+  `stepToSuggestedFrame` (`ui/suggested-frame-nav.js`) with the private
+  `jumpToSuggestedFrame`: it moves the timeline and seekbar on the same keystroke as the
+  labeled-frame jump, or draws the frame statically (`navigateToFrame`) in a video-less
+  project, then `selectSuggestionOnScreen` so the panel's Prev / Next go on from there.
+  That project's arrow handler steps no frame on those keys (`matchesBinding`).
 - View ▸ **Native Resolution (1:1)** (`menuNativeResolution`) and **`Shift+0`**
   (matched by `e.code === 'Digit0'` in the transport keydown handler, beside
   `+` / `-` / `0`, so only while real video is loaded) both call
@@ -11929,7 +11978,9 @@ time / frame readout, written by `updateSeekbarVisual`, the inline frame editor
 and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
-the scrub handlers and the tooltip snap to a tick within 5 px),
+the scrub handlers and the tooltip snap to a tick within 5 px; also handed
+`#seekbarSuggestionMarks`),
+`suggested-frame-nav.js` (`stepToSuggestedFrame`),
 `seekbar-ticks.js` (`installSeekbarTicks`, `refreshSeekbarTicks` — the time
 ruler under the seekbar; `updateSeekbarVisual` calls the refresh, a no-op
 unless the frame count or FPS changed),
@@ -13217,21 +13268,57 @@ scroller. Seeking and focusing a view are handed in by `setupSuggestionsPanel`.
 
 **Key exports.** `setupSuggestionsPanel({ seekToFrame, focusView })`,
 `refreshSuggestionsPanel(opts)` (repaint; no-op off screen), `stepSuggestionNav(delta)`
-(the `nextSuggestion` / `prevSuggestion` hot keys, `.` / `,`), `currentViewName()`.
+(the `nextSuggestion` / `prevSuggestion` hot keys, `.` / `,`), `currentViewName()`,
+`selectSuggestionOnScreen(frameIdx)` (after Previous / Next suggested frame: selects the
+focused view's row on that frame, or none, so Prev / Next go on from there).
+Every edit of the list (`setSuggestions`) also calls `refreshSuggestedFrameMarks`
+(`ui/suggested-frame-nav.js`), so the seekbar's ticks follow it.
 
 **Imports from project modules.** `ui/app-state.js` (`state`,
 `interactionManager`), `ui/panel-rail.js` (`isPanelOnScreen`,
 `onPanelRailChange`), `import-export/save-load.js` (`setStatus`, `markDirty`),
 `ui/frame-readout.js` (`formatFrameNumber`), `ui/frame-counters.js`
 (`frameUserCountInView`), `ui/plane-dialog.js` (`showPlaneDialog`),
-`pose/suggestions.js` (generation, edit, grouping and step helpers).
+`pose/suggestions.js` (generation, edit, grouping and step helpers),
+`ui/suggested-frame-nav.js` (`refreshSuggestedFrameMarks`).
 
 **Imported by.** `pose/initialization.js` (`setupSuggestionsPanel`),
 `ui/rendering.js` and `ui/sessions-panes.js` (`refreshSuggestionsPanel`),
-`ui/ui-wiring.js` (`stepSuggestionNav`).
+`ui/ui-wiring.js` (`stepSuggestionNav`, `selectSuggestionOnScreen`).
 
 **User-facing features.** Suggestions panel and the Next / Previous suggestion
 shortcuts. Tests: `tests/e2e/suggestions-panel.mjs`, `tests/test-suggestions.mjs`.
+
+### ui/suggested-frame-nav.js
+
+**Purpose.** Previous / Next suggested frame (Opt+Shift+← / →, `prevSuggestedFrame` /
+`nextSuggestedFrame` in `ACTION_CATALOG`): steps through the frames the active session's
+suggestions name, every view at once, in the list's order (`pose/suggested-frames.js`
+over `Session.suggestions`), and keeps their ticks on the seekbar. The status line says
+"Suggestion k of n: frame F" (F as the frame readout shows it), or why it did not move
+("No next suggestion: n of n is the last", "No suggested frames in this session"). A
+suggestion on a frame the session cannot show (at or past `state.totalFrames`: no video
+loaded, or a shorter one) is named in a warning and not landed on, since a seek there
+would clamp to another frame. Off in Define Planes, as the panel's Prev / Next. Nothing
+is saved: the suggestion last stepped to is remembered per session in a `WeakMap`.
+
+**Key exports.**
+- `suggestedFramesOf(session)` — `suggestedFrameOrder(session.suggestions, its camera names)`.
+- `stepToSuggestedFrame(direction, goTo)` — the shortcut handlers' body (`goTo` is
+  `ui/ui-wiring.js`'s `jumpToSuggestedFrame`); returns `{index, frame}` or null.
+- `refreshSuggestedFrameMarks()` — ticks the active session's frames
+  (`setSeekbarSuggestedFrames`; a no-op when unchanged). Called from `updateInfoPanel`
+  before its collapsed-panel return (a load, a session switch, a closed project) and
+  from the panel's `setSuggestions` (every edit), never per repaint.
+
+**Imports.** `./app-state.js`, `../import-export/save-load.js` (`setStatus`),
+`../pose/suggested-frames.js`, `./frame-readout.js` (`formatFrameNumber`),
+`./seekbar-markers.js` (`setSeekbarSuggestedFrames`), `./plane-definition.js`
+(`isPlaneModeActive`).
+
+**Imported by.** `ui/ui-wiring.js`, `ui/info-panel.js`, `ui/suggestions-panel.js`.
+
+**Tests.** `tests/e2e/suggested-frame-nav.mjs`.
 
 ### ui/memory-plot.js
 

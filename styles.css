@@ -3163,6 +3163,14 @@ button.tri-dropdown-item:disabled {
 .seekbar-mark.is-follow { opacity: 0.7; height: 12px; }
 .seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
 .seekbar-mark.is-reviewed { opacity: 0.3; }
+/* Suggested frames (a .slp's suggestions; Opt+Shift+← / → steps through them,
+   ui/suggested-frame-nav.js): faint short ticks just above the track, under the
+   ID-switch marks. They never take the pointer. */
+.seekbar-suggestion-marks { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.seekbar-suggestion-mark {
+  position: absolute; top: 1px; width: 2px; height: 7px; border-radius: 1px;
+  transform: translateX(-50%); background: #c3a6ff; opacity: 0.7;
+}
 
 /* The frame a click would land on, while hovering the seekbar
    (ui/seekbar-tooltip.js): the ID Switches tab's playhead colours

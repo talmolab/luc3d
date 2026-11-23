@@ -77,7 +77,7 @@ import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
 import { getDefaultTriangulationMethod, setDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler,
-         dispatchEvent, getActions, formatBinding, getSmoothingParams } from './settings.js';
+         dispatchEvent, matchesBinding, getActions, formatBinding, getSmoothingParams } from './settings.js';
 // luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
 import { smoothSessionAsync, smoothFrame, unsmoothSession, resolveSmoothingParams, hasSmoothed3d,
     removeSmoothing, restoreSmoothing } from '../pose/temporal-smoothing.js';
@@ -122,7 +122,8 @@ import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
 } from './track-identity-ops.js';
 import { setSessionRotation } from './video-filters.js';
-import { stepSuggestionNav } from './suggestions-panel.js';
+import { stepSuggestionNav, selectSuggestionOnScreen } from './suggestions-panel.js';
+import { stepToSuggestedFrame } from './suggested-frame-nav.js';
 
 /**
  * The handle File ▸ Save may write back to for a file opened with
@@ -1986,7 +1987,8 @@ export function setupUI() {
             var m = seekbarMarkerAt(frac, rect.width);
             return m ? m.frame : frameAtFraction(frac);
         };
-        installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames);
+        installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames,
+            document.getElementById('seekbarSuggestionMarks'));
         // The time ruler under the bar (ui/seekbar-ticks.js).
         installSeekbarTicks(document.getElementById('seekbarRuler'), {
             getTotalFrames: function () { return state.totalFrames; },
@@ -2225,7 +2227,9 @@ export function setupUI() {
         if (!hasRealVideo()) {
             // Video-less project (skeleton + imported 3D points): support frame
             // stepping + play/pause over the points3d duration even though
-            // there's no decoder.
+            // there's no decoder. The suggested-frame keys (Opt+Shift+← / →) are
+            // the catalog dispatcher's: not a frame step too.
+            if (matchesBinding('prevSuggestedFrame', e) || matchesBinding('nextSuggestedFrame', e)) return;
             switch (e.key) {
                 case 'ArrowRight': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame + 1); break;
                 case 'ArrowLeft': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); break;
@@ -2358,6 +2362,9 @@ export function setupUI() {
     }
     setHandler('nextSuggestion', function () { stepSuggestionNav(1); });
     setHandler('prevSuggestion', function () { stepSuggestionNav(-1); });
+    // The suggested FRAMES, every view at once, in the list's order (ui/suggested-frame-nav.js).
+    setHandler('nextSuggestedFrame', function () { stepToSuggestedFrame(1, jumpToSuggestedFrame); });
+    setHandler('prevSuggestedFrame', function () { stepToSuggestedFrame(-1, jumpToSuggestedFrame); });
     setHandler('toggleUser', function () { toggleVisCheckbox('visUser'); });
     setHandler('togglePredicted', function () { toggleVisCheckbox('visPredicted'); });
     setHandler('toggleReproj', function () { toggleVisCheckbox('visReprojections'); });
@@ -3705,6 +3712,20 @@ export function seekToLabeledFrame(direction) {
         videoController.scrubToFrame(target);
         setStatus('Frame ' + (target + 1).toLocaleString('en-US'), 'info');
     }
+}
+
+// Previous / Next suggested frame lands on a frame far from this one: like the
+// labeled-frame jump, the timeline and seekbar move on the same keystroke; a
+// video-less project draws the frame statically. The Suggestions panel's Prev /
+// Next then go on from the focused view's row there.
+function jumpToSuggestedFrame(target) {
+    if (!hasRealVideo() || !videoController) navigateToFrame(target);
+    else {
+        if (timeline) timeline.setCurrentFrame(target);
+        updateSeekbarVisual(target);
+        videoController.scrubToFrame(target);
+    }
+    selectSuggestionOnScreen(target);
 }
 
 // ============================================
