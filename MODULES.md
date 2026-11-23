@@ -3880,8 +3880,8 @@ find body parts whose 3D breaks the skeleton's usual bone lengths and repair onl
   bound and the same upper one.
 - **The repair** (`checkChains(points3d, chains, candidatesFor, opts)`): the trigger `chainBadness` (bones with both
   ends present, outside their ranges; a missing point is absent, not implausible); every combination of keep / a
-  candidate / drop per chain point (≤ 4,096; drop only while `opts.allowDrop` is not false — the core allows it
-  with a volume only); the result must be plausible (`chainRepairBadness` 0: judged bones
+  candidate / drop per chain point (≤ 4,096; drop only while `opts.allowDrop` is not false — the core passes false,
+  so a point is re-solved or kept, never dropped); the result must be plausible (`chainRepairBadness` 0: judged bones
   inside their ranges and every kept point linked to an anchor through present bones, so a drop cannot cut a wrong
   piece loose); fewest changes, then fewest drops, then most support, then smallest move; none plausible = the chain
   is left, except its **out-of-reach points** (a chain of 2+ points): `chainReach(chain)` gives each point the
