@@ -3901,10 +3901,21 @@ production 2D, no volume — every flagged chain repaired to plausible or left, 
 ### pose/skeleton-check-run.js
 
 **Purpose.** The project side of the skeleton check: the browser-local setting (`localStorage.lucidSkeletonCheck`,
-`enabled`, off by default; never in the `.slp`), the session skeleton's chains named by their nodes
-(`sessionSkeletonChains`, cached per skeleton), their bones measured on every group's stored 3D in the session
+`enabled`, off by default, and `chains`, the custom parts as text; never in the `.slp`), the session skeleton's
+chains named by their nodes (`sessionSkeletonChains(session, text?)`, cached per skeleton and parts text), their
+bones measured on every group's stored 3D in the session
 (`session.instanceGroups`, never evicted, so a lazy project is measured whole; cached until
 `invalidateSkeletonCheck`), and which groups a pass re-solves.
+- **Custom parts** (built from node tiles in Settings ▸ Triangulation Wizard ▸ Skeleton check,
+  `ui/skeleton-chain-editor.js`), stored as text: one part per line, node names in order along the body.
+  `parseChainText` splits them (lines or `;`, names by `,` or `→`); `resolveChainText(names, text)` matches names
+  (exactly, else ignoring case when only one node does) → `{ paths, problems }`, leaving out a part with an unknown
+  name, a repeated node or a single node; `checkLinks(edges, paths)` keeps the skeleton's links except those between
+  two nodes of one part and adds each part's consecutive pairs (direction does not matter). The chains come from those
+  links, so a star skeleton's tail in order is judged bone by bone, not by each point's distance from TTI (and a whole
+  spine, Nose to TailTip, makes Neck+Trunk a chain between the Head and TTI). A custom part's chain is named in the
+  part's order and marked `custom`; the chains array carries `problems`, and `skeletonCheckForRun`'s `skipped` lists
+  them too.
 - `skeletonCheckForRun(session)` → `options.skeleton` or null (off, no skeleton, no chain, nothing measurable).
 - Where it runs (`pose/triangulation.js`): This frame (`triangulateCurrentFrame`) and Range
   (`triangulateMultiFrameInstances`, `_triangulateGroupStep`) inline with the bones measured from the 3D already
@@ -3916,10 +3927,12 @@ production 2D, no volume — every flagged chain repaired to plausible or left, 
   3D instead of re-solving it without the check; a re-solve without the check clears it. A dropped point is saved
   as missing 3D.
 
-**Key exports.** `getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `sessionSkeletonChains`,
-`invalidateSkeletonCheck`, `skeletonCheckForRun`, `groupNeedsSkeletonCheck`, `framesNeedingSkeletonCheck`.
+**Key exports.** `getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `parseChainText`, `resolveChainText`,
+`checkLinks`, `sessionSkeletonChains`, `invalidateSkeletonCheck`, `skeletonCheckForRun`, `groupNeedsSkeletonCheck`,
+`framesNeedingSkeletonCheck`.
 
-**Imports.** `./skeleton-check.js`. **Imported by** `pose/triangulation.js`, `ui/skeleton-check-field.js`. Tests:
+**Imports.** `./skeleton-check.js`. **Imported by** `pose/triangulation.js`, `ui/skeleton-check-field.js`,
+`ui/settings-modal.js`, `ui/skeleton-chain-editor.js`. Tests:
 `tests/test-skeleton-check.mjs`, `tests/e2e/skeleton-check.mjs`.
 
 ---
@@ -7416,12 +7429,33 @@ an action.
 `../import-export/save-load.js` (`setStatus`). **Imported by** `ui/ui-wiring.js`.
 Test: `tests/e2e/toolbar-reproj-threshold.mjs`.
 
+### ui/skeleton-chain-editor.js
+
+**Purpose.** Settings ▸ Triangulation Wizard ▸ Skeleton check's node-tile editor for the check's custom parts
+(`pose/skeleton-check-run.js`, `settings.chains`). A bank holds a tile per skeleton node; each part is a row of tiles
+in order along the body. A tile dragged from the bank into a row is a copy (the bank keeps it), placed before the tile
+it is dropped on or at the row's end; dragged within a row it moves, into another row it moves there (a row already
+holding that node refuses it), onto "New part" it starts a part, back onto the bank it comes out. Without dragging, a
+click (or Enter, Space) on a bank tile adds it to the end of the selected part (a row's number selects it; "New part"
+starts one), and a tile's × takes it out. Every control is a `<button>`: the Settings modal stops keydown in the
+capture phase, so nothing here listens for keys. A stored name the skeleton lacks shows as a warning tile
+(`.sk-chain-tile-unknown`), never dropped silently. HTML5 drag and drop, with the dragged tile kept in a closure
+(`dragging`), since `dataTransfer` cannot be read during dragover.
+
+**Key exports.** `buildSkeletonChainEditor({ nodes, text, onChange })` → `{ el, getText() }`; the pure, DOM-free model:
+`textToParts`, `partsToText`, `dropTile(parts, from, to)`, `appendTile(parts, name, part)`, `removeTile(parts, part,
+index)` (an emptied part goes).
+
+**Imports.** `../pose/skeleton-check-run.js` (`parseChainText`). **Imported by** `ui/settings-modal.js`. Tests:
+`tests/test-skeleton-chain-editor.mjs` (the model, Node), `tests/e2e/skeleton-check.mjs` §7 (dragging in the page).
+
 ### ui/skeleton-check-field.js
 
 **Purpose.** The Triangulate menu's **Skeleton check** checkbox (`#tbSkeletonCheck`), below Reprojection error:
 edits `pose/skeleton-check-run.js`'s browser-local `enabled` (off by default), which every Triangulate run reads
-when it starts. Its tooltip explains the check and names the session skeleton's parts, refreshed when the menu
-opens. Not in Defining Plane Mode's toolbar lock: a setting, not an action.
+when it starts. Its tooltip explains the check and names the parts it judges (custom ones marked "(custom)", and any
+custom part it left out), refreshed when the menu opens. Not in Defining Plane Mode's toolbar lock: a setting, not an
+action.
 
 **Key exports.** `wireSkeletonCheckField()`.
 
@@ -10553,6 +10587,14 @@ The same panel's footer also says what will be used (`.settings-tri-readout`): t
 reprojection error threshold, from `working`, so it holds wherever the panel is scrolled and follows
 an edit made on the Tracking Wizard. A value not yet applied is lit, with what it was (`paintFooter`).
 
+**Skeleton check's custom parts.** Below the methods figure, a "Skeleton check" section (`buildSection`) holds the
+node-tile editor (`buildSkeletonChainEditor`, `ui/skeleton-chain-editor.js`) for the custom parts Triangulate's
+skeleton check judges. Below it, the parts the check would judge with them
+(`sessionSkeletonChains(activeSession, working.skeletonChains)`, custom ones marked) and each part it leaves out
+(`.settings-chains-problem`). The parts are `working.skeletonChains` (the setting's text), stored by Apply through
+`setSkeletonCheckSettings({ chains })` like every other edit; the check is still turned on in the Triangulate menu.
+Test: `tests/e2e/skeleton-check.mjs` §7.
+
 **The threshold card's examples.** It builds `buildThresholdExamples`
 (`ui/threshold-examples-panel.js`), hands it to the figure as `opts.examples`, starts it
 when the Triangulation Wizard panel is first shown, re-solves it when a Camera Views
@@ -10661,7 +10703,9 @@ background shortcuts from firing while it is open, and is removed on teardown.
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
 `./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply);
-`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf).
+`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf); `../pose/skeleton-check-run.js`
+(`getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `sessionSkeletonChains`: the skeleton check's custom
+parts); `./skeleton-chain-editor.js` (`buildSkeletonChainEditor`).
 
 **Imported by.** `ui/ui-wiring.js`.
 

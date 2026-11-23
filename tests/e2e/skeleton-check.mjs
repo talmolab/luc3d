@@ -12,7 +12,12 @@
  *      exactly the plain solve;
  *   4. the same on a LAZY session through 2 forced workers (the pass hydrates only the windows it needs);
  *   5. This frame, with the bones measured from the 3D already there: the same repair, inline;
- *   6. the display keeps a repaired group's stored 3D with the reprojection threshold on (a re-solve would undo it).
+ *   6. the display keeps a repaired group's stored 3D with the reprojection threshold on (a re-solve would undo it);
+ *   7. Settings ▸ Triangulation Wizard ▸ Skeleton check: custom parts from node tiles. A stored part with a node the
+ *      skeleton lacks shows warned; tiles dragged from the bank start a part, go to its end or before a tile, are
+ *      reordered within it and dragged back out; a click or Enter on a node adds it to the selected part; below, the
+ *      parts the check will judge and any it leaves out; nothing stored until Apply, Apply stores them, the
+ *      Triangulate menu's tooltip names them, and Triangulate All checks with them.
  * Run: node tests/e2e/skeleton-check.mjs
  */
 import { chromium } from 'playwright';
@@ -37,6 +42,7 @@ for (let i = 0; i < 120; i++) {
 
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
+const eq7 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 try {
   const browser = await chromium.launch();
@@ -157,7 +163,66 @@ try {
     r.fillKeeps = !!shown && Array.from(shown.points3d).every((v, j) => Object.is(v, before[j]));
     SET.updateTrackingThresholds({ reprojErrorThreshold: 0 });
     RUN.setSkeletonCheckSettings({ enabled: false });
+    window.__sk = { F, useSession, groupOf, node, dist3, BAD_F, BAD_T, BAD_K };
     return r;
+  });
+
+  // ---- 7. Settings ▸ Triangulation Wizard: custom parts from node tiles
+  // a part stored before (with a node this skeleton lacks) shows, warned
+  await page.evaluate(async () => {
+    (await import('/pose/skeleton-check-run.js')).setSkeletonCheckSettings({ chains: 'n1, nt' });
+    (await import('/ui/settings-modal.js')).showSettingsModal('triangulation');
+  });
+  await page.waitForSelector('.sk-chain-bank .sk-chain-tile', { timeout: 10000 });
+  const bankTile = (n) => page.locator('.sk-chain-bank .sk-chain-tile', { hasText: new RegExp('^' + n + '$') });
+  const partTile = (p, n) => page.locator(`.sk-chain-part[data-part="${p}"] .sk-chain-part-tile`, { hasText: new RegExp('^' + n + '×$') });
+  const state7 = () => page.evaluate(async () => {
+    const RUN = await import('/pose/skeleton-check-run.js');
+    const rows = [...document.querySelectorAll('.sk-chain-parts .sk-chain-part:not(.sk-chain-new)')]
+      .map(r => [...r.querySelectorAll('.sk-chain-tile-name')].map(t => t.textContent));
+    const preview = document.querySelector('.settings-chains-preview');
+    return { rows, unknown: [...document.querySelectorAll('.sk-chain-tile-unknown .sk-chain-tile-name')].map(t => t.textContent),
+             preview: preview ? preview.textContent : '', stored: RUN.getSkeletonCheckSettings().chains,
+             bank: document.querySelectorAll('.sk-chain-bank .sk-chain-tile').length };
+  });
+  const before7 = await state7();
+  await page.click('.sk-chain-part[data-part="0"] .sk-chain-part-x');                   // remove the stored part
+  await bankTile('n3').dragTo(page.locator('.sk-chain-new'));                          // start a part
+  await bankTile('n5').dragTo(page.locator('.sk-chain-part[data-part="0"]'));          // onto the row: its end
+  await bankTile('n7').dragTo(page.locator('.sk-chain-part[data-part="0"]'));
+  await bankTile('n4').dragTo(partTile(0, 'n5'), { targetPosition: { x: 2, y: 8 } });  // before n5
+  await bankTile('n6').click();                                                       // a click adds to the selected part
+  const built7 = await state7();
+  await partTile(0, 'n6').dragTo(partTile(0, 'n7'), { targetPosition: { x: 2, y: 8 } });   // reorder: n6 before n7
+  // without the mouse: New part, then Enter on nodes
+  await page.click('.sk-chain-new');
+  await bankTile('n0').focus();
+  await page.keyboard.press('Enter');
+  const keyed7 = await state7();
+  await partTile(1, 'n0').dragTo(page.locator('.sk-chain-bank'));                      // back onto the bank: out
+  const done7 = await state7();
+  await page.click('.settings-btn-apply:not(.settings-btn-triangulate)');
+  const applied7 = await page.evaluate(async () => (await import('/pose/skeleton-check-run.js')).getSkeletonCheckSettings().chains);
+  await page.keyboard.press('Escape');
+  const run7 = await page.evaluate(async () => {
+    const TRI = await import('/pose/triangulation.js');
+    const RUN = await import('/pose/skeleton-check-run.js');
+    const { F, useSession, groupOf, node, dist3, BAD_F, BAD_T, BAD_K } = window.__sk;
+    const o = { closed: !document.querySelector('.settings-overlay') };
+    RUN.setSkeletonCheckSettings({ enabled: true });
+    const s = F.mkSession('SK_TYPED', { eager: true });
+    useSession(s);
+    document.getElementById('triangulateDropdown').dispatchEvent(new Event('mouseenter'));
+    const box = document.getElementById('tbSkeletonCheck');
+    o.tooltip = (box && box.closest('label') && box.closest('label').title) || '';
+    await TRI.triangulateAllFrames('dlt');
+    const g = groupOf(s, BAD_F, BAD_T);
+    o.err = dist3(node(g.points3d, BAD_K), F.truth[BAD_F][BAD_T][BAD_K]);
+    o.marked = !!g.skeletonRepaired;
+    const sk = RUN.skeletonCheckForRun(s);
+    o.customChains = sk ? sk.chains.filter(c => c.custom).map(c => c.name) : [];
+    RUN.setSkeletonCheckSettings({ enabled: false, chains: '' });
+    return o;
   });
 
   check(out.box, 'Triangulate ▸ Skeleton check is in the menu');
@@ -173,6 +238,19 @@ try {
   check(out.frameErr < 0.25 * out.offErr && out.frameMarked && /skeleton check repaired 1 group/.test(out.frameStatus),
     'This frame: the same, inline: ' + out.frameStatus);
   check(out.fillKeeps, 'the display keeps the repaired 3D with the reprojection threshold on');
+  check(before7.bank === 8 && eq7(before7.rows, [['n1', 'nt']]) && eq7(before7.unknown, ['nt']) && /no node named nt/.test(before7.preview),
+    'Settings: a tile per node; a stored part with a node the skeleton lacks shows, warned: ' + before7.preview.slice(-60));
+  check(eq7(built7.rows, [['n3', 'n4', 'n5', 'n7', 'n6']]), 'dragged from the bank: a new part, onto its end, before a tile; a click adds to its end: ' + JSON.stringify(built7.rows));
+  check(eq7(keyed7.rows, [['n3', 'n4', 'n5', 'n6', 'n7'], ['n0']]), 'dragged within a part to reorder; New part and Enter on a node start another: ' + JSON.stringify(keyed7.rows));
+  check(/n4\+n5\+n6\+n7 \(custom\)/.test(keyed7.preview) && /n0: a part needs two nodes or more/.test(keyed7.preview),
+    'below the parts: what the check will judge, and a part it leaves out: ' + keyed7.preview.slice(0, 150));
+  check(eq7(done7.rows, [['n3', 'n4', 'n5', 'n6', 'n7']]), 'a tile dragged back onto the nodes comes out (its emptied part goes)');
+  check(done7.stored === 'n1, nt', 'nothing is stored before Apply');
+  check(applied7 === 'n3, n4, n5, n6, n7', 'Apply stores the parts');
+  check(run7.closed, 'Esc closes Settings');
+  check(/n4\+n5\+n6\+n7 \(custom\)/.test(run7.tooltip), 'the Triangulate menu\'s tooltip names the custom part');
+  check(run7.customChains.join() === 'n4+n5+n6+n7' && run7.err < 0.25 * out.offErr && run7.marked,
+    'Triangulate All checks with the custom part: n6 comes back (' + run7.err.toFixed(3) + ')');
   check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
   await browser.close();
 } catch (e) {

@@ -4,6 +4,10 @@
  *
  *   - chains from the skeleton: DoublePoke's star skeleton (hubs TTI and Head; every tail node alone, the ear pair,
  *     ...), a chain-shaped skeleton (the tail is one chain), a path without a hub (its centre), unlinked nodes;
+ *   - custom parts (Settings ▸ Triangulation Wizard, stored as text): parsing, names, what a part it cannot use says,
+ *     the links they give (the star's tail linked in order, every other link kept, either direction; a whole spine
+ *     from the nose to the tail tip), and in the solve a tail point on a neighbour's tail at the same distance from
+ *     TTI: missed by the star's links, repaired with the tail linked;
  *   - usual lengths: a steady bone gets +-50 %, one that often shortens a wider lower bound, too few poses none;
  *   - the repair: fewest changes, locked points kept, a drop when nothing fits, fewer drops on ties, better support
  *     first, a drop cannot cut a point loose, plausible chains untouched;
@@ -266,6 +270,94 @@ group('real data: two DoublePoke clips, production 2D, no volume');
         ok(dropped === 0, `${clip.name}: no point dropped without a volume`);
         ok(touched === 0, `${clip.name}: no plausible chain is touched`);
     }
+}
+
+group('custom parts: a star skeleton\'s tail judged bone by bone');
+{
+    ok(JSON.stringify(RUN.parseChainText(' TTI, Tail_0 → Tail_1\n\n Head,Nose; x ')) === JSON.stringify([['TTI', 'Tail_0', 'Tail_1'], ['Head', 'Nose'], ['x']]),
+        'lines (or ;) of names split by commas (or →), blank lines left out');
+    const TAIL = 'TTI, Tail_0, Tail_1, Tail_2, TailTip';
+    const res = RUN.resolveChainText(STAR_NAMES, 'tti, Tail_0, Tail_1, Tail_2, TailTip\nTTI, Tail_O\nNose\nTTI, Head, TTI');
+    ok(res.paths.length === 1 && Array.from(res.paths[0], k => STAR_NAMES[k]).join() === 'TTI,Tail_0,Tail_1,Tail_2,TailTip',
+        'a name matches ignoring case when only one node does');
+    ok(res.problems.length === 3 && /no node named Tail_O/.test(res.problems[0]) && /two nodes or more/.test(res.problems[1]) &&
+        /listed twice/.test(res.problems[2]), 'an unknown name, a single node and a repeated node each leave their line out, and say so');
+    const star = ix(STAR_NAMES)(STAR_LINKS);
+    const path = RUN.resolveChainText(STAR_NAMES, TAIL).paths;
+    const key = (L) => L.map(([a, b]) => [STAR_NAMES[a], STAR_NAMES[b]].sort().join('-')).sort().join();
+    const links = RUN.checkLinks(star, path);
+    const has = (a, b) => key(links).split(',').includes([a, b].sort().join('-'));
+    ok(has('TTI', 'Tail_0') && has('Tail_0', 'Tail_1') && has('Tail_1', 'Tail_2') && has('Tail_2', 'TailTip'), 'the tail is linked in order');
+    ok(!has('TTI', 'Tail_1') && !has('TTI', 'Tail_2') && !has('TTI', 'TailTip'), 'the star\'s links between tail points are gone');
+    ok(has('TTI', 'Head') && has('TTI', 'Trunk') && has('Head', 'Nose') && links.length === star.length,
+        'every other link stays (' + links.length + ' links)');
+    ok(key(RUN.checkLinks(star, RUN.resolveChainText(STAR_NAMES, 'TailTip, Tail_2, Tail_1, Tail_0, TTI').paths)) === key(links),
+        'the direction a part is listed in does not matter');
+    const { chains, hubs } = SC.skeletonChains(STAR_NAMES.length, links);
+    const tail = chains.find(ch => ch.nodes.length === 4);
+    ok(Array.from(hubs, k => STAR_NAMES[k]).join() === 'TTI,Head' && chains.length === 7, 'still hubs TTI and the Head; 7 parts');
+    ok(tail && named(STAR_NAMES, tail) === 'TailTip+Tail_0+Tail_1+Tail_2' && Array.from(tail.anchors, k => STAR_NAMES[k]).join() === 'TTI' &&
+        tail.bones.length === 8, 'the tail is one chain on TTI with four bones');
+    // the session side: names in the part's order, marked custom, problems carried
+    const sk = new pd.Skeleton('star', STAR_NAMES.slice(), star);
+    const session = { skeleton: sk, instanceGroups: new Map() };
+    const typed = RUN.sessionSkeletonChains(session, TAIL + '\nHead, Snout');
+    ok(typed.map(c => c.name).includes('Tail_0+Tail_1+Tail_2+TailTip') && typed.find(c => c.custom).name === 'Tail_0+Tail_1+Tail_2+TailTip',
+        'the custom part is named in its order and marked custom');
+    ok(typed.problems.length === 1 && /Snout/.test(typed.problems[0]), 'a part it left out is carried with the chains');
+    ok(RUN.sessionSkeletonChains(session, '').length === 10 && RUN.sessionSkeletonChains(session, '').every(c => !c.custom),
+        'no custom part: the skeleton\'s own chains');
+    // a whole spine, nose to tail tip: the neck and trunk become one chain between the Head and TTI
+    const spine = RUN.sessionSkeletonChains(session, 'Nose, Head, Neck, Trunk, TTI, Tail_0, Tail_1, Tail_2, TailTip');
+    const sp = (n) => spine.find(c => c.name === n);
+    ok(spine.problems.length === 0 && sp('Neck+Trunk') && sp('Nose') && sp('Tail_0+Tail_1+Tail_2+TailTip') &&
+        Array.from(sp('Neck+Trunk').anchors, k => STAR_NAMES[k]).sort().join() === 'Head,TTI',
+        'a whole spine: the nose on the Head, the neck and trunk between the Head and TTI, the tail on TTI (' +
+        spine.map(c => c.name).join(', ') + ')');
+    ok(RUN.sessionSkeletonChains(session, TAIL) === RUN.sessionSkeletonChains(session, TAIL), 'cached per skeleton and text');
+    RUN.setSkeletonCheckSettings({ chains: TAIL });
+    ok(RUN.sessionSkeletonChains(session).length === 7, 'without a text, the setting\'s chains');
+    RUN.setSkeletonCheckSettings({ chains: '' });
+}
+
+group('in the solve: a tail point moved to a neighbour\'s tail at the same distance from TTI');
+{
+    // TTI (0) holds a head, two haunches and a 4-point tail running straight out along x, 15 mm apart. In half the
+    // cameras Tail_1 is on a neighbour's tail: still 30 mm from TTI, but turned 90 degrees. The star judges Tail_1 only
+    // by its distance from TTI, so it misses it; the tail linked in order sees Tail_0-Tail_1 and Tail_1-Tail_2 break.
+    const T_NAMES = ['TTI', 'Head', 'Haunch_left', 'Haunch_right', 'Tail_0', 'Tail_1', 'Tail_2', 'TailTip'];
+    const T_OFFS = [[0, 0, 0], [-60, 0, 10], [-10, -15, 0], [-10, 15, 0], [15, 0, 0], [30, 0, 0], [45, 0, 0], [60, 0, 0]];
+    const T_TRUTH = T_OFFS.map(o => [centre[0] + o[0], centre[1] + o[1], centre[2] + o[2]]);
+    const T_STAR = [[0, 1], [0, 2], [0, 3], [2, 3], [0, 4], [0, 5], [0, 6], [0, 7]];
+    const nk = T_NAMES.indexOf('Tail_1');
+    seed = 7;
+    const tObserve = (noisePx, edit) => {
+        const obs = cams.map((_, c) => T_TRUTH.map(X => { const q = native(X, c); return [q[0] + noisePx * gauss(), q[1] + noisePx * gauss()]; }));
+        if (edit) edit(obs);
+        return obs;
+    };
+    const tMeasure = (edges) => SC.measureBones(SC.skeletonChains(T_NAMES.length, edges).chains, fn => {
+        for (let i = 0; i < 60; i++) fn(Float64Array.from(T_TRUTH.flat().map(v => v + 0.5 * gauss())));
+    });
+    const typedLinks = RUN.checkLinks(T_STAR, RUN.resolveChainText(T_NAMES, 'TTI, Tail_0, Tail_1, Tail_2, TailTip').paths);
+    const SK_STAR = { chains: tMeasure(T_STAR), subsetPx: 12, maxCandidates: 3 };
+    const SK_TAIL = { chains: tMeasure(typedLinks), subsetPx: 12, maxCandidates: 3 };
+    const wrong = [T_TRUTH[0][0], T_TRUTH[0][1] + 30, T_TRUTH[0][2]];
+    const obs = tObserve(0.5, o => { for (let c = 0; c < 4; c++) { const q = native(wrong, c); o[c][nk] = [q[0], q[1]]; } });
+    const tSolve = (skeleton) => {
+        const g = new pd.InstanceGroup(1, 0);
+        obs.forEach((pts, c) => g.addInstance(names[c], new pd.Instance(pts, 0, 'predicted', 1)));
+        return core.triangulateAndReproject(g, cams, { method: 'dlt', includedCameras: names, skeleton });
+    };
+    const P = (r, k) => [r.points3d[3 * k], r.points3d[3 * k + 1], r.points3d[3 * k + 2]];
+    const plain = tSolve(undefined), rStar = tSolve(SK_STAR), rTail = tSolve(SK_TAIL);
+    const plainOff = dist3(P(plain, nk), T_TRUTH[nk]);
+    ok(plainOff > 5, 'plain triangulation puts Tail_1 ' + plainOff.toFixed(0) + ' mm off');
+    ok(rStar.skeleton && rStar.skeleton.chainsRepaired === 0 && sameArr(rStar.points3d, plain.points3d),
+        'the star\'s links miss it: Tail_1 is still about 30 mm from TTI');
+    ok(rTail.skeleton && rTail.skeleton.chainsRepaired === 1 && rTail.skeleton.nodesResolved === 1 && dist3(P(rTail, nk), T_TRUTH[nk]) < 1,
+        'the tail linked in order repairs it from the cameras that agree (' + dist3(P(rTail, nk), T_TRUTH[nk]).toFixed(2) + ' mm)');
+    ok(T_NAMES.every((_, k) => k === nk || sameArr(P(rTail, k), P(plain, k))), 'and changes no other point');
 }
 
 group('pose/skeleton-check-run.js: the session side');

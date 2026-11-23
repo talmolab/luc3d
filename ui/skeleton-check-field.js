@@ -3,7 +3,8 @@
 //
 // It edits the browser-local skeleton-check setting (pose/skeleton-check-run.js `getSkeletonCheckSettings().enabled`,
 // off by default), which every Triangulate run reads when it starts: This frame and Range check inline, Triangulate
-// All in a pass after its solve. The tooltip names the chains the session's skeleton gives.
+// All in a pass after its solve. The tooltip names the parts the check judges: the skeleton's chains, with the custom
+// parts built in Settings ▸ Triangulation Wizard (ui/skeleton-chain-editor.js) marked, and any it had to leave out.
 //
 // Not in Defining Plane Mode's toolbar lock: it is a setting a run reads when it starts, not an action.
 
@@ -14,7 +15,8 @@ import { setStatus } from '../import-export/save-load.js';
 const INFO = 'Skeleton check: after Triangulate, a body part whose bones are far outside their usual lengths ' +
     '(measured on this project\'s own 3D) is repaired with the fewest point changes: each point re-solved from a ' +
     'group of cameras that agree on it, or kept when none fits (with a volume loaded: its point, or left out). A ' +
-    'point every camera agrees on is never changed. Used by the next Triangulate.';
+    'point every camera agrees on is never changed. The parts come from the skeleton\'s links, or from custom parts ' +
+    'built in Triangulate ▸ Settings…. Used by the next Triangulate.';
 
 function refresh(input, label) {
     input.checked = !!getSkeletonCheckSettings().enabled;
@@ -22,8 +24,9 @@ function refresh(input, label) {
     const session = state.session;
     const chains = sessionSkeletonChains(session);
     label.title = INFO + (!session || !session.skeleton ? ''
-        : chains.length ? ' This skeleton\'s parts: ' + chains.map(function (c) { return c.name; }).join(', ') + '.'
-        : ' This skeleton has no part to check (it needs edges).');
+        : chains.length ? ' Parts checked: ' + chains.map(function (c) { return c.name + (c.custom ? ' (custom)' : ''); }).join(', ') + '.'
+        : ' This skeleton has no part to check (it needs edges).')
+        + (chains.problems && chains.problems.length ? ' Custom parts left out: ' + chains.problems.join('; ') + '.' : '');
 }
 
 /** Wire the checkbox. Called once from `setupUI` (`ui/ui-wiring.js`). */

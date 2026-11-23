@@ -143,7 +143,8 @@ try {
 
     const folded = await page.evaluate(async () => {
         const panel = document.querySelector('.settings-panel-container');
-        const d = document.querySelector('.settings-section');
+        // Node Weights: the wizard's first section (the Triangulation Wizard has its own, earlier in the page)
+        const d = document.querySelector('.settings-panel[data-panel="wizard"] .settings-section');
         if (!d) return null;
         const before = panel.scrollHeight;
         d.querySelector('summary').click();
@@ -153,7 +154,7 @@ try {
     check(folded && folded.open === false && folded.after < folded.before,
         `folding Node Weights shortens the panel (${folded ? folded.before + ' -> ' + folded.after + 'px' : 'no foldable section'})`);
     await page.evaluate(() => {
-        const sm = document.querySelector('.settings-section summary');
+        const sm = document.querySelector('.settings-panel[data-panel="wizard"] .settings-section summary');
         if (sm) sm.click();
     });
 
