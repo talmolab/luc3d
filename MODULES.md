@@ -3884,17 +3884,25 @@ find body parts whose 3D breaks the skeleton's usual bone lengths and repair onl
   with a volume only); the result must be plausible (`chainRepairBadness` 0: judged bones
   inside their ranges and every kept point linked to an anchor through present bones, so a drop cannot cut a wrong
   piece loose); fewest changes, then fewest drops, then most support, then smallest move; none plausible = the chain
-  is left. A `locked` point is keep-only. **Never swap a whole chain**: one wrong point among right ones is the
-  common case (the volfuse study's July 13 frames 105,416 and 105,372, judged by eye).
+  is left, except its **out-of-reach points** (a chain of 2+ points): `chainReach(chain)` gives each point the
+  farthest it can be from its anchor (shortest path along the chain's bones, each at median × hi); a point beyond
+  that is impossible whatever its neighbours are, so it still takes an option within reach (a candidate, or a drop
+  where allowed), the one lowering `chainRepairBadness` most, everything else kept (`out.partial`; the core reports
+  it as `chainsPartial` and counts the chain as repaired). On SLAP's 22 proofread sessions with the tail linked in
+  order, this brought back 3 tail points up to 28,016 units off that a linked tail had left (the star's one-point
+  chains already fixed them). A one-point chain is judged by its one bone as before. A `locked` point is keep-only.
+  **Never swap a whole chain**: one wrong point among right ones is the common case (the volfuse study's July 13
+  frames 105,416 and 105,372, judged by eye).
 
-**Key exports.** `skeletonChains`, `measureBones`, `chainBadness`, `chainRepairBadness`, `checkChains`,
+**Key exports.** `skeletonChains`, `measureBones`, `chainBadness`, `chainRepairBadness`, `chainReach`, `checkChains`,
 `SKELETON_CHECK_DEFAULTS`, `MIN_BONE_SAMPLES`.
 
 **Imports.** None. **Imported by** `pose/triangulation-core.js`, `pose/skeleton-check-run.js`. Tests:
 `tests/test-skeleton-check.mjs` (chains of a star, a chain-shaped and a hub-less skeleton; ranges; the repair; the
 solve on SLAP's 8 cameras; real data `fixtures/skeleton-check-real.json`: 84 animal-frames of two DoublePoke clips,
-production 2D, no volume — every flagged chain repaired to plausible or left, no plausible chain touched),
-`tests/e2e/skeleton-check.mjs`.
+production 2D, no volume — every flagged chain repaired to plausible or left, no plausible chain touched;
+`fixtures/skeleton-check-slap-far.json`: the 3 SLAP animal-frames the out-of-reach rule repairs, against their
+proofread 3D), `tests/e2e/skeleton-check.mjs`.
 
 ---
 

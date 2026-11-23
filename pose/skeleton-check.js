@@ -20,8 +20,14 @@
  *      frame 105,413). Kept points must stay linked to an anchor through present bones, so a drop cannot cut a
  *      wrong piece loose. A LOCKED point (every camera
  *      that sees it agrees) never changes. Ties go to fewer drops, then to better-supported candidates, then to the
- *      smallest move. A chain no repair makes plausible is left as it is. Never a whole chain at once: one wrong
- *      point among right ones is the common case (the volfuse study's July 13 frames, judged by eye).
+ *      smallest move. A chain no repair makes plausible is left as it is, but for its OUT-OF-REACH points (a chain
+ *      of 2+ points, `chainReach`): a point farther from its anchor than the chain can reach, every bone on the way
+ *      at its longest plausible length, is impossible whatever its neighbours are, so it still takes the repair that
+ *      brings it within reach (a candidate within reach, or a drop where drops are allowed) and lowers the chain's
+ *      badness most. On SLAP's 22 proofread sessions with the tail linked in order, plain triangulation put 4 tail
+ *      points up to 28,014 units away inside tails no repair made plausible; the star skeleton's one-point chains
+ *      fixed them and the linked tail had left them. Never a whole chain at once: one wrong point among right ones
+ *      is the common case (the volfuse study's July 13 frames, judged by eye).
  *
  * Import-free and DOM-free: the core (pose/triangulation-core.js) runs it inside `triangulateAndReproject`
  * (`options.skeleton`), in the page or a worker.
@@ -196,16 +202,44 @@ export function chainRepairBadness(P, chain) {
 }
 
 /**
+ * How far each point of a measured chain can be from the chain's anchors: the shortest path from an anchor along the
+ * chain's bones, each bone at its longest plausible length (median x hi). -> Map(node -> { reach, anchor })
+ */
+export function chainReach(chain) {
+    const b = chain.bones, nb = b.length >> 1;
+    const best = new Map();
+    for (const a of chain.anchors) best.set(a, { reach: 0, anchor: a });
+    const done = new Set();
+    for (;;) {
+        let cur = -1, cd = Infinity;
+        for (const [k, v] of best) if (!done.has(k) && v.reach < cd) { cd = v.reach; cur = k; }
+        if (cur < 0) break;
+        done.add(cur);
+        for (let i = 0; i < nb; i++) {
+            const p = b[2 * i], q = b[2 * i + 1];
+            if (p !== cur && q !== cur) continue;
+            const o = p === cur ? q : p;
+            const d = cd + chain.medians[i] * chain.hi[i];
+            const v = best.get(o);
+            if (!v || d < v.reach) best.set(o, { reach: d, anchor: best.get(cur).anchor });
+        }
+    }
+    for (const a of chain.anchors) best.delete(a);
+    return best;
+}
+
+/**
  * The skeleton check on one pose (flat 3N, IN PLACE). `candidatesFor(k)` -> { locked: bool, cands: [{ X: [x, y, z],
  * kind: string, support: number }] }: what node k may become instead of its point (called only for the points of a
  * chain that is off). Each measured chain outside its ranges (`chainBadness` > 0) gets the fewest changes that make
  * it plausible (`chainRepairBadness` 0); ties: fewer drops, more support, smaller move. A chain no repair makes
- * plausible is left as it is. `opts.allowDrop` (default true): whether a point may be dropped at all.
- * -> { chains: chains repaired, changed: { [kind]: points }, dropped: points }
+ * plausible is left as it is, except that in a chain of 2+ points its out-of-reach points are still repaired
+ * (`chainReach`; `partial` counts those chains). `opts.allowDrop` (default true): whether a point may be dropped.
+ * -> { chains: chains repaired (partial ones included), partial, changed: { [kind]: points }, dropped: points }
  */
 export function checkChains(points3d, chains, candidatesFor, opts) {
     const allowDrop = !(opts && opts.allowDrop === false);
-    const out = { chains: 0, changed: {}, dropped: 0 };
+    const out = { chains: 0, partial: 0, changed: {}, dropped: 0 };
     if (!chains || !chains.length) return out;
     let work = null;
     for (const ch of chains) {
@@ -229,12 +263,12 @@ export function checkChains(points3d, chains, candidatesFor, opts) {
             opts.push(o);
             total *= o.length;
         }
-        if (total <= 1 || total > MAX_REPAIR_COMBOS) continue;
+        if (total <= 1) continue;
         if (!work || work.length !== points3d.length) work = new Float64Array(points3d.length);
         work.set(points3d);
         const idx = new Int32Array(K);
         let best = null;
-        for (let n = 0; n < total; n++) {
+        for (let n = 0; total <= MAX_REPAIR_COMBOS && n < total; n++) {
             let changed = 0, drops = 0, support = 0, moved = 0;
             for (let i = 0; i < K; i++) {
                 const q = 3 * ch.nodes[i], o = opts[i][idx[i]];
@@ -252,9 +286,14 @@ export function checkChains(points3d, chains, candidatesFor, opts) {
             if (better) best = { bad: bad, changed: changed, drops: drops, support: support, moved: moved, pick: Int32Array.from(idx) };
             for (let i = 0; i < K; i++) { if (++idx[i] < opts[i].length) break; idx[i] = 0; }
         }
-        if (!best || best.bad > 1e-9 || !best.changed) continue;
+        let pick = best && best.bad <= 1e-9 && best.changed ? best.pick : null;
+        if (!pick && K >= 2) {
+            pick = outOfReachRepair(points3d, ch, opts, work);
+            if (pick) out.partial++;
+        }
+        if (!pick) continue;
         for (let i = 0; i < K; i++) {
-            const q = 3 * ch.nodes[i], o = opts[i][best.pick[i]];
+            const q = 3 * ch.nodes[i], o = opts[i][pick[i]];
             if (o.kind === 'keep') continue;
             if (o.kind === 'drop') { points3d[q] = NaN; points3d[q + 1] = NaN; points3d[q + 2] = NaN; out.dropped++; continue; }
             points3d[q] = o.X[0]; points3d[q + 1] = o.X[1]; points3d[q + 2] = o.X[2];
@@ -263,4 +302,55 @@ export function checkChains(points3d, chains, candidatesFor, opts) {
         out.chains++;
     }
     return out;
+}
+
+/**
+ * A chain no repair makes plausible: its points farther from their anchor than the chain can reach (`chainReach`)
+ * each take an option that is within reach (a candidate, or a drop where allowed), every other point is kept, and of
+ * those combinations the one with the lowest `chainRepairBadness` wins (ties as in `checkChains`), if it is lower
+ * than the chain's now. `opts`: checkChains' options per chain point. -> a pick per chain point, or null.
+ */
+function outOfReachRepair(P, chain, opts, work) {
+    const reach = chainReach(chain);
+    const K = chain.nodes.length;
+    const far = [];
+    for (let i = 0; i < K; i++) {
+        const k = chain.nodes[i], r = reach.get(k), q = 3 * k;
+        if (!r || !has3(P, q) || !has3(P, 3 * r.anchor) || opts[i].length < 2) continue;
+        const A = 3 * r.anchor;
+        if (Math.hypot(P[q] - P[A], P[q + 1] - P[A + 1], P[q + 2] - P[A + 2]) <= r.reach) continue;
+        const within = [];
+        opts[i].forEach(function (o, j) {
+            if (o.kind === 'drop') { within.push(j); return; }
+            if (o.kind === 'keep') return;
+            if (Math.hypot(o.X[0] - P[A], o.X[1] - P[A + 1], o.X[2] - P[A + 2]) <= r.reach) within.push(j);
+        });
+        if (within.length) far.push({ i: i, within: within });
+    }
+    if (!far.length) return null;
+    let total = 1;
+    for (const f of far) total *= f.within.length;
+    if (total > MAX_REPAIR_COMBOS) return null;
+    const now = chainRepairBadness(P, chain);
+    const pick = new Int32Array(K), idx = new Int32Array(far.length);
+    let best = null;
+    for (let n = 0; n < total; n++) {
+        work.set(P);
+        let drops = 0, support = 0, moved = 0;
+        for (let f = 0; f < far.length; f++) {
+            const i = far[f].i, o = opts[i][far[f].within[idx[f]]], q = 3 * chain.nodes[i];
+            if (o.kind === 'drop') { work[q] = NaN; work[q + 1] = NaN; work[q + 2] = NaN; drops++; continue; }
+            work[q] = o.X[0]; work[q + 1] = o.X[1]; work[q + 2] = o.X[2];
+            support += o.support || 0;
+            moved += Math.hypot(o.X[0] - P[q], o.X[1] - P[q + 1], o.X[2] - P[q + 2]);
+        }
+        const bad = chainRepairBadness(work, chain);
+        const better = !best || bad < best.bad - 1e-9 || (Math.abs(bad - best.bad) <= 1e-9 && (drops < best.drops ||
+            (drops === best.drops && (support > best.support || (support === best.support && moved < best.moved)))));
+        if (better) best = { bad: bad, drops: drops, support: support, moved: moved, idx: Int32Array.from(idx) };
+        for (let f = 0; f < far.length; f++) { if (++idx[f] < far[f].within.length) break; idx[f] = 0; }
+    }
+    if (!best || !(best.bad < now - 1e-9)) return null;
+    for (let f = 0; f < far.length; f++) pick[far[f].i] = far[f].within[best.idx[f]];
+    return pick;
 }

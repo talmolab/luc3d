@@ -1855,7 +1855,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             return subsetCandidates(k, points3d, skObs, allObservationsRaw, included, projMatrices,
                 cameraNames.map(function (n) { return cameraMap[n]; }), px, maxC);
         }, { allowDrop: false });   // a point is re-solved or kept, never dropped
-        skeletonInfo = { chainsRepaired: sk.chains, nodesResolved: sk.changed.subset || 0, nodesDropped: sk.dropped };
+        skeletonInfo = { chainsRepaired: sk.chains, chainsPartial: sk.partial, nodesResolved: sk.changed.subset || 0,
+            nodesDropped: sk.dropped };
     }
 
     // Fast path: skip reprojections/errors when only 3D points are needed (bulk ops)

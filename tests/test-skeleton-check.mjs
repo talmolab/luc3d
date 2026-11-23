@@ -10,12 +10,15 @@
  *     TTI: missed by the star's links, repaired with the tail linked;
  *   - usual lengths: a steady bone gets +-50 %, one that often shortens a wider lower bound, too few poses none;
  *   - the repair: fewest changes, locked points kept, a drop when nothing fits, fewer drops on ties, better support
- *     first, a drop cannot cut a point loose, plausible chains untouched;
+ *     first, a drop cannot cut a point loose, plausible chains untouched; a chain no repair makes plausible still
+ *     repairs a point out of its reach (`chainReach`), and a one-point chain does not;
  *   - in the solve, on SLAP's 8 real cameras: a point half the cameras put on a neighbour comes back from the cameras
  *     that agree on the truth; a point every camera agrees on is kept; without a volume a point no camera group fits
  *     is kept, never dropped; nothing plausible is fitted; without `options.skeleton` nothing changes;
  *   - real data (tests/fixtures/skeleton-check-real.json, two DoublePoke clips, production 2D, no volume): every
- *     flagged chain is repaired to plausible or left as it was, and no plausible chain is touched;
+ *     flagged chain is repaired to plausible or left as it was, and no plausible chain is touched; and
+ *     (tests/fixtures/skeleton-check-slap-far.json) the 3 SLAP animal-frames where a linked tail held a point
+ *     thousands of units off: each comes back within 100 units of the proofread 3D;
  *   - pose/skeleton-check-run.js: the setting, the session's named chains, measuring from stored 3D, flagged frames.
  *
  * Run: node tests/test-skeleton-check.mjs
@@ -131,6 +134,34 @@ group('the repair: fewest changes, locks, drops, support');
     r = SC.checkChains(P, [CH2], k => k === 1 ? { locked: false, cands: [cand([60, 0, 0], 4)] } : { locked: true, cands: [] },
         { allowDrop: false });
     ok(r.chains === 0 && P[3] === 50, 'unless dropping is not allowed: then the chain is left as it is');
+    // ---- out of reach: a chain no repair makes plausible still fixes a point it cannot possibly hold
+    // a path 0 (anchor) - 1 - 2, bones 20 mm each, +-50 %: point 1 can be at most 30 mm from the anchor, point 2 60 mm
+    const CH3 = { nodes: Int32Array.from([1, 2]), anchors: Int32Array.from([0]), bones: Int32Array.from([0, 1, 1, 2]),
+                  medians: Float64Array.from([20, 20]), lo: Float64Array.from([0.5, 0.5]), hi: Float64Array.from([1.5, 1.5]) };
+    const reach = SC.chainReach(CH3);
+    ok(reach.get(1).reach === 30 && reach.get(2).reach === 60 && reach.get(1).anchor === 0 && !reach.has(0),
+        'how far each point can reach: every bone on the way at its longest plausible length');
+    // point 1 is too short (5 mm) and nothing fixes it, so no repair makes the chain plausible; point 2 is 5 m away
+    P = Float64Array.from([0, 0, 0, 5, 0, 0, 5000, 0, 0]);
+    r = SC.checkChains(P, [CH3], k => k === 2 ? { locked: false, cands: [cand([40, 0, 0], 3)] } : { locked: false, cands: [] },
+        { allowDrop: false });
+    ok(r.chains === 1 && r.partial === 1 && P[6] === 40 && P[3] === 5,
+        'a point out of the chain\'s reach is still repaired from a candidate within reach; the rest is left as it is');
+    P = Float64Array.from([0, 0, 0, 5, 0, 0, 5000, 0, 0]);
+    r = SC.checkChains(P, [CH3], k => k === 2 ? { locked: false, cands: [cand([3000, 0, 0], 3)] } : { locked: false, cands: [] },
+        { allowDrop: false });
+    ok(r.chains === 0 && P[6] === 5000, 'no candidate within reach: it is left as it is (never dropped without a volume)');
+    // with drops allowed (a volume) and point 1 locked, so no repair is plausible: the far point is dropped
+    P = Float64Array.from([0, 0, 0, 5, 0, 0, 5000, 0, 0]);
+    r = SC.checkChains(P, [CH3], k => k === 2 ? { locked: false, cands: [cand([3000, 0, 0], 3)] } : { locked: true, cands: [] });
+    ok(r.chains === 1 && r.partial === 1 && r.dropped === 1 && Number.isNaN(P[6]) && P[3] === 5,
+        'where drops are allowed (with a volume), a far point with no candidate within reach is dropped instead');
+    // a one-point chain is judged by its one bone, as before: a too-short candidate does not make it plausible
+    const CH1 = { nodes: Int32Array.from([1]), anchors: Int32Array.from([0]), bones: Int32Array.from([1, 0]),
+                  medians: Float64Array.from([20]), lo: Float64Array.from([0.5]), hi: Float64Array.from([1.5]) };
+    P = Float64Array.from([0, 0, 0, 5000, 0, 0]);
+    r = SC.checkChains(P, [CH1], () => ({ locked: false, cands: [cand([5, 0, 0], 3)] }), { allowDrop: false });
+    ok(r.chains === 0 && P[3] === 5000, 'a one-point chain is unchanged: only a plausible repair counts');
     // two fitting candidates: the better supported wins
     P = truth(); P[3] = 50;
     r = SC.checkChains(P, [CH2], k => k === 1 ? { locked: false, cands: [cand([21, 0, 0], 2), cand([19, 0, 0], 5)] } : { locked: true, cands: [] });
@@ -358,6 +389,51 @@ group('in the solve: a tail point moved to a neighbour\'s tail at the same dista
     ok(rTail.skeleton && rTail.skeleton.chainsRepaired === 1 && rTail.skeleton.nodesResolved === 1 && dist3(P(rTail, nk), T_TRUTH[nk]) < 1,
         'the tail linked in order repairs it from the cameras that agree (' + dist3(P(rTail, nk), T_TRUTH[nk]).toFixed(2) + ' mm)');
     ok(T_NAMES.every((_, k) => k === nk || sameArr(P(rTail, k), P(plain, k))), 'and changes no other point');
+}
+
+group('real data: SLAP tails out of reach, the tail linked in order');
+{
+    // tests/fixtures/skeleton-check-slap-far.json: the 3 SLAP animal-frames (of 98,759 scored) where plain triangulation
+    // put a tail point thousands of units from the proofread 3D inside a tail no repair makes plausible. The star's
+    // one-point chains fixed them; with the tail linked they were left until the out-of-reach rule.
+    const FX = JSON.parse(fs.readFileSync(path.join(HERE, 'fixtures', 'skeleton-check-slap-far.json'), 'utf8'));
+    const N = FX.node_names;
+    let cases = 0, partial = 0, farBefore = 0, farAfter = 0, worse = 0;
+    const fixed = [];
+    for (const S of FX.sessions) {
+        const rc = S.cameras.map(c => new pd.Camera(c.name, c.matrix, c.dist, c.rvec, c.tvec, c.size));
+        const rn = rc.map(c => c.name);
+        const chains = S.chains.map(c => ({ name: c.name, nodes: Int32Array.from(c.nodes), anchors: Int32Array.from(c.anchors),
+            bones: Int32Array.from(c.bones), medians: Float64Array.from(c.medians), lo: Float64Array.from(c.lo), hi: Float64Array.from(c.hi) }));
+        const rsolve = (cs, skeleton) => {
+            const g = new pd.InstanceGroup(1, 0);
+            cs.obs.forEach((pts, c) => {
+                if (!pts) return;
+                const inst = new pd.Instance(pts.map(p => p || [NaN, NaN]), 0, 'predicted', 1);
+                const nulled = pts.map((p, k) => p ? -1 : k).filter(k => k >= 0);
+                if (nulled.length) inst.nulledNodes = new Set(nulled);
+                g.addInstance(rn[c], inst);
+            });
+            return core.triangulateAndReproject(g, rc, { method: 'dlt', includedCameras: rn, reprojErrorThreshold: FX.reproj_px, skeleton });
+        };
+        for (const cs of S.cases) {
+            cases++;
+            const a = rsolve(cs, undefined).points3d, r = rsolve(cs, { chains, subsetPx: 12, maxCandidates: 3 }), b = r.points3d;
+            const err = (P, k) => { const X = cs.truth[k]; return X[0] == null ? NaN : Math.hypot(P[3 * k] - X[0], P[3 * k + 1] - X[1], P[3 * k + 2] - X[2]); };
+            if (r.skeleton && r.skeleton.chainsPartial > 0) partial++;
+            for (let k = 0; k < N.length; k++) {
+                const e0 = err(a, k), e1 = err(b, k);
+                if (e0 > 500) farBefore++;
+                if (e1 > 500) farAfter++;
+                if (e0 > 500 && e1 < 100) fixed.push(`${N[k]} ${e0.toFixed(0)} -> ${e1.toFixed(0)}`);
+                if (!sameArr([a[3 * k], a[3 * k + 1], a[3 * k + 2]], [b[3 * k], b[3 * k + 1], b[3 * k + 2]]) && !(e1 < e0)) worse++;
+            }
+        }
+    }
+    console.log(`    ${cases} animal-frames: points over 500 units off ${farBefore} -> ${farAfter}; ${fixed.join(', ')}`);
+    ok(cases === 3 && partial === 3, 'the out-of-reach rule repairs a point in each of them (' + partial + ' of ' + cases + ')');
+    ok(fixed.length === 3 && farAfter === farBefore - 3, 'three points thousands of units off come back within 100 units of the proofread 3D');
+    ok(worse === 0, 'and no point it changes ends farther from the proofread 3D');
 }
 
 group('pose/skeleton-check-run.js: the session side');
