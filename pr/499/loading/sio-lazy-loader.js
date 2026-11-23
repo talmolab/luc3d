@@ -31,7 +31,7 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=bec6a5ed7502';
+import { unionTrackNames } from './track-union.js?v=388836b834d4';
 
 /**
  * A store skeleton's node name → column, as `skel.nodeNames.indexOf(name)`
@@ -234,7 +234,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=bec6a5ed7502', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=388836b834d4', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -468,7 +468,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=bec6a5ed7502', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=388836b834d4', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -925,6 +925,45 @@ export class SioLazyLoader {
             return storeRowOccludedNodes(store, iStart + k, numNodes);
         };
         return { count: n, trackIdx: trackIdx, predicted: predicted, occludedNodes: occludedNodes };
+    }
+
+    /**
+     * The 2D of the store row at in-frame offset `offsetInFrame` (the value an
+     * `Instance._rawInstIndex` carries), read straight from the columns, with
+     * nothing materialized: node `k` is at `x[start + k]`, `y[start + k]` while
+     * `start + k < end` (NaN = absent) — what `lazyRowInstance` would give a
+     * released group member back (`hydrateFrameMembers2d`). For a reader of
+     * many frames' member 2D (Temporal Smoothing's adaptive method,
+     * `pose/temporal-smoothing.js`).
+     *
+     * @param {string} camName
+     * @param {number} frameIdx
+     * @param {number} offsetInFrame
+     * @returns {{x: ArrayLike<number>, y: ArrayLike<number>, start: number, end: number}|null}
+     */
+    storeRowPoints(camName, frameIdx, offsetInFrame) {
+        var labels = this.labelsByCam.get(camName);
+        var rowMap = this.frameRowByCam.get(camName);
+        var store = labels && labels._lazyDataStore;
+        if (!store || !rowMap) return null;
+        var row = rowMap.get(frameIdx);
+        if (row === undefined) return null;
+        var fd = store.framesData || {};
+        var idn = store.instancesData || {};
+        if (!idn.point_id_start) return null;
+        var iStart = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
+        var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[row] : 0) || 0;
+        var j = iStart + offsetInFrame;
+        if (!Number.isInteger(offsetInFrame) || offsetInFrame < 0 || j >= iEnd) return null;
+        // Same rule as `materializeFrame`: type 0 is a user instance.
+        var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
+        var pts = Number(rawType == null ? 0 : rawType) === 0 ? store.pointsData : store.predPointsData;
+        if (!pts || !pts.x || !pts.y) return null;
+        return {
+            x: pts.x, y: pts.y,
+            start: Number(idn.point_id_start[j]) || 0,
+            end: Number(idn.point_id_end ? idn.point_id_end[j] : 0) || 0,
+        };
     }
 
     /**

@@ -28,23 +28,23 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=bec6a5ed7502';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=bec6a5ed7502';
-import { setPageProject } from './page-title.js?v=bec6a5ed7502';
-import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=bec6a5ed7502';
+} from './app-state.js?v=388836b834d4';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=388836b834d4';
+import { setPageProject } from './page-title.js?v=388836b834d4';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=388836b834d4';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod, triangulationSettingsKey,
-} from '../pose/triangulation.js?v=bec6a5ed7502';
+} from '../pose/triangulation.js?v=388836b834d4';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=bec6a5ed7502';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=bec6a5ed7502';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=bec6a5ed7502';
+} from '../loading/session-loader.js?v=388836b834d4';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=388836b834d4';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=388836b834d4';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -52,24 +52,25 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=bec6a5ed7502';
+} from './video-filters.js?v=388836b834d4';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=bec6a5ed7502';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=388836b834d4';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=bec6a5ed7502';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=bec6a5ed7502';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=bec6a5ed7502';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=bec6a5ed7502';
+import { setSoloView } from './ui-wiring.js?v=388836b834d4';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=388836b834d4';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=388836b834d4';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=388836b834d4';
+import { refreshOutlinePanel } from './outline-flags-panel.js?v=388836b834d4';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=bec6a5ed7502';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=bec6a5ed7502';
-import { refreshSuggestionsPanel } from './suggestions-panel.js?v=bec6a5ed7502';
+import { setup3DViewport } from '../pose/initialization.js?v=388836b834d4';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=388836b834d4';
+import { refreshSuggestionsPanel } from './suggestions-panel.js?v=388836b834d4';
 
 // ============================================
 // Dockview Pane Manager
@@ -2283,6 +2284,8 @@ export async function switchSession(newIdx) {
     try { populateTimelineVisibility(newSession); } catch (e) { /* non-fatal in tests */ }
     // ID-switch results are per session: show this one's list and timeline markers.
     try { refreshIdSwitchPanel(newSession); } catch (e) { /* non-fatal in tests */ }
+    // Outline flags and empty arenas are per session too.
+    try { refreshOutlinePanel(); } catch (e) { /* non-fatal in tests */ }
 
     // Restore per-session timeline height + collapsed state. First visit
     // (no `_timelineHeight` stored) → fit to the new session's data,

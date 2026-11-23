@@ -1,6 +1,6 @@
 /**
  * ui/panel-rail.js — the right-edge icon rail and the stack of collapsible
- * panel sections it drives (Instances, Visibility, ID Switches, Videos,
+ * panel sections it drives (Instances, Visibility, ID Switches, Outlines, Videos,
  * Suggestions, Cameras, Skeleton, Session, Memory). It replaced the horizontal tab bar.
  *
  * Modelled on sleap-app's sidebar (`AppShell.tsx` `Sidebar`, rules in
@@ -43,13 +43,14 @@
  * `setupPanelRail` (it lives in `ui/ui-wiring.js`, which would close a cycle
  * for `ui/id-switch-modal.js` and `ui/plane-definition.js`).
  */
-import { railIconSvg } from './panel-rail-icons.js?v=bec6a5ed7502';
+import { railIconSvg } from './panel-rail-icons.js?v=388836b834d4';
 
 /** Rail and stack order = the old tab bar's order. `tab` is the `.panel-tab-content` element id. */
 export const PANEL_RAIL_PANELS = [
     { tab: 'tabInstances', label: 'Instances', icon: 'users' },
     { tab: 'tabVisibility', label: 'Visibility', icon: 'eye' },
     { tab: 'tabIdSwitches', label: 'ID Switches', icon: 'arrow-left-right' },
+    { tab: 'tabOutlines', label: 'Outlines', icon: 'lasso' },
     { tab: 'tabVideos', label: 'Videos', icon: 'film' },
     { tab: 'tabSuggestions', label: 'Suggestions', icon: 'lightbulb' },
     { tab: 'tabCameras', label: 'Cameras', icon: 'camera' },

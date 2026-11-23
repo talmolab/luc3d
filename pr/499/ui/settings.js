@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=bec6a5ed7502';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=388836b834d4';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -100,6 +100,9 @@ const ACTION_CATALOG = [
     { id: 'togglePredicted', label: 'Toggle Predictions', category: 'View', binding: 'p', editable: true, dispatched: true },
     { id: 'toggleReproj', label: 'Toggle Reprojections', category: 'View', binding: 'r', editable: true, dispatched: true },
     { id: 'toggleErrors', label: 'Toggle Errors', category: 'View', binding: 'e', editable: true, dispatched: true },
+    { id: 'toggleOutlines', label: 'Toggle Animal Outlines', category: 'View', binding: 'o', editable: true, dispatched: true },
+    { id: 'flagOutline', label: 'Flag the Outline Under the Pointer', category: 'View', binding: 'Shift+o', editable: true, dispatched: true },
+    { id: 'outlineBrush', label: 'Outline Brush (hold left to draw, right to erase)', category: 'View', binding: 'b', editable: true, dispatched: true },
     { id: 'definePlanes', label: 'Toggle Defining Plane Mode', category: 'View', binding: 'Mod+Shift+P', editable: true, dispatched: true },
 
     // --- Help ---
@@ -534,24 +537,52 @@ export function getTrackingThresholds() {
 //
 // Both kernels default to 0 = off, matching `reprojErrorThreshold`: shipping
 // this must not change the 3D of any existing project until someone asks for it.
+//
+// `method` says which method a parameter belongs to ('windows' | 'adaptive');
+// the panel shows only the chosen method's. `smoothingMethod` is a choice stored
+// as a number (0 = median + Gaussian, 1 = adaptive; `resolveSmoothingParams`),
+// one or the other. The default is Adaptive, which smooths on the first click
+// with nothing to set, also for someone whose median or Gaussian window is
+// stored (those stay, for when Median + Gaussian is picked). A new id, not the
+// PR previews' `smoothMethod`: a choice saved there (an Apply while those
+// previews kept stored windows on the windows method) is never read.
+export const SMOOTH_METHOD_CHOICES = [
+    { value: 1, label: 'Adaptive' },
+    { value: 0, label: 'Median + Gaussian' },
+];
 export const SMOOTHING_PARAMS = [
     {
-        id: 'smoothMedianWindow', label: 'Median window (frames)', default: 0,
+        id: 'smoothingMethod', label: 'Method', default: 1,
+        min: 0, max: 1, step: 1, kind: 'choice', options: SMOOTH_METHOD_CHOICES,
+        desc: 'One or the other runs, never both. Adaptive (3D adaptive temporal averaging, the default): each node\'s window, per frame, grows while its next 3D point lies within the gate of this one (judged by both points\' uncertainty, from their camera views) and is cut symmetric, then the points are averaged, the more certain ones counting more. Long windows on a still node, a frame or two in fast motion, and no window across a jump (an ID swap) or a gap. On 60 fps mice it never made the 3D worse and halved frame-to-frame jitter. Median + Gaussian: fixed windows you set, the same for every node and frame, a median first, then a Gaussian.',
+    },
+    {
+        id: 'smoothAtaK', label: 'Gate (standard deviations)', default: 3, method: 'adaptive',
+        min: 0.5, max: 10, step: 0.5,
+        desc: 'A frame joins the window while its 3D point is within this many standard deviations of the current frame\'s, under both points\' covariance (from each point\'s views and reprojection errors). Wider lets more frames in, smoothing still nodes more, but also averages across smaller jumps: at 1 mm of noise, 3 stops at swaps over about 4 mm. Pure noise fails the gate by chance 2.9% of the time at 3, 26% at 2.',
+    },
+    {
+        id: 'smoothAtaHmax', label: 'Longest half-window (frames)', default: 15, method: 'adaptive',
+        min: 0, max: 100, step: 1,
+        desc: 'A window reaches at most this many frames each way, so at most 2 x this + 1 frames are averaged (15: 31 frames, half a second at 60 fps). Only a still node gets that long. 0 = off.',
+    },
+    {
+        id: 'smoothMedianWindow', label: 'Median window (frames)', default: 0, method: 'windows',
         min: 0, max: 101, step: 2,
         desc: 'Stage 1, over time. Replaces each node\'s x, y and z with that node\'s median over this many frames, which removes one-frame spikes without averaging. Coerced to the next odd value so the window stays centered on the frame being written. 0 = off. Note that a median filter erases any feature narrower than about half the window, so keep it short for fast motion.',
     },
     {
-        id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0,
+        id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0, method: 'windows',
         min: 0, max: 101, step: 2,
         desc: 'Stage 2, over time, applied to the median\'s output. A weighted average of each node\'s x, y and z over this many frames, with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. 3 barely changes anything (each frame keeps about 98% of its own value); 5 is the smallest window that smooths. Coerced to the next odd value. 0 = off.',
     },
     {
-        id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5,
+        id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5, method: 'windows',
         min: 0, max: 1000, step: 1,
         desc: 'An absence longer than this splits the trajectory into separate segments, and no window ever spans the break. This is what stops a filter from drawing a straight line through an occlusion or through the frames where the animal left. Shorter absences stay inside a segment as holes, which the filter skips over. Missing points are never filled in either case.',
     },
     {
-        id: 'smoothMinSegment', label: 'Minimum segment length (frames)', default: 5,
+        id: 'smoothMinSegment', label: 'Minimum segment length (frames)', default: 5, method: 'windows',
         min: 1, max: 1000, step: 1,
         desc: 'A segment shorter than this is left untouched rather than smoothed from too few samples. The analogue of aniposelib\'s refusal to optimize below 20 finite 3D points.',
     },
@@ -567,6 +598,7 @@ export function getSmoothingParamDefs() {
             id: p.id, label: p.label, default: p.default,
             value: getSmoothingParam(p.id),
             min: p.min, max: p.max, step: p.step, desc: p.desc,
+            kind: p.kind || 'number', options: p.options || null, method: p.method || null,
         };
     });
 }
@@ -600,6 +632,16 @@ export function setSmoothingParams(map) {
     }
     _settings.smoothingParams = next;
     persist();
+    for (var i = 0; i < _smoothingListeners.length; i++) {
+        try { _smoothingListeners[i](); } catch (e) { /* ignore */ }
+    }
+}
+
+// Called after every `setSmoothingParams` (the Smooth menu's Method follows
+// Settings ▸ Temporal Smoothing's Apply).
+const _smoothingListeners = [];
+export function onSmoothingParamsChange(fn) {
+    if (typeof fn === 'function') _smoothingListeners.push(fn);
 }
 
 // Commit an { id: value } override map (from the Tracking Wizard's Apply button).

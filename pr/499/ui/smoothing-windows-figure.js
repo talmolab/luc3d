@@ -1,6 +1,9 @@
 // ui/smoothing-windows-figure.js
 // The Settings ▸ Temporal Smoothing figure: what the Median window and the
-// Gaussian window each do, as two cards side by side (stage 1, stage 2).
+// Gaussian window each do (stage 1, stage 2 of the Median + Gaussian method),
+// or what the Adaptive method does instead. Only the method in use (Settings'
+// `smoothingMethod`, toggled above the figure) is shown: one or the other runs,
+// never both.
 //
 // Both cards plot the same made-up trace: one node's x position over 40 frames
 // (a slow back-and-forth movement, a white line under everything else), as
@@ -44,12 +47,29 @@
 // two sliders try values the same way, and its Use button reports both through
 // `onParam`.
 //
+// The Adaptive card runs LUC3D's own `ataSmoothSeriesInto` on the same raw
+// trace (one coordinate of a 3D series; every point weighed by the trace's own
+// jitter, as a real point is by its views). It draws the output (violet), the
+// window around the picked frame, and the test that grew it: each frame tried
+// on either side as a stem as tall as its distance from the picked frame in
+// standard deviations, under a dashed line at the gate. Frames inside the
+// window are violet, the first one over the gate (which stops that side) red,
+// and frames that passed but were cut so both sides match grey. It does not
+// remove the spike (its own window is 1 frame; on this trace frames 10, 12 and
+// 13 still take it in, their own values being close to it), and the text says
+// so. Its sliders try
+// a gate and a longest half-window, and its Use button sets them.
+//
+// The cards of the method not in use (Settings' `smoothingMethod`) are hidden.
+//
 // Depends on: pose/temporal-smoothing.js (`smoothSignalInto`, `normalizeWindow`,
-// `sigmaForWindow`, `buildSegments`), ui/figure-try-controls.js. Colours come from
-// `styles.css` (`.smooth-fig`).
+// `sigmaForWindow`, `buildSegments`), pose/adaptive-temporal-averaging.js
+// (`ataSmoothSeriesInto`, `ATA_DEFAULT_K`, `ATA_DEFAULT_HMAX`),
+// ui/figure-try-controls.js. Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from '../pose/temporal-smoothing.js?v=bec6a5ed7502';
-import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js?v=bec6a5ed7502';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from '../pose/temporal-smoothing.js?v=388836b834d4';
+import { ataSmoothSeriesInto, ATA_DEFAULT_K, ATA_DEFAULT_HMAX } from '../pose/adaptive-temporal-averaging.js?v=388836b834d4';
+import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js?v=388836b834d4';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[8, 28]];                 // [frame, mm] one-frame spikes
@@ -244,6 +264,78 @@ function gaussianChart(window, input, out, inputHasSpikes, t, upto) {
         + (inputHasSpikes ? SPIKES.map(function (sp) { return spikeArrow(sp[0], input); }).join('') : ''), on ? t : 0);
 }
 
+// ---- The Adaptive card ------------------------------------------------------
+
+// The raw trace's jitter is 14 * (u1 + u2 - 1) mm, u uniform: sd 14 / sqrt(6).
+var ATA_SIGMA = 14 / Math.sqrt(6);
+var ATA_FOCUS = 26;                      // after the fast move: stopped by it on the left, cut on the right
+var GATE_SCALE = 6;                      // the stems' top, in standard deviations
+
+/** LUC3D's adaptive averaging of the raw trace: `{out, half}` (half -1 never: every frame is present). */
+function runAdaptive(k, hmax) {
+    var x = new Float64Array(N * 3), cov = new Float64Array(N * 6), o3 = new Float64Array(N * 3), half = new Int32Array(N);
+    var s2 = ATA_SIGMA * ATA_SIGMA;
+    for (var t = 0; t < N; t++) {
+        x[t * 3] = RAW[t];
+        cov[t * 6] = s2; cov[t * 6 + 3] = s2; cov[t * 6 + 5] = s2;
+    }
+    ataSmoothSeriesInto(x, cov, N, { k: k, hmax: hmax }, o3, half);
+    var out = new Float64Array(N);
+    for (var i = 0; i < N; i++) out[i] = o3[i * 3];
+    return { out: out, half: half };
+}
+
+/** Frame `u`'s distance from frame `t`, in standard deviations of their difference (the gate's measure). */
+function gateDistance(t, u) { return Math.abs(RAW[u] - RAW[t]) / (ATA_SIGMA * Math.SQRT2); }
+
+/**
+ * The test that grew frame `t`'s window: each side tried one frame at a time
+ * until one is over the gate, the trace ends, or `hmax`. Returns the frames
+ * tried, each `{f, z, cls}`: in the window, the one that stopped its side, or
+ * passed but cut so both sides match.
+ */
+function gateTrials(t, k, hmax, h) {
+    var tried = [];
+    [-1, 1].forEach(function (dir) {
+        for (var d = 1; d <= hmax; d++) {
+            var u = t + dir * d;
+            if (u < 0 || u >= N) break;
+            var z = gateDistance(t, u), over = !(z < k);
+            tried.push({ f: u, z: z, cls: over ? 'sf-gate-stop' : d <= h ? 'sf-gate-in' : 'sf-gate-cut' });
+            if (over) break;
+        }
+    });
+    return tried;
+}
+
+function adaptiveChart(k, hmax, res, t, upto) {
+    var on = hmax > 0, inner = '';
+    if (on) {
+        var h = res.half[t], H = 40;
+        inner += band(t, 2 * h + 1);
+        // The gate, as a dashed line at k standard deviations on the stems' scale.
+        var gy = Y1 - H * Math.min(k, GATE_SCALE) / GATE_SCALE;
+        inner += '<line x1="' + X0 + '" y1="' + f1(gy) + '" x2="' + X1 + '" y2="' + f1(gy) + '" class="sf-gate-line"/>'
+            + '<text x="' + X0 + '" y="' + f1(gy - 2) + '" class="sf-note">gate</text>';
+        gateTrials(t, k, hmax, h).forEach(function (g) {
+            var x = f1(px(g.f));
+            inner += '<line x1="' + x + '" y1="' + Y1 + '" x2="' + x + '" y2="' + f1(Y1 - H * Math.min(g.z, GATE_SCALE) / GATE_SCALE)
+                + '" class="sf-gate ' + g.cls + '"/>';
+        });
+    }
+    inner += '<path d="' + path(RAW) + '" class="sf-raw-line"/>';
+    if (on) {
+        inner += outLine(res.out, 'sf-out sf-out-ata', upto);
+        for (var f = 0; f < N; f++) {
+            inner += '<circle cx="' + f1(px(f)) + '" cy="' + f1(py(res.out[f])) + '" r="2.2" class="sf-ata-node'
+                + (upto != null && f > upto ? ' sf-ahead' : '') + '"/>';
+        }
+    }
+    inner += dots(RAW, true) + (on ? current(res.out, t, upto) : '');
+    return chart('Adaptive window: each frame\'s window grows while the frames around it stay within the gate of it, '
+        + 'is cut so both sides match, and is averaged.', inner, on ? t : 0);
+}
+
 // ---- Card 3: gaps and segments ----------------------------------------------
 
 var GN = 60;                                     // frames in the gap card's trace
@@ -358,6 +450,13 @@ function gaussianKeys(on, rawInput) {
         ['weight', 'each frame\'s weight']].map(function (k) { return on ? k : k.concat(true); }));
 }
 
+/** The Adaptive card's legend entries (absent, not removed, while it is off). */
+function adaptiveKeys(on) {
+    return [KEY_TRUE, KEY_RAW, KEY_SPIKE].concat([['ata', 'after adaptive'], KEY_BAND,
+        ['gate-in', 'distance in SD: in the window'], ['gate-stop', 'over the gate: stops that side'],
+        ['gate-cut', 'cut so both sides match']].map(function (k) { return on ? k : k.concat(true); }));
+}
+
 /** Shown only while a frame is picked, which is when the ring is drawn. */
 var PICKED_KEY = '<span class="sf-picked-key" hidden><i class="sf-key-current"></i>value at the picked frame</span>';
 
@@ -389,6 +488,10 @@ function posControl(name) {
     return { name: 'Frame', aria: 'Frame the ' + name + ' window is on', min: 1, max: N, step: 1, unit: '/ ' + N,
         extra: '<button type="button" class="sf-play" aria-label="Play: slide the ' + name + ' window across the frames">▶</button>' };
 }
+var GATE_CONTROL = { name: 'Gate', aria: 'Adaptive gate (standard deviations)', min: 0.5, max: 10, step: 0.5, unit: 'SD' };
+var HMAX_SLIDER_MAX = 30;
+var HMAX_CONTROL = { name: 'Up to', aria: 'Adaptive longest half-window (frames)', min: 0, max: 100, step: 1,
+    sliderMax: HMAX_SLIDER_MAX, unit: 'each way', ticks: [[0, 'off']] };
 var GAP_CONTROL = { name: 'Max gap', aria: 'Max gap to smooth across (frames)', min: 0, max: GAP_MAX, step: 1, sliderMax: GAP_SLIDER_MAX, unit: 'frames' };
 var MINSEG_CONTROL = { name: 'Min segment', aria: 'Minimum segment length (frames)', min: 1, max: GAP_MAX, step: 1, sliderMax: GAP_SLIDER_MAX, unit: 'frames' };
 
@@ -454,10 +557,12 @@ export function buildSmoothingWindowsFigure(opts) {
     fig.innerHTML =
         '<p class="smooth-fig-lead">One node\'s x position over 40 frames, made up for this sketch: the true '
         + 'movement (white), with one fast move, and its 3D as triangulated (grey), with jitter and '
-        + 'a one-frame spike (red). The '
-        + 'median\'s output (green) is the Gaussian\'s input, and the Gaussian\'s output is blue; both are computed '
-        + 'with LUC3D\'s own filter. y and z, and every node, are filtered the same way, each on its own. On each '
-        + 'card, Window tries a window size and Frame or ▶ slides the window along the frames; only Use changes '
+        + 'a one-frame spike (red). '
+        + '<span data-method="0">The median\'s output (green) is the Gaussian\'s input, and the Gaussian\'s output '
+        + 'is blue; both are computed with LUC3D\'s own filter.</span>'
+        + '<span data-method="1">The adaptive output (violet) is computed with LUC3D\'s own filter.</span>'
+        + ' y and z, and every node, are filtered the same way, each on its own. On each '
+        + 'card, the sliders try values and Frame or ▶ slides the window along the frames; only Use changes '
         + 'your setting.</p>'
         + '<div class="smooth-fig-cols">'
         + '<div class="smooth-fig-col" data-stage="median">'
@@ -478,6 +583,20 @@ export function buildSmoothingWindowsFigure(opts) {
         + 'the smallest window that smooths. A long window also damps fast real movement: raise the window and '
         + 'watch the blue line fall short of the tall white peak.</p>'
         + '<p class="smooth-fig-warn" hidden>The median is off, so the Gaussian spreads the spike into a bump.</p></div>'
+        + '<div class="smooth-fig-col" data-stage="adaptive">'
+        + '<div class="smooth-fig-name">Adaptive window<span class="fig-big"></span><small></small>' + STAGE_LEGEND + '</div><div class="smooth-fig-chart"></div>'
+        + tryStrip(tryControl('gate', GATE_CONTROL) + tryControl('hmax', HMAX_CONTROL) + tryControl('pos', posControl('adaptive')))
+        + settingRow('adaptive')
+        + '<p>Each frame\'s window grows one frame at a time '
+        + 'on each side while the next frame lies within the gate of this one (stems: its distance in standard '
+        + 'deviations, from the two points\' uncertainty; in LUC3D that comes from each point\'s camera views). '
+        + 'The first frame over the gate stops that side (red), the window is cut so both sides match, and the '
+        + 'frames in it are averaged, the more certain ones counting more. A slow stretch gets a long window; the '
+        + 'fast move gets almost none, so its peak stays. It does not remove a spike the way the median does: the '
+        + 'spike\'s own window is 1 frame, so it keeps its value, and a neighbour whose own value happens to be close '
+        + 'to it can still take it in. Here every point is equally certain; in LUC3D a point whose views disagree is '
+        + 'less certain, so its neighbours outweigh it. Slide Frame across the fast move and watch the window '
+        + 'shrink.</p></div>'
         + '</div>'
         + '<div class="smooth-fig-col smooth-fig-wide" data-stage="gaps">'
         + '<div class="smooth-fig-name">3 · Gaps and segments<span class="fig-big"></span><small></small></div><div class="smooth-fig-chart"></div>'
@@ -518,6 +637,36 @@ export function buildSmoothingWindowsFigure(opts) {
             off: function () { commit(PARAM[k], 0); redraw(); },
             reset: function () { tried[PARAM[k]] = setting[PARAM[k]] || 0; redraw(); },
         });
+        wirePlay(k);
+    });
+
+    // The Adaptive card: Gate, Up to (the longest half-window) and Frame.
+    var ataCard = cards.adaptive = fig.querySelector('[data-stage="adaptive"]');
+    state.adaptive = { pos: ATA_FOCUS, upto: null, timer: 0 };
+    var gateCtl = wireTryControl(ataCard, 'gate', GATE_CONTROL, function (v) { tried.smoothAtaK = v; redraw(); });
+    var hmaxCtl = wireTryControl(ataCard, 'hmax', HMAX_CONTROL, function (v) { tried.smoothAtaHmax = Math.floor(v); redraw(); });
+    posCtl.adaptive = wireTryControl(ataCard, 'pos', posControl('adaptive'), function (v) {
+        stop('adaptive');
+        state.adaptive.pos = state.adaptive.upto = v - 1;
+        render('adaptive');
+    });
+    var showAtaSetting = wireSettingRow(ataCard, 'adaptive', {
+        use: function () {
+            commit('smoothAtaK', ataValue('smoothAtaK', tried));
+            commit('smoothAtaHmax', ataValue('smoothAtaHmax', tried));
+            redraw();
+        },
+        off: function () { commit('smoothAtaHmax', 0); redraw(); },
+        reset: function () {
+            tried.smoothAtaK = setting.smoothAtaK;
+            tried.smoothAtaHmax = setting.smoothAtaHmax;
+            redraw();
+        },
+    });
+    wirePlay('adaptive');
+
+    function wirePlay(k) {
+        var el = cards[k];
         var play = el.querySelector('.sf-play');
         play.addEventListener('click', function () {
             if (state[k].timer) { stop(k); return; }
@@ -534,7 +683,7 @@ export function buildSmoothingWindowsFigure(opts) {
                 render(k);
             }, STEP_MS);
         });
-    });
+    }
 
     // Card 3's controls: Max gap and Minimum segment length.
     var gapCard = fig.querySelector('[data-stage="gaps"]');
@@ -560,6 +709,18 @@ export function buildSmoothingWindowsFigure(opts) {
         if (opts.onParam) opts.onParam(id, value);
     }
 
+    /** Settings' `smoothingMethod`: 0 median + Gaussian, 1 adaptive. */
+    function methodOf(from) { return +from.smoothingMethod === 1 ? 1 : 0; }
+
+    function ataValue(id, from) {
+        if (id === 'smoothAtaK') {
+            var k = +from.smoothAtaK;
+            return k > 0 ? k : ATA_DEFAULT_K;
+        }
+        var h = from.smoothAtaHmax == null ? ATA_DEFAULT_HMAX : Math.floor(+from.smoothAtaHmax);
+        return h >= 0 ? h : ATA_DEFAULT_HMAX;
+    }
+
     function gapValue(id, from) {
         if (id === 'smoothMaxGap') return from.smoothMaxGap == null ? GAP_DEFAULT.maxGap : Math.max(0, Math.floor(+from.smoothMaxGap) || 0);
         return from.smoothMinSegment == null ? GAP_DEFAULT.minSegment : Math.max(1, Math.floor(+from.smoothMinSegment) || 1);
@@ -577,9 +738,11 @@ export function buildSmoothingWindowsFigure(opts) {
         if (!data) return;
         var st = state[k], el = cards[k];
         posCtl[k].set(st.pos + 1);
-        var on = (k === 'median' ? data.medShown : data.gauShown) > 0;
+        var on = (k === 'median' ? data.medShown : k === 'gaussian' ? data.gauShown : data.ataH) > 0;
         el.querySelector('.sf-picked-key').hidden = !on || st.upto == null;
-        if (k === 'median') {
+        if (k === 'adaptive') {
+            el.querySelector('.smooth-fig-chart').innerHTML = adaptiveChart(data.ataK, data.ataH, data.ata, st.pos, st.upto);
+        } else if (k === 'median') {
             el.querySelector('.smooth-fig-chart').innerHTML = medianChart(data.medShown, data.medOut, st.pos, st.upto);
         } else {
             el.querySelector('.smooth-fig-chart').innerHTML =
@@ -613,8 +776,44 @@ export function buildSmoothingWindowsFigure(opts) {
         var rawIntoGaussian = !mw && !!gw;
         var gauShown = gw || (gSet > 0 ? 1 : 0);
         var gauOut = run(gauIn, 'gaussian', gauShown);
+        var ataK = ataValue('smoothAtaK', tried), ataH = ataValue('smoothAtaHmax', tried);
         data = { medShown: medShown, medOut: medOut, gauShown: gauShown, gauIn: gauIn, gauOut: gauOut,
-            rawIntoGaussian: rawIntoGaussian, rawInput: !mw };
+            rawIntoGaussian: rawIntoGaussian, rawInput: !mw,
+            ataK: ataK, ataH: ataH, ata: ataH > 0 ? runAdaptive(ataK, ataH) : null };
+
+        // Only the method in use is shown (its cards, and its part of the lead).
+        var method = methodOf(setting);
+        [['median', 0], ['gaussian', 0], ['gaps', 0], ['adaptive', 1]].forEach(function (c) {
+            (cards[c[0]] || gapCard).hidden = method !== c[1];
+        });
+        fig.querySelectorAll('.smooth-fig-lead [data-method]').forEach(function (el) { el.hidden = +el.dataset.method !== method; });
+
+        // The Adaptive card.
+        var ataOn = ataH > 0;
+        ataCard.querySelector('.fig-big').textContent = ataOn ? 'up to ' + plural(2 * ataH + 1) : 'off';
+        var meanWin = 0;
+        if (ataOn) {
+            for (var t = 0; t < N; t++) meanWin += 1 + 2 * data.ata.half[t];
+            meanWin /= N;
+        }
+        ataCard.querySelector('small').textContent = ataOn
+            ? 'gate ' + ataK + ' SD; mean window here ' + (Math.round(meanWin * 10) / 10) + ' frames'
+            : 'set Up to above 0 to try it';
+        ataCard.querySelector('.sf-legend-items').innerHTML = legendItems(adaptiveKeys(ataOn));
+        if (!ataOn) stop('adaptive');
+        ataCard.querySelectorAll('[data-try="pos"] input, .sf-play').forEach(function (c) { c.disabled = !ataOn; });
+        gateCtl.set(ataK, ataK);
+        hmaxCtl.set(ataH, Math.min(ataH, HMAX_SLIDER_MAX));
+        var sK = ataValue('smoothAtaK', setting), sH = ataValue('smoothAtaHmax', setting);
+        showAtaSetting({
+            label: 'Your setting',
+            now: sH > 0 ? 'gate ' + sK + ' SD, up to ' + plural(2 * sH + 1) : 'off',
+            unsaved: sK !== ataValue('smoothAtaK', saved) || sH !== ataValue('smoothAtaHmax', saved),
+            use: ataOn && (ataK !== sK || ataH !== sH) ? 'Use gate ' + ataK + ' SD, up to ' + plural(2 * ataH + 1) : null,
+            off: sH > 0,
+            reset: ataK !== sK || ataH !== sH,
+        });
+        render('adaptive');
 
         [['median', medShown, mSet], ['gaussian', gauShown, gSet]].forEach(function (c) {
             var k = c[0], shown = c[1], typed = c[2], off = !(typed > 0), el = cards[k], id = PARAM[k];

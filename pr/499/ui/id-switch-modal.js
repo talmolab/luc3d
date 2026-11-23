@@ -28,24 +28,24 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=bec6a5ed7502';
-import { state, getActiveSession } from './app-state.js?v=bec6a5ed7502';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=bec6a5ed7502';
-import { showPanelTab } from './panel-rail.js?v=bec6a5ed7502';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=bec6a5ed7502';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=bec6a5ed7502';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=bec6a5ed7502';
-import { getTrackingThreshold } from './settings.js?v=bec6a5ed7502';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=bec6a5ed7502';
-import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=bec6a5ed7502';
+import { noteProgress } from './progress-delta.js?v=388836b834d4';
+import { state, getActiveSession } from './app-state.js?v=388836b834d4';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=388836b834d4';
+import { showPanelTab } from './panel-rail.js?v=388836b834d4';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=388836b834d4';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=388836b834d4';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=388836b834d4';
+import { getTrackingThreshold } from './settings.js?v=388836b834d4';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=388836b834d4';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=388836b834d4';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=bec6a5ed7502';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=bec6a5ed7502';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=bec6a5ed7502';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=bec6a5ed7502';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=388836b834d4';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=388836b834d4';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=388836b834d4';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=388836b834d4';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=bec6a5ed7502';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=388836b834d4';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -251,7 +251,7 @@ function openProgressDialog(title) {
             if (frac != null) {
                 var pct = Math.round(100 * Math.min(1, Math.max(0, frac))) + '%';
                 fill.style.width = head.style.left = pct;
-                noteProgress(fill, parseFloat(pct) / 100);
+                noteProgress(fill, parseFloat(pct) / 100, { head: head });   // one glide for fill, playhead and lit stretch
                 pctEl.textContent = pct;
             }
         },

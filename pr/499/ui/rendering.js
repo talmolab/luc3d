@@ -6,38 +6,39 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked, videoController } from './app-state.js?v=bec6a5ed7502';
-import { planOverlayWindow, overlayPlanCovers } from './overlay-window.js?v=bec6a5ed7502';
-import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=bec6a5ed7502';
+import { state, interactionManager, timeline, isViewDocked, videoController } from './app-state.js?v=388836b834d4';
+import { planOverlayWindow, overlayPlanCovers } from './overlay-window.js?v=388836b834d4';
+import { points3dNodeCount, isPoints3dFromFile, isPoints3dSmoothed } from '../pose/pose-data.js?v=388836b834d4';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, reprojectStoredPoints3d, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=bec6a5ed7502';
-import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=bec6a5ed7502';
-import { drawFrameOverlays } from './overlays.js?v=bec6a5ed7502';
-import { syncViewLegends } from './view-legend.js?v=bec6a5ed7502';
-import { isCameraTracked, getTrackingThreshold } from './settings.js?v=bec6a5ed7502';
+} from '../pose/triangulation.js?v=388836b834d4';
+import { dropDerivedReprojections } from '../pose/lazy-residency.js?v=388836b834d4';
+import { drawFrameOverlays } from './overlays.js?v=388836b834d4';
+import { syncViewLegends } from './view-legend.js?v=388836b834d4';
+import { isCameraTracked, getTrackingThreshold } from './settings.js?v=388836b834d4';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=bec6a5ed7502';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=388836b834d4';
+import { drawAnimalOutlines } from './animal-outlines.js?v=388836b834d4';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=bec6a5ed7502';
-import { syncTailMarkField } from './tail-mark-field.js?v=bec6a5ed7502';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=bec6a5ed7502';
-import { syncSmoothingButton } from './smoothing-button.js?v=bec6a5ed7502';
-import { syncRunButtons } from './run-buttons.js?v=bec6a5ed7502';
+import { syncAnimalCountField } from './animal-count-field.js?v=388836b834d4';
+import { syncTailMarkField } from './tail-mark-field.js?v=388836b834d4';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=388836b834d4';
+import { syncSmoothingButton } from './smoothing-button.js?v=388836b834d4';
+import { syncRunButtons } from './run-buttons.js?v=388836b834d4';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=bec6a5ed7502';
-import { updateFrameInfo } from './info-panel.js?v=bec6a5ed7502';
-import { refreshSuggestionsPanel } from './suggestions-panel.js?v=bec6a5ed7502';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=388836b834d4';
+import { updateFrameInfo } from './info-panel.js?v=388836b834d4';
+import { refreshSuggestionsPanel } from './suggestions-panel.js?v=388836b834d4';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=bec6a5ed7502';
+} from './frame-counters.js?v=388836b834d4';
 
 // ============================================
 // Reproj/Error visibility
@@ -577,8 +578,10 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         // project — the shared `frameIdx`.
         var vFrameGroup = frameGroup, vGroups = instanceGroups, vSelected = selectedInstanceGroup;
         var vFrame = viewFrames ? viewFrames[view.name] : undefined;
+        var vIdx = frameIdx;
         if (vFrame != null && vFrame !== frameIdx &&
             !(state.session.lazyLoader && !state.session.frameGroups.has(vFrame))) {
+            vIdx = vFrame;
             vFrameGroup = state.session.getFrameGroup(vFrame);
             vGroups = getInstanceGroupsForFrame(vFrame);
             if (!filledFrames) filledFrames = new Set();
@@ -754,6 +757,10 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             editGroupTarget: editGroupTarget,
             trackingExcluded: !isCameraTracked(view.name),
         });
+
+        // Visibility ▸ Animal Outlines: drawn BEHIND the skeletons just drawn
+        // (`destination-over`), at the frame this view shows. A no-op when off.
+        drawAnimalOutlines(view, vIdx, vFrameGroup, vGroups, { overlaySizeScale: overlaySizeScale });
 
         // Annotated planes (View ▸ Define Planes). Frame-independent, so they
         // are drawn on every frame regardless of the current FrameGroup.
