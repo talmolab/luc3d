@@ -53,12 +53,13 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=eb53293de371';
-import { points3dNodeCount } from '../pose/pose-data.js?v=eb53293de371';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=eb53293de371';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=eb53293de371';
-import { writePlaneMetadata } from './plane-metadata.js?v=eb53293de371';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=eb53293de371';
+import { _buildSioPoints } from './file-io.js?v=9b5658fec914';
+import { points3dNodeCount } from '../pose/pose-data.js?v=9b5658fec914';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=9b5658fec914';
+import { writeOutlineFlagsMetadata } from './outline-flags-metadata.js?v=9b5658fec914';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=9b5658fec914';
+import { writePlaneMetadata } from './plane-metadata.js?v=9b5658fec914';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=9b5658fec914';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -410,6 +411,8 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
     // default, so untouched projects serialize byte-identically. Must stay in
     // lockstep with the eager writer in `file-io.js` (both call the one helper).
     writeVisibilityMetadata(sioSession.metadata.lucid, session);
+    // Flags on bad animal outlines (Outlines tab), only when there are some.
+    writeOutlineFlagsMetadata(sioSession.metadata.lucid, session);
     // Define Planes state — the streaming mirror of the eager writer in
     // `file-io.js` (both call the one helper, so they cannot drift).
     writePlaneMetadata(sioSession.metadata.lucid, session);

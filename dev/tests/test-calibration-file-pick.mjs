@@ -104,6 +104,21 @@ console.log('\n5. The input array is not mutated');
         'the caller\'s array comes back in the order it was handed over');
 }
 
+console.log('\n6. A campy cage beside the calibration is never the calibration');
+{
+    // campy-cage saves calibration.cage.json beside calibration.toml; it matches
+    // *calib*.json and sorts first, so it used to be loaded AS the calibration
+    const r = pickCalibrationFile([f('calibration.toml'), f('calibration.cage.json')]);
+    check(r.file.name === 'calibration.toml' && r.ambiguous.length === 0, 'the .toml is picked, and the cage is no second candidate');
+    check(r.cage && r.cage.name === 'calibration.cage.json', 'the cage comes back as the calibration\'s cage');
+    const rb = pickCalibrationFile([f('calibration.toml'), f('calibration.cage.json'), f('calibration-rebased.toml')]);
+    check(rb.file.name === 'calibration-rebased.toml' && rb.cage === null, 'a re-based calibration does not take the original\'s cage (another frame)');
+    const only = pickCalibrationFile([f('calibration.cage.json')]);
+    check(only.file === null && only.cage === null, 'a cage alone is no calibration');
+    const other = pickCalibrationFile([f('calib_0713.toml'), f('calibration.cage.json')]);
+    check(other.file.name === 'calib_0713.toml' && other.cage === null, 'a cage named for another calibration is not this one\'s');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 console.log(failed === 0 ? 'PASS' : 'FAIL');
 process.exit(failed === 0 ? 0 : 1);
