@@ -58,6 +58,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 import { wireAnimalCountField } from './animal-count-field.js';
 import { wireTailMarkField } from './tail-mark-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
+import { wireSkeletonCheckField } from './skeleton-check-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -3231,6 +3232,7 @@ export function setupUI() {
     wireAnimalCountField();
     wireTailMarkField();
     wireReprojThresholdField();
+    wireSkeletonCheckField();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
