@@ -4342,6 +4342,239 @@ Real-data check: `tests/e2e/_diag-real-align-views.mjs`.
 
 ---
 
+### pose/outline-core.js
+
+**Purpose.** Animal outlines per camera frame, built the idtracker.ai way
+(Romero-Ferrero et al. 2019; https://idtracker.ai/latest/) and split between the
+animals by their poses. DOM-free, typed arrays only; runs in
+`pose/outline-worker.js` and in Node tests.
+1. **Blobs** (`segmentBlobs`): pixels brighter than the camera's empty arena, with
+   hysteresis (more than `thrLow` 8 grey levels, joined to pixels more than
+   `thrHigh` 22: an animal's shadowed parts stay, the floor and its shadows, never
+   brighter than the empty arena, stay out), a morphological open (3 px ellipse)
+   then close (5 px; OpenCV's `MORPH_ELLIPSE` elements, `ellipseElement`, and its
+   border rule), 8-connected components holding a bright pixel, at least
+   `minArea` (150) px, holes filled. The empty arena is the per-pixel median of
+   sampled frames with each frame's animals left out where their poses say they
+   are (`maskedMedian` over `poseMask`s: each animal's body-keypoint hull grown by
+   a third of its extent + 6 px, and its tail line grown 10 px; a pixel no frame
+   leaves free takes the plain median). Without poses, `medianImage` (Hoare
+   selection; the lower median for an even count). The plain median keeps any
+   animal resting in one place for most of the sampled frames (idtracker.ai's
+   limit): on the HardFight excerpt, ghost mice in the empty arena hid a dim tail.
+2. **What one animal looks like** (`singlePoseBlobs`, `poseAreaModel`): from the
+   sampled frames' blobs that hold exactly one animal's pose (at least
+   `inFraction` of its body keypoints, and no other animal's), the median area, a
+   robust s.d. (1.4826 x the median absolute deviation) and `reach`: the median
+   of each blob's 99th percentile of pixel distance to the animal's pose (body
+   skeleton, or tail line). A blob over median + `areaSigmas` (4) s.d. is a
+   crossing (idtracker.ai's test is one-sided). null with < 3 such blobs.
+   idtracker.ai's rule, median and s.d. over frames with exactly as many blobs as
+   animals (`areaModel`), stays for frames without poses: a camera that sees the
+   animals' reflections never has such a frame (DoublePoke 2026-07-13 topC, 5
+   mice: 2 to 13 blobs in 39 sampled frames, never 5), nor one that never sees
+   them all apart.
+3. **Per animal** (`computeOutlines`): an animal is IN a blob when at least a
+   quarter of its body keypoints (at least one) lie in it, so one stray keypoint
+   makes no crossing. One animal in a blob: all of it (`individual`). Two or more,
+   or one in a blob the area calls a crossing (then animals in no blob within
+   `reach` join it): split pixel by pixel by nearest BODY skeleton (`crossing`; one
+   animal and nobody near: `oversized`, all of it). Nobody in it: the animal whose
+   body keypoints come within `reach` (15 px), `near`; else nobody (`unassigned`,
+   listed as polygons when animal-sized, ≥ max(minArea, median/2)). In every
+   case an animal gets only the pixels within `envelope` (1.5) x the model's
+   `reach` of its body skeleton, or `tailWidth` of its tail line (no model, no
+   limit); the rest stay nobody's (`blobs[].beyond` counts them) and an
+   animal-sized part of them is listed in `unassigned` too. Something bright
+   touching an animal is not the animal: its reflection in a wall where the wall
+   meets the floor, or wall lit up beside it, which hysteresis joins (DoublePoke
+   2026-07-13 topC, 4,551-4,926: one mouse got 20-31 thousand px, three mice'
+   worth; HardFight 637: reflections in the side walls). Measured on 271 blobs
+   holding one pose (2 recordings, 8 cameras): own pixels lie within 25-45 px of
+   the pose on top cameras, 34-97 on side cameras (the belly below a side view's
+   skeleton), so the reach is learnt per camera; blobs with something attached
+   reach 150-300. A reflection touching the animal along its side keeps a band
+   within the limit. Capping how far dim pixels may join bright ones would cut
+   real side-view bodies (up to 59 % of a blob is dim), so hysteresis stays.
+4. **Tails**: pixels more than `tailThr` (14) grey levels over the empty arena
+   (tails are thin and dimmer than bodies) within `tailWidth` (7) px of an
+   animal's tail polyline become its own, unless they are another animal's: in
+   its body core (its mask eroded by `coreErode`, 4 px) or anywhere in a blob that
+   is that animal's alone (only a crossing's split can have handed a tail lying
+   alongside to the other animal). The split never uses tails: a tail lying across
+   another animal would pull that animal's back pixels to it (the topC 6,250
+   screenshot). Holes are filled BEFORE tracing, so a curled tail encloses no floor.
+   The polyline is smoothed first (`smoothTail`, centripetal Catmull-Rom): a tail
+   bends between its keypoints and straight segments cut its curves (frame 0 mid).
+   The polyline's node order comes from `tailChain`: along the edges when the tail
+   nodes form one path, else BY NAME — SLAP's DoublePoke skeleton hangs every tail
+   node off TTI (a star), and following edges gave TTI → TailTip → Tail_0 …, a
+   zigzag across the floor.
+5. **Small pieces**: bright pieces under `minArea` within `reattach` (6) px of
+   exactly one animal join it (a forepaw the open cut off; exempt from the next
+   rule); other pieces of an animal under `minPiece` (60) px go.
+6. **Contours** (`traceBoundary`): Moore-neighbour tracing of each piece's outer
+   boundary through pixel centres; it stops when the start pixel would step to
+   the same second pixel again (also ends one-pixel-wide pieces).
+
+**Exports.** `OUTLINE_PARAMS` (frozen defaults), `outlineParams(p)`, `rgbaToGray`,
+`medianImage`, `ellipseElement`, `morph`, `components(mask, w, h, sameValue)`,
+`fillHoles`, `segmentBlobs`, `areaModel`, `singlePoseBlobs(seg, w, h, animals,
+params)` → `[{blob, animal, area, reach}]`, `poseAreaModel(singles, params)` →
+`{median, sd, lo, hi, n, frames, reach, source: 'poses'}`, `computeOutlines(gray,
+bg, w, h, animals, model, params)` → `{labels: Uint8Array (0 = none, k =
+animals[k-1]), blobs: [{area, kind, animals, byArea, beyond}], animals: [{area, blobs, tail, reattached, posed}],
+contours: [[Float32Array]], unassigned: [Float32Array]}`, `traceBoundary`,
+`pointInPolygon`, `tailChain(nodeNames, edges)` (nodes named /tail/i; along the
+edges when they form one path from the body, else by name: base/root, numbers,
+mid, unnumbered, tip/end; the body node they hang from first),
+`animalFromInstance(inst, edges, chain)` (body points, body edges, tail polyline,
+and `tailPts`, the tail keypoints alone; missing nodes skipped), `normalizeAnimal`,
+`keypointCheck(labels, w, h, animals, reach, gray?, bg?, visThr?)` (per animal its
+body and tail keypoints no pixel of its own outline comes within `reach` px of,
+and which lie on another animal's; with the frame and empty arena, a keypoint off
+every outline counts only where something over `visThr` lies within `reach`: over
+plain floor it is an occluded part or a wrong keypoint; with `core`, a tail
+keypoint deep inside another animal's body is a tail hidden behind it. On the
+HardFight excerpt (659 frames x 8 cameras) a full Check… went from 2,626 suspects
+(plain median, every miss counted) to 216 (pose-masked empty arena, visible
+misses only, hidden tails skipped). `computeOutlines` returns it as `check`, run
+in the worker with `thrLow` and the final labels' cores),
+`smoothTail(L, k)`, `maskedMedian(frames, masks)`, `poseMask(w, h, animals,
+tailPad)`, `convexHull(pts)`, `outlineSuspects(check, areas, names)` (per animal at most
+one `{animal, reason, detail, weight}`: `missed` (a pose, no outline), `tail` (≥ 2
+tail keypoints off it), `split` (≥ 2 body keypoints on another's), `limb` (≥ 2 on
+none)), `labelImageContours(labels, w, h, n)`
+(a hand-painted label image's contours, as `computeOutlines` gives them).
+
+**With 3D** (an animal's `tubes`: its body edges projected into the camera,
+with pixels per calibration unit at each end, from `ui/animal-outlines.js`
+`bodyTubes`; `tubeError`: px between its 2D body keypoints and their
+projections): `tubeReach(T, x, y)` is a pixel's distance from the projected
+body in calibration units; `singlePoseBlobs` measures each blob's `reach3d`
+(its 99th percentile, tail pixels left out, only where `tubeError` ≤ a quarter
+of the blob's 2D reach), `poseAreaModel` takes the median (`reach3d`, `n3d`, at
+least 3). `computeOutlines` then keeps an animal's pixels within `envelope3d`
+(1.25) x `reach3d` of its projected body (`animals[].by3d`), for animals whose
+`tubeError` ≤ half that limit at their scale; others keep the 2D rule. On the
+5-mouse 2026-07-13 excerpt the 3D half-width came out 20-25 mm (top and mid
+cameras), 22-42 (sides).
+**Reflections** (a campy cage, `pose/cage-mirrors.js`; an animal's `mirrors`:
+`[{plane, tubes}]`, its body mirrored across a surface and projected where the
+camera sees that image in the surface, `bodyMirrors`): `mirrorEvidence(gray,
+bg, w, h, animals, reach3d, params)` counts, per surface, the images' points
+outside every animal's own body and how many land on something brighter than
+the empty arena; `reflectingSurfaces(ev)` keeps the surfaces with ≥ 20 points
+and ≥ half on something bright (the worker sums the sampled frames:
+`model.mirrors`, `model.mirrorStats`). In `computeOutlines`, a pixel within the
+limit of an animal's projected body but nearer (in units) a reflecting
+surface's mirror image of any animal is nobody's (`blobs[].mirrored`). The
+distance limits alone keep a reflection that touches the animal along its side
+(on topC, a band ~40 px deep under a mouse at the floor's edge): a round tube
+wide enough for the body takes in the image's near half. On that excerpt the
+front wall reflects in the four top cameras (63-90 % of points on something
+bright; matt surfaces 1-15 %, at most 47 %), no surface in mid or the sides;
+the mouse at the floor's edge on topC 4,926: 15,081 px → 9,542 (one mouse:
+9,457), suspects unchanged.
+
+**Speed.** ~80 ms per 1280×1024 camera frame (Node, warm); the 39-frame median ~0.2 s.
+
+**Imports.** None. **Imported by.** `pose/outline-worker.js`, `ui/animal-outlines.js`.
+**Tests.** `tests/test-outline-core.mjs` (§19 3D, §20 reflections), `tests/e2e/animal-outlines.mjs`.
+
+### pose/outline-worker.js
+
+**Purpose.** `pose/outline-core.js` off the page's thread: a module worker from
+`ui/animal-outlines.js`'s pool. One camera always goes to the same worker, which
+keeps that camera's empty arena (`{bgs: Map}`), so a frame request sends only the
+frame. Frames arrive as ImageBitmaps (transferred) and are turned grey on an
+OffscreenCanvas.
+
+**Messages.** `background` (sampled frames, `nAnimals`, and per frame the animals'
+poses there, `poses` (`{body, tail, segments, tubes, tubeError, mirrors}`),
+left out of the median and used for the blobs holding one pose and, with
+`reach3d`, for which surfaces reflect: `mirrorEvidence` summed over the frames,
+`reflectingSurfaces` → `model.mirrors`, `model.mirrorStats`) → `{bg (a copy),
+model (`poseAreaModel`, else `areaModel`), counts, areas, singles}`; `setBackground`; `outline` (frame, animals, model, params) →
+`computeOutlines`' result with its buffers transferred; `drop`. Each reply echoes
+`id`; a failure replies `{error}`.
+
+**Exports.** `handleOutlineMessage(msg, store, makeCanvas)` → `{reply, transfer}`:
+the whole handler, which the page runs inline where a module worker or
+OffscreenCanvas is missing (`self.onmessage` is installed only inside a worker).
+
+**Imports.** `./outline-core.js`. **Imported by.** `ui/animal-outlines.js` (the worker
+by `new URL('../pose/outline-worker.js', import.meta.url)`, and statically for the
+inline path). **Tests.** `tests/e2e/animal-outlines.mjs` (the pool's workers).
+
+### pose/cage-mirrors.js
+
+**Purpose.** The arena's floor and walls as mirrors, from a campy cage
+(`<calibration>.cage.json`, written by campy's `campy-cage` from the box's
+printed grid, in the calibration's units). Import-free, DOM-free. A mouse near a
+glossy wall shows a mirror image as bright as itself; where the image touches
+the mouse, only the 3D pose mirrored across the wall says which pixels are the
+image (`ui/animal-outlines.js` `bodyMirrors`, `pose/outline-core.js`).
+
+**Exports.** `isCampyCageName(name)` (`*.cage.json`); `parseCampyCage(text)` →
+`{corners (4, the floor's, in order), up (unit), height, units}` or null;
+`cagePlanes(cage)` → the floor, then a wall per floor edge, each `{name, point,
+normal (into the box), quad}`; `mirroredPoint(X, plane)`;
+`reflectionVisible(C, X, Xm, plane)` (camera and point on the box's side, and
+the line from the camera to the image crosses the plane inside its quad).
+
+**Imports.** None. **Imported by.** `loading/session-loader.js` (`adoptCampyCage`),
+`ui/animal-outlines.js`. **Tests.** `tests/test-cage-mirrors.mjs` (DoublePoke's
+2026-07-13 cage).
+
+### pose/outline-edits.js
+
+**Purpose.** Outlines corrected by hand with the Outlines brush (`ui/outline-brush.js`):
+per camera frame one label image (0 = no animal, k = `animals[k-1]`) copied from the
+outline shown there when the first stroke lands, then painted. On
+`session.outlineEdits` (a Map by `outlineEditKey(frame, camera)`); saved as
+run-length rows in `metadata.lucid.outlineEdits` (through
+`import-export/outline-flags-metadata.js`), a few KB per corrected camera frame;
+in memory w*h bytes each. DOM-free.
+
+**Exports.** `BRUSH_MIN`/`BRUSH_MAX` (px), `outlineEditKey`, `outlineEdits(session)`
+(never null), `outlineEditAt`, `beginOutlineEdit(session, frame, camera, w, h,
+labels, animals)` (copies; returns the existing edit when there is one),
+`revertOutlineEdit`, `paintDisc(labels, w, h, x, y, r, value, stroke)` and
+`paintSegment(...)` (discs every half radius, so a fast drag leaves no gap; 0
+erases; `stroke` records each changed pixel's old value once), `pushStroke(edit,
+stroke, max=30)` / `undoStroke(edit)`, `rleEncode` / `rleDecode` (`[value, count,
+…]`; null when the rows do not add up), `serializeOutlineEdits` (`{v: 1, edits:
+[{frame, camera, w, h, rle, animals, at}]}` or null; no undo history),
+`ingestOutlineEdits` (REPLACES; bad rows skipped). Every change bumps
+`edit.version`, which `editedEntry` re-traces contours on.
+
+**Imports.** None. **Imported by.** `import-export/outline-flags-metadata.js`,
+`ui/animal-outlines.js`, `ui/outline-brush.js`, `ui/outline-flags-panel.js`.
+**Tests.** `tests/test-outline-flags.mjs` §4, `tests/e2e/animal-outlines.mjs` §6b/§7b.
+
+### pose/outline-flags.js
+
+**Purpose.** Flags on bad animal outlines: "this camera, this frame, this animal's
+outline is wrong, and why" — the Outlines panel's review list and what its export
+hands on as feedback and training data. DOM-free. A flag is `{frame (0-based),
+camera, animal (its name as the outline showed it, or null = several / not sure),
+identity, track (its track in that camera), source ('2d' own detection | '3d'
+projected), reason, note (≤ 200 chars), at (ISO time)}`; one per (frame, camera,
+animal), kept sorted by frame, camera, animal on `session.outlineFlags`.
+
+**Exports.** `OUTLINE_FLAG_REASONS` (`limb` Missed limb, `tail` Tail on the wrong
+animal, `bleed` Bleed onto floor or shadow, `missed` Missed animal, `split` Wrong
+split between animals, `other`), `outlineFlagReasonLabel`, `OUTLINE_NOTE_MAX`,
+`normalizeOutlineFlag`, `outlineFlagKey`, `outlineFlags(session)` (never null),
+`addOutlineFlag` (replaces the same key; stamps `at`), `removeOutlineFlag`,
+`outlineFlagsAt`, `serializeOutlineFlags` (`{v: 1, flags}` with empty fields left
+out, or null), `ingestOutlineFlags` (REPLACES; garbage reads as none).
+
+**Imports.** None. **Imported by.** `import-export/outline-flags-metadata.js`,
+`ui/outline-flags-panel.js`. **Tests.** `tests/test-outline-flags.mjs`,
+`tests/e2e/animal-outlines.mjs`.
+
 ## ui/
 
 ### ui/app-state.js
@@ -5537,6 +5770,8 @@ In-memory only; see `ui/app-state.js`.
   `setSkeletonEditWarningSuppressed` for `#skeletonWarnOffNote`.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
   the ID Switches tab (and its seekbar markers) for the active session.
+- `./outline-flags-panel.js` — `refreshOutlinePanel`: likewise the Outlines panel
+  (empty arenas per camera, flags on bad outlines).
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
   `rememberSkeleton`, `buildRememberedSkeleton`, `setProjectSkeleton`,
   `getProjectSkeleton`.
@@ -7204,6 +7439,12 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   - An edit to the current frame shows immediately — resident frames are always
     counted live.
 
+  **Animal outlines draw behind.** Right after `drawFrameOverlays` for a view,
+  `drawAnimalOutlines(view, vIdx, …)` (`ui/animal-outlines.js`) paints the
+  view's outlines at the frame THAT view shows with `destination-over`, so they
+  sit under the skeletons already drawn; a no-op while Visibility ▸ Animal
+  Outlines is off. Pinned by `tests/e2e/animal-outlines.mjs`.
+
   **Plane placements draw last.** After `drawFrameOverlays` returns for a view,
   the loop calls `drawPlaneOverlays(view)` (`ui/plane-overlays.js`, via its
   `ui/plane-definition.js` re-export) on the same canvas — `drawFrameOverlays`
@@ -7247,6 +7488,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `computeLazyCameraBaseline`, `createFrameCounterBaselineBuilder`,
   `countFrameCounters`, `nonResidentCameraCounts`, `refreshCountedFrame`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+- `./animal-outlines.js` — `drawAnimalOutlines`. **Circular** (it imports
+  `drawAllOverlays` back for its one redraw when outlines land); safe, both
+  uses are in function bodies.
 - `./smoothing-button.js` — `syncSmoothingButton` (every draw).
 - `./run-buttons.js` — `syncRunButtons` (every draw).
   **Circular** (that module imports `drawAllOverlays` back); safe because both
@@ -9133,6 +9377,8 @@ multi-video docking layout.
 **Imports from project modules.**
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
   session's ID-switch results and markers (try/catch, like `populateTimelineVisibility`).
+- `./outline-flags-panel.js` — `refreshOutlinePanel`: the new session's outline
+  flags and empty arenas (same try/catch).
 - `./app-state.js` — `state`, controllers + setters.
 - `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`,
   `someValidPoint3d`, `pooledPoints3d` (the re-solved groups' 3D).
@@ -9662,6 +9908,160 @@ hydrated); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost
 with a row selected).
 
 ---
+
+### ui/animal-outlines.js
+
+**Purpose.** Visibility ▸ Animal Outlines (`#visOutlines`, shortcut `O`; fill
+`#visOutlineFill`, both browser-local in `visibilitySettings`): an outline per
+camera and animal (`pose/outline-core.js`), drawn BEHIND the skeletons
+(`destination-over`) in every docked view by `drawAllOverlays`.
+- **Empty arenas** (`ensureBackgrounds`, `buildBackground`): per camera, once per
+  session and decoder, `BACKGROUND_FRAMES` (39) frames over the whole video
+  (`sampleFrames`: the keyframe nearest each even spacing, from
+  `keyframeIndices`, so each is one decode; evenly spaced frames when there are
+  fewer than min(39, 15) keyframes; every frame when asked for at least as many
+  as the video has) read with `decoder.peekFrame`, each with the animals' poses
+  on it (`posesAt`: body, tail, body segments, and with 3D `tubes`, `tubeError`,
+  `mirrors`; the active lazy project's
+  frames hydrated first) so the worker leaves them out of the median and learns
+  one animal's area and reach from the blobs holding one pose (never the
+  playback path), sent to the camera's worker. A progress card counts the
+  frames; up to 4 cameras at once. Only without such blobs does the area model
+  count blobs against a number of animals: `session.numAnimals` when it is a
+  count, else the animals in view on the current frame; `refitAreaModels` redoes
+  the models from the kept blobs (`singles`, else `areas`).
+- **Outlines** (`drawAnimalOutlines`, `computeViewOutlines`): while paused, a
+  missing camera frame is requested (one in flight per camera, the newest wins)
+  with the frame (`peekFrame`, a cache hit for the frame on screen) and the poses;
+  the result is cached (`OUTLINE_CACHE_SIZE` 64 camera frames) by camera, frame and
+  a signature of the poses, so editing a pose recomputes, and the overlay redraws
+  once (`redrawSoon`). During playback only cached outlines draw.
+- **Animals** (`animalsInView`): the frame's instance groups, each from its own
+  detection in this camera, else its 3D projected (`groupReprojection`, source
+  `'3d'`), then the ungrouped detections (a prediction duplicating a user
+  instance's track, or lying on a placed pose, is left out). Names from
+  `groupDisplayName` / track names; colours from `getGroupColor` /
+  `unlinkedBaseColor` (never computed separately); identity and track recorded
+  for flags.
+- **Paint** (`paintOutlines`): each animal's polygons stroked in its colour over a
+  fill at the slider's alpha; animal-sized blobs nobody was given, dashed grey.
+  `opts.over` paints on top (the export's previews).
+- **Corrected outlines win**: a camera frame with an edit (`pose/outline-edits.js`)
+  draws `editedEntry` (contours re-traced from its label image when its `version`
+  moved, `labelImageContours`) instead of the computed outline.
+- **Memory**: only a camera's newest computed outline keeps its label image whole;
+  older cached ones keep it run-length encoded (`labelsRle`), decoded by
+  `entryLabels(entry)` when the brush, a hit-test or the export needs it.
+- A request that never settles is given up after `JOB_TIMEOUT_MS` (30 s), so it
+  cannot hold its camera's queue.
+- `setOutlinePaintHook(fn)` runs `fn(view, frame, entry, opts)` after a view's
+  outlines are painted (the brush's ring).
+- **Suspects**: every computed outline gets `entry.check` (the worker's
+  `keypointCheck`, visible misses only; `KEYPOINT_REACH` 3 px) and
+  `entry.suspects` (`outlineSuspects`); the keypoints
+  behind a suspect get red rings over everything (`paintSuspectKeypoints`).
+  `scanOutlines(session, views, frames, onProgress, cancelled)` works out (or
+  reuses) the outlines of every camera on `frames` and returns every suspect;
+  the last scan is `outlineScan(session)` (in memory). A landed outline fires
+  `lucid:outlines-landed` (debounced) for the panel's suspect list.
+- `outlineAnimalAt(session, cam, x, y)` hit-tests the outline last drawn in a
+  camera (label image, then polygons); `drawnOutlines`, `cachedOutlines`,
+  `outlineCameraState`, `resetOutlines`, `outlineAnimalCount`, `outlinesEnabled`,
+  `currentOutlineParams` (`window.LUCID_OUTLINE_PARAMS` overrides, for tests),
+  `__outlinePoolInfo`, `bodyTubes(group, camera, edges, chain, inst2d)` (an
+  animal's 3D body projected into a camera with the image scale per end, and
+  how far its 2D pose lies from it: `{tubes, tubeError}`), `bodyMirrors(group,
+  camera, edges, chain, cage)` (its mirror images in the cage's surfaces as the
+  camera sees them: `[{plane, tubes}]`). `animalsInView` gives each grouped
+  animal with 3D its `tubes`/`tubeError`, and `mirrors` when
+  `session.campyCage` is set; `refitAreaModels` keeps a model's `mirrors`.
+- **Pool**: up to 4 module workers (half the cores); inline on the page
+  (`handleOutlineMessage`) without Worker/OffscreenCanvas, after a worker fails,
+  or with `window.LUCID_OUTLINE_INLINE`.
+
+**Imports.** `./app-state.js`, `./overlays.js` (`groupReprojection`,
+`getGroupColor`, `unlinkedBaseColor`, `unlinkedDupIndices`), `./image-embedder.js`
+(`keyframeIndices`), `./rendering.js` (`drawAllOverlays`; **circular**, used in
+function bodies only), `./loading-overlay.js`, `../pose/pose-data.js`
+(`groupDisplayName`), `../pose/outline-core.js`, `../pose/outline-worker.js`,
+`../pose/outline-edits.js` (`outlineEditAt`, `rleEncode`, `rleDecode`).
+**Imported by.** `ui/rendering.js`, `ui/outline-flags-panel.js`, `ui/outline-brush.js`.
+**Tests.** `tests/e2e/animal-outlines.mjs`.
+
+### ui/outline-brush.js
+
+**Purpose.** The Outlines brush (`B`, or the Outlines panel's Brush button; turning
+it on shows the outlines): hold the LEFT button over a camera view to draw an
+animal's outline, the RIGHT button to erase outline (any animal's) under the brush.
+A stroke that starts on an animal draws that animal; one that starts off every
+animal draws the animal chosen in the panel (default: the last one drawn; the only
+one if there is one). `[`/`]` change the size (`BRUSH_MIN`..`BRUSH_MAX` video px,
+kept in `localStorage['lucid.outlineBrush']`), Cmd/Ctrl+Z undoes the last stroke on
+the camera frame under the pointer, Esc puts the brush away.
+- Capture-phase listeners on `document` while on: a button press over a view's
+  overlay canvas paints and stops the event, so it never selects or drags a pose;
+  the wheel still zooms; the context menu is held off over views. Nothing paints
+  during playback.
+- The first stroke on a camera frame starts its edit (`beginOutlineEdit`) from the
+  outline shown (`entryLabels` of `drawnOutlines`); from then on that camera frame
+  draws the edit (`editedEntry`). A stroke that changed nothing leaves no edit.
+  A finished stroke marks the project dirty.
+- The ring cursor is drawn through `setOutlinePaintHook` after the view's outlines.
+- `onBrushChange(fn)` tells the panel what changed (`'state'`, `'radius'` — so the
+  size slider is not rebuilt mid-drag — or `'edit'`).
+
+**Exports.** `setBrushOn`, `toggleOutlineBrush`, `brushState`, `setBrushRadius`,
+`setBrushAnimal`, `undoBrushStroke`, `onBrushChange`, `outlineBrushActive`.
+**Imports.** `./app-state.js`, `./animal-outlines.js`, `./rendering.js`
+(`drawAllOverlays`), `../pose/outline-edits.js`, `../import-export/save-load.js`.
+**Imported by.** `ui/outline-flags-panel.js`, `ui/ui-wiring.js` (the `outlineBrush`
+handler). **Tests.** `tests/e2e/animal-outlines.mjs` §6b.
+
+### ui/outline-flags-panel.js
+
+**Purpose.** The Outlines panel (`#tabOutlines` / `#outlinePanel`): per camera, how its
+empty arena stands (frames sampled, single-animal area median ± s.d.), Show/Hide
+and Rebuild empty arenas; and the flags on bad outlines (`pose/outline-flags.js`).
+- **Flag** (`openOutlineFlagDialog`, `flagOutlineUnderPointer` = shortcut
+  `Shift+O`, or the panel's Flag outline… button): a dialog for the view the pointer
+  was last over (`interactionManager.lastInteractedView`), at the frame on screen,
+  with the animal under the pointer chosen (`outlineAnimalAt` on
+  `lastCursorPos`); animal (or Several / not sure), reason, optional note; Enter
+  flags (Enter on a focused button is that button), Esc closes, and the app's
+  shortcuts are held off while it is open. Flagging marks the project dirty.
+- **List**: by frame (shown 1-based like the readout); a click on a row goes to its
+  frame with its camera as the active view (`goToFlag`); ✕ removes one (dirty).
+- **Export…** (`exportOutlineFlags`, `buildOutlineFlagsExport`): a ZIP download of
+  every flagged camera frame: its frame (PNG), its outlines as they stand now (an
+  8-bit label PNG and a JPEG preview), each camera's empty arena, a manifest
+  (`lucid-outline-flags` v1: flags, parameters, area models, per camera frame the
+  animals the label image numbers and its blobs). Lazy frames are hydrated first;
+  a camera frame without outlines is listed with `missing`.
+- **Suspect outlines**: the outlines the poses disagree with (`entry.suspects`) on
+  the frame shown, plus the last Check… (N frames spread over the video,
+  `sampleFrames` at the first camera's keyframes; Esc stops; progress card):
+  click goes there, Flag makes a flag with the reason and the finding as its note,
+  Flag all flags every listed one (`suspectRows`, `checkOutlineFrames`,
+  `refreshSuspectList` on `lucid:outlines-landed`).
+- **Correct outlines**: the brush's on/off, size, which animal a stroke off every
+  animal draws (the last view's animals), and the corrected camera frames (click
+  goes there, ✕ throws the correction away, dirty).
+- The export also takes every corrected camera frame, flagged or not: its label
+  image is the correction (`edited: true`), with the computed one beside it
+  (`labels_auto/`, numbered by `animals_auto`).
+- `refreshOutlinePanel()` — called by `updateInfoPanel`, a session switch, the
+  `visOutlines` change, and the `lucid:outlines-changed` event an empty-arena run
+  fires.
+
+**Imports.** `./app-state.js`, `./animal-outlines.js`, `./frame-readout.js`,
+`./info-tip.js`, `./plane-definition.js` (`ICON_INFO`), `./loading-overlay.js`,
+`../pose/outline-flags.js`, `../pose/triangulation.js`
+(`getInstanceGroupsForFrame`, `ensureLazyFrameData`),
+`../import-export/outline-export.js`, `../import-export/save-load.js`
+(`markDirty`, `setStatus`), `../pose/outline-edits.js`, `./outline-brush.js`,
+`./rendering.js` (`drawAllOverlays`, circular through info-panel; function bodies
+only). **Imported by.** `ui/ui-wiring.js`, `ui/info-panel.js`,
+`ui/sessions-panes.js`. **Tests.** `tests/e2e/animal-outlines.mjs`.
 
 ### ui/image-embedder.js
 
@@ -10274,7 +10674,8 @@ the association math but still shown in the GUI), the cross-view **tracking thre
 and the benchmark-derived levers `track3dWeight` / `filterMinVisibleNodes` /
 `filterMinInstanceScore`; see `pose/tracker.js`), plus a comprehensive **catalog
 of every keyboard shortcut**
-(`ACTION_CATALOG`). Settings persist to `localStorage` (`lucid.settings.v1`) and
+(`ACTION_CATALOG`; View ▸ `toggleOutlines` `o`, `flagOutline` `Shift+o` and
+`outlineBrush` `b`, all dispatched, are the animal outlines'). Settings persist to `localStorage` (`lucid.settings.v1`) and
 survive reloads. The catalog is the single source of truth for the Settings ▸
 Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 
@@ -11980,6 +12381,12 @@ the sole pane's Display Legend steps down a slot instead of hiding under the
 chip (styles.css). Removed on every path that hides the chip, or the legend
 would sit low in grid mode.
 
+**Animal outlines.** `visOutlines` / `visOutlineFill` are in `visCheckIds` /
+`visSliderIds` (browser-local); a `visOutlines` change redraws and calls
+`refreshOutlinePanel`. Handlers `toggleOutlines` (`O`) and `flagOutline`
+(`Shift+O`, `flagOutlineUnderPointer`) come from `./outline-flags-panel.js`,
+`outlineBrush` (`B`, `toggleOutlineBrush`) from `./outline-brush.js`.
+
 **Imports from project modules.** Nearly every other module — see file
 header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`
@@ -13449,11 +13856,16 @@ TDZ for whichever side initializes second.
 - `REBASED_CALIBRATION_NAME` — `'calibration-rebased.toml'`, the file BOTH
   origin actions write (byte-identical TOML for a given origin). Deliberately not
   `calibration.toml`: that one is usually shared with tools outside LUCID.
-- `pickCalibrationFile(matches)` → `{file, ambiguous}`. Prefers
+- `pickCalibrationFile(matches)` → `{file, ambiguous, cage}`. Prefers
   `REBASED_CALIBRATION_NAME` (case-insensitively), else the lexicographically
   first match, so the choice is DETERMINISTIC across loads of the same folder.
   `ambiguous` is the NAMES of the candidates passed over, so a caller can say
   what it ignored. Does not mutate its argument: the loaders keep scanning.
+  A campy cage (`*.cage.json`, campy's `campy-cage`) matches `*calib*.json` and
+  sorts before `calibration.toml`, so it used to be loaded AS the calibration
+  (no cameras); it is never a candidate, and the picked file's own cage
+  (`<its name without extension>.cage.json`) comes back as `cage` (none for a
+  re-based calibration: the original's cage is in another frame).
 
 **Why it exists.** With two matches, last-scanned-wins depends on an
 enumeration order neither the File System Access API nor `webkitdirectory`
@@ -13825,6 +14237,11 @@ filesystem enumeration, decoder rebuild.
   deferVideos, folderHandle)` takes the handle as its third argument, which
   `handleLoadMultiSession` passes for each session subfolder. Test:
   `tests/e2e/save-opens-in-recording-folder.mjs`.
+- **campy cage** (`adoptCampyCage(session, file)`): the cage `pickCalibrationFile`
+  returns beside the calibration the load read, parsed (`pose/cage-mirrors.js`)
+  onto `session.campyCage` (in memory only, never written; null without one or
+  when it does not parse). Called by the per-camera and single-SLP loaders,
+  needing no session.json. Animal outlines use its walls and floor as mirrors.
 - **campy recordings** (`loading/campy-session.js`):
   `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
   reads a picked folder's session.json (+ campy-live's manifests) onto
@@ -14060,6 +14477,8 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `yieldToPaint`), `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
   `../import-export/visibility-metadata.js` (`readVisibilityMetadata`),
+  `../import-export/outline-flags-metadata.js` (`readOutlineFlagsMetadata`, beside it in
+  both readers),
   `../import-export/smoothing-metadata.js` (`readSmoothingMetadata`),
   `../import-export/frame-identity-metadata.js` (`readFrameIdentityMetadata`,
   called by `handleLoadProjectSlpLazy` after the groups are rebuilt) and
@@ -15233,6 +15652,46 @@ the v2 and v3 project-JSON shapes) — and the four readers —
 
 ---
 
+### import-export/outline-flags-metadata.js
+
+**Purpose.** The `metadata.lucid` ↔ Session mapping for the Outlines panel's flags
+on bad animal outlines and the outlines corrected with its brush: the fourth
+`metadata.lucid` writer module, beside visibility, smoothing and plane.
+Two keys per session, each written only when the session has some:
+`outlineFlags` (`{v: 1, flags}`, `pose/outline-flags.js`) and `outlineEdits`
+(`{v: 1, edits}`, run-length label images, `pose/outline-edits.js`); an unflagged,
+uncorrected project's bytes do not move (`save-golden-digest.mjs`).
+Reading REPLACES both, so a file without a key leaves none; only
+`lucid` is touched; nothing throws on a malformed payload; SLEAP and sleap-io
+carry it as opaque JSON.
+
+**Exports.** `OUTLINE_FLAGS_METADATA_KEYS`, `writeOutlineFlagsMetadata(lucid,
+session)`, `readOutlineFlagsMetadata(session, lucid)`.
+
+**Imports.** `../pose/outline-flags.js`, `../pose/outline-edits.js`. **Imported by.** the writers
+`import-export/file-io.js` (`buildSlpLabelsAllViews`),
+`import-export/slp-streaming-write.js` (`buildSessionRefGraph`),
+`import-export/save-load.js` (project JSON v2/v3 and `_restoreProjectV2`), and the
+readers `import-export/slp-import.js` (`handleLoadSlpFile`),
+`loading/session-loader.js` (`handleLoadSessionFolderSingleSlp`,
+`handleLoadProjectSlpLazy`) — each next to its visibility call.
+**Tests.** `tests/test-outline-flags.mjs`, `tests/e2e/animal-outlines.mjs` §7 (eager
+and streaming writers; eager and lazy readers).
+
+### import-export/outline-export.js
+
+**Purpose.** The file side of Outlines ▸ Export…: a stored (uncompressed: PNG and
+JPEG already are) ZIP with UTF-8 names (`zipStore`; `unzipStore` reads one back for
+tests), 8-bit greyscale PNGs (`encodePngGray`, zlib through
+`CompressionStream('deflate')`), `crc32`, `safeFileName`, `outlineEntryBase(frame,
+camera)` ('000045_topC'), and `OUTLINE_EXPORT_README` (the layout:
+`manifest.json`, `backgrounds/<cam>.png`, `frames/`, `labels/` (0 = no animal, k =
+the entry's k-th animal), `previews/`). No ZIP64: under 4 GB and 65,535 entries.
+DOM-free.
+
+**Imports.** None. **Imported by.** `ui/outline-flags-panel.js`, `tests/e2e/animal-outlines.mjs`.
+**Tests.** `tests/test-outline-flags.mjs` §3, `tests/e2e/animal-outlines.mjs` §6.
+
 ### import-export/frame-identity-metadata.js
 
 **Purpose.** How `Session.frameIdentityMap` is stored in a `.slp`'s
@@ -15853,6 +16312,8 @@ session's resident/total) rather than truncate silently. Covered by
 - `./visibility-metadata.js` — `writeVisibilityMetadata` (its only deps are
   dependency-free `ui/` leaves, so it adds nothing to this module's import
   graph).
+- `./outline-flags-metadata.js` — `writeOutlineFlagsMetadata` (the Outlines panel's
+  flags; DOM-free, imports only `pose/outline-flags.js`).
 - `./frame-identity-metadata.js` — `writeFrameIdentityMetadata` (fills
   `metadata.lucid.frameIdentityMap` in `buildSlpLabelsAllViews`; no imports).
 - `./plane-metadata.js` — `writePlaneMetadata`.
@@ -16050,7 +16511,8 @@ full grouping (identities + 3D) + 2D corrections.
 (`import-export/file-io.js`); `points3dNodeCount` (`pose/pose-data.js`);
 `writeVisibilityMetadata` (`import-export/visibility-metadata.js` — must stay in
 lockstep with the eager writer in `file-io.js`, which is why both call the one
-helper); `writeFrameIdentityMetadata` (`import-export/frame-identity-metadata.js`,
+helper); `writeOutlineFlagsMetadata` (`import-export/outline-flags-metadata.js`,
+same reason); `writeFrameIdentityMetadata` (`import-export/frame-identity-metadata.js`,
 same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason);
 `writeSmoothingMetadata` + `smoothingSourceFor` (`import-export/smoothing-metadata.js`,
 same reason).
@@ -16271,7 +16733,9 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `./slp-import.js`, `./visibility-metadata.js`
   (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
   settings in the legacy v2/v3 project JSON — same keys and omit-the-defaults
-  rule as the `.slp` writers, at the session-dict level), `./plane-metadata.js`
+  rule as the `.slp` writers, at the session-dict level),
+  `./outline-flags-metadata.js` (`writeOutlineFlagsMetadata`/`readOutlineFlagsMetadata`,
+  the same way), `./plane-metadata.js`
   (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason),
   `./smoothing-metadata.js` (Temporal Smoothing: `unsmoothedPoints3d` per group
   and the session-level key in the project JSON, same reason),
@@ -16535,7 +16999,7 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
   `../ui/frame-readout.js` (`refreshReadoutTotals`, when a video-less import
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
-  (`readVisibilityMetadata`), `./frame-identity-metadata.js`
+  (`readVisibilityMetadata`), `./outline-flags-metadata.js` (`readOutlineFlagsMetadata`), `./frame-identity-metadata.js`
   (`stampFrameIdentitiesFromGroups`, `readFrameIdentityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
   `resetPlaneState`), `./smoothing-metadata.js` (`readSmoothingMetadata`, and
   `adoptSmoothingSource` in both typed group rebuilders), `./import-track-resolve.js`
