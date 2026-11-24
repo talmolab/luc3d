@@ -65,6 +65,7 @@ import { setSoloView } from './ui-wiring.js';
 import { clearReadout, refreshReadoutTotals } from './frame-readout.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
+import { refreshOutlinePanel } from './outline-flags-panel.js';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
@@ -2280,6 +2281,8 @@ export async function switchSession(newIdx) {
     try { populateTimelineVisibility(newSession); } catch (e) { /* non-fatal in tests */ }
     // ID-switch results are per session: show this one's list and timeline markers.
     try { refreshIdSwitchPanel(newSession); } catch (e) { /* non-fatal in tests */ }
+    // Outline flags and empty arenas are per session too.
+    try { refreshOutlinePanel(); } catch (e) { /* non-fatal in tests */ }
 
     // Restore per-session timeline height + collapsed state. First visit
     // (no `_timelineHeight` stored) → fit to the new session's data,

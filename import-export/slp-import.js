@@ -72,6 +72,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
+import { readOutlineFlagsMetadata } from './outline-flags-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 
 /**
@@ -1210,6 +1211,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
         readVisibilityMetadata(session, earlyVisibility);
+        readOutlineFlagsMetadata(session, earlyVisibility);   // flags on bad outlines
         // Temporal Smoothing's last run (the groups' sources come with the 3D).
         readSmoothingMetadata(session, earlyVisibility);
         // Define Planes state — pool/planes/origin from the first session that

@@ -1933,6 +1933,8 @@ identity propagation.
 **One camera: SLEAP's tracker.** A session with a single camera (a plain SLEAP
 predictions file opened with Load SLP) has nothing to match across views and no
 3D, so `runTrackingPass` hands Track All to `runSingleCameraTrackAll`, which
+first asks before replacing tracks a person made (`retrackLosses` ->
+`confirmRetrack`, `ui/retrack-warning.js`; cancelling changes nothing), then
 runs sleap-nn's tracker (`pose/sleap-tracker.js`, via
 `pose/single-camera-tracking.js`) with the animal count as its track cap (the
 session's `numAnimals`, asked once and shown in the toolbar's Animals field, as for the
@@ -2188,7 +2190,9 @@ tracked and never fails the run; the status line and summary box say what it did
 **Imports from project modules.**
 - `./multi-camera-review.js` — `multiCameraReview` (multi-camera Track All's review list).
 - `./single-camera-tracking.js` — `singleCameraName`, `singleCameraTrackerConfig`,
-  `trackSingleCamera`, `SINGLE_CAMERA_LAZY_REASON` (the one-camera Track All).
+  `trackSingleCamera`, `reviewResult`, `retrackLosses`, `SINGLE_CAMERA_LAZY_REASON` (the
+  one-camera Track All).
+- `../ui/retrack-warning.js` — `confirmRetrack` (asks before replacing tracks a person made).
 - `./tail-mark.js` — `resolveTailMarks`; `../ui/tail-mark-reader.js` —
   `createTailMarkReader` (see "Tail marks").
 - `./detection-filter-stats.js` — `passesDetectionFilter` (the detection-pool
@@ -2669,389 +2673,116 @@ sleap-nn.
 
 ### pose/single-camera-tracking.js
 
-**Purpose.** Track All and the ID-switch checks on a session with ONE camera — a
-plain SLEAP predictions file opened with File ▸ Load SLP, which gets one
-placeholder `Camera` and every detection unlinked. With one view there is no
-cross-view matching and no 3D, so Track All runs SLEAP's tracker
-(`pose/sleap-tracker.js`) instead, in sleap-nn's recommended known-count setup:
-`local_queues`, `max_tracks` = `tracking_target_instance_count` = the animal
-count, connect single breaks.
+**Purpose.** Track All and the ID-switch checks on a session with ONE camera (a
+SLEAP predictions file opened with File ▸ Load SLP gets one placeholder `Camera`,
+every detection unlinked). With no cross-view matching and no 3D, Track All runs
+SLEAP's tracker (`pose/sleap-tracker.js`) in sleap-nn's known-count setup
+(`local_queues`, `max_tracks` = the animal count, connect single breaks). DOM-free.
 
-**It writes the TRACKS**, as `sleap-nn track` does — unlike multi-camera Track
-All, which writes identities only and leaves Propagate IDs → Tracks to the
-user. On one camera a track IS an animal's identity, and tracks are what a
-saved `.slp` hands back to SLEAP. `session.tracks` becomes `track_0…`, every
-instance's `trackIdx` is rewritten, and identity `id_k` (id k) is tied to track
-k through `frameIdentityMap` — keyed by track, so identity follows the track
-from then on. A detection the tracker drops (over the animal count, too few
-points) becomes trackless, as do predictions on a frame that has user instances.
-Occluded nodes are fed to the tracker as missing: SLEAP's invisible points read
-as NaN in sleap-nn.
+**It writes the TRACKS**, as `sleap-nn track` does (multi-camera Track All writes
+identities only): `session.tracks` becomes `track_0…`, every `trackIdx` is
+rewritten, and identity `id_k` is tied to track k through `frameIdentityMap`
+(keyed by track, so identity follows the track). A detection the tracker drops
+becomes trackless, as do predictions on a frame with user instances. Occluded
+nodes reach the tracker as missing (SLEAP's invisible points are NaN in sleap-nn).
 
-**The default OKS tolerance is 0.1, not sleap-nn's 0.025** (Tracking Wizard
-`scOksStddev`). On 35 proofread 10-min SLAP camera videos (3–4 mice, different
-coat colours; each track paired 1:1 with a proofread animal): sleap-nn's
-known-count defaults 85.8% correct, 156 lasting swaps; at 0.1, 93.6% and 102;
-0.15 93.1%; 0.2 and above worse again (0.5: 75.1%). The mechanism is general —
-at 0.025 every pose more than ~1.5 body lengths from a track scores exactly 0,
-so after a fast move or a gap the assignment is decided by tie-breaking.
-Window 10 was about the same as 5 (88.4% at 0.025), 30 much worse.
+**Two departures from `sleap-nn track`, both on by default.**
+- **OKS tolerance 0.1, not 0.025** (Wizard `scOksStddev`). At 0.025 every pose more
+  than ~1.5 body lengths from a track scores exactly 0, so after a fast move or a
+  gap the assignment comes down to tie-breaking. On 35 proofread 10-min SLAP videos
+  85.8% -> 93.6% correct (tuned and scored on the same videos; 0.15 93.1%, 0.5 75.1%).
+- **The lone-animal rule** (`loneAnimalPhase`, Wizard `scLoneAnimal`). Until two
+  animals are in view together (`LONE_DEFAULTS`: two tracked detections of at least
+  0.4 x the median score, more than 0.15 body lengths apart, on half the frames of
+  1 s, so huddled animals count and a duplicate does not), the one animal is followed
+  by position and keeps one track; other detections lose theirs. The phase ends
+  where the arrival's cluster starts (the first two-animal frame in the 5 s before
+  it), and the review list gets an 'arrival' row there. It rewrites the tracker's
+  output in `trackSingleCamera` (`opts.lone`) before anything is written. On 725
+  proofread two-mouse videos where the subject starts alone: 99.877% -> 99.925% after
+  review, 28% fewer rows; SLAP unchanged. It can cost a few detections where the
+  follower takes the copy of a resting animal.
 
-**Duplicate removal, opt-in** (Tracking Wizard `scRemoveDuplicates`, default
-off; `scDuplicateIou` 0.5, `scDuplicateOks` 0.6 → `trackSingleCamera`'s
-`opts.duplicates`). SLEAP sometimes puts a second instance on an animal it
-already detected, often partial and scoring 0.4–0.9. With the animal count as
-the track cap that copy takes a track, and a lone animal can hop onto it. On a
-SLEAP user's proofread two-mouse dataset (6 top-camera sessions, 40 fps) the subject, alone before its partner entered, hopped tracks at
-its own duplicates in 2 of 6 sessions, and the partner then entered on its old
-track (96.95% correct). sleap-nn's pre-cull cannot help: it acts only on a
-frame with MORE detections than the animal count. `duplicateDetections(dets, o)`
-leaves out, per frame and before the tracker (the port is untouched), every
-detection that duplicates a stronger one (higher score; a user instance is never
-removed and is kept first): box IoU (`boxIou`, +1 px as sleap-nn counts it) at
-least `iou` AND OKS at least `oks`. Box overlap alone would also take two
-touching animals, and keypoints alone two look-alike poses side by side. The OKS
-(`duplicateOks`) reads the WEAKER detection's nodes, since a copy is often
-partial, against the stronger one, scaled by the stronger one's box (sleap-nn's
-`compute_oks` cocoeval normalisation, stddev 0.1; fewer than 3 nodes is never a
-duplicate). Removed detections keep no track or identity and stay in the
-session; Track All reports how many (`duplicates`, kept apart from `untracked`).
-Measured 2026-10-12, offline through this function and then in the app:
-- That dataset: every IoU 0.3–0.7 × OKS 0.5–0.8 removes both hops (99.98%,
-  no swaps). At the defaults it removes 91 detections, none a real animal.
-- 87 proofread SLAP top/mid views (2–4 mice, 3.78M detections): about neutral,
-  88.52% -> 88.73% correct and swaps 276 -> 257, with 8 views better and 8
-  worse. It removes 1,231 detections, 74 of them a real second animal.
-- The swings are the tracker re-routing when junk is removed, not mistakes of
-  the rule: removing only the detections the proofreader also deleted swings
-  the same way. Hence off by default.
-- Rules tried and not adopted: true IoU is stricter than sleap-nn's own
-  "overlap / the weaker box" (used by `pre_cull_iou_threshold`), but scored
-  better on SLAP at the same OKS. A keypoint-distance-only rule (median < 10 px)
-  removed more, including more real animals: 88.03%, 16 views worse.
+**Opt-in duplicate removal** (Wizard `scRemoveDuplicates`, off; `duplicateDetections`).
+SLEAP sometimes puts a second, often partial, instance on an animal; with the
+animal count as the track cap the copy takes a track and a lone animal can hop
+onto it. Before the tracker, a detection is left out when box IoU (`boxIou`, +1 px
+as sleap-nn) is at least 0.5 AND OKS (`duplicateOks`: the weaker detection's nodes
+against the stronger one's box) at least 0.6 against a stronger one; a user
+instance is never removed. About neutral on SLAP (88.52% -> 88.73%, 8 views better,
+8 worse), hence off.
 
-**The Tracking Wizard's detection filters apply here too** (`opts.filter`:
-`{minVisibleNodes, minInstanceScore, minMeanNodeScore}`, which Track All reads
-from `filterMinVisibleNodes` / `filterMinInstanceScore` /
-`filterMinMeanNodeScore` exactly as the multi-camera pass does). Per frame and
-FIRST — before duplicate removal, which then looks for duplicates among the
-detections the filters kept, and before the port, which is untouched — every
-detection failing `passesDetectionFilter` (`pose/detection-filter-stats.js`, the
-multi-camera tracker's own rule) is left out. So the Wizard's readout counts
-exactly what is left out here. Like a duplicate, a filtered detection keeps no
-track or identity, stays in the session, and is counted (`filtered`, apart from
-`untracked` and `duplicates`). A frame left with no detection is skipped, as a
-frame that never had one is; `frames` still counts it (every frame with a
-detection before anything was left out). All three minimums default to 0 (off),
-which leaves the tracking as it was. Keep them off by default unless measured: on
-the offline harness (2026-10-27, `filter_strays.mjs`) dropping detections with
-fewer than 2/3/5 visible nodes before Track All helped Track All slightly but
-was worse after review — it drops real, partly visible animals (SLAP held-out
-after review 99.75% -> 99.05% at >= 3 nodes; 0.4–2% of real detections lost).
+**The Wizard's detection filters apply first** (`opts.filter`, the three "Min …"
+settings through `passesDetectionFilter`, before duplicate removal and the port),
+so the Wizard's readout counts exactly what is left out. Filtered detections, like
+duplicates, stay in the session with no track and are counted (`filtered`,
+`duplicates`, apart from `untracked`). All default to 0 (off): dropping detections
+with < 3 visible nodes cost 99.75% -> 99.05% after review on held-out SLAP.
 
-**The summary box's gallery reads the same stand-in with a pixel camera**
-(`singleCameraCheckSession(session, {pixelCamera: true})`): its one camera's
-`project` maps (x, y, 0) back to (x, y) and claims no size, which is what
-`ui/identity-gallery.js` needs to cut samples and draw paths.
-
-**The ID-switch checks read a stand-in** (`singleCameraCheckSession`): one
+**The checks read a 2D stand-in** (`singleCameraCheckSession`): one
 InstanceGroup-shaped object per identified detection, its 2D as `points3d`
-(x, y, 0), the detection under `instances` (what the image check crops), and
-the session's `imageModel` (the image check's package choice). The
-checks are relative to the median body size and standardise their features, so
-pixels instead of millimetres cost nothing; but a 2D bone length also changes
-with posture and distance from the camera, so body size is a weaker cue on one
-camera. It is OPTIONAL there: single-camera Track All does not run it (the
-user's choice, 2026-10-12) and the menu runs it.
-- **Measured offline 2026-10-12** (`checkSizeSwitches` on the stand-in after the
-  same Track All, its -1 default; label-free since #310):
-  - **87 proofread SLAP top/mid views:** per-contact AUC 0.912, 32 rows (22
-    real, 2 naming the wrong pair, 8 false), 27 of 276 swaps found. Fixing the
-    rows that help on their own: 88.52% -> 90.23%; fixing every row: 87.58%.
-  - **The six sessions' back views (12):** AUC 0.984, 3 rows, none false.
-  - **The 5-mouse topC:** 4 rows, all false, and both swaps missed (four
-    similar-sized mice).
-  - **A user's two-mouse dataset:** 1 row, a real error.
-  - **Thresholds:** -1.5 halves the false rows but finds 17 swaps instead of 27.
-- **History:** the classifier it replaced was why the check was first left off
-  on one camera. On 35 SLAP videos (59 real swaps after Track All) it caught 2
-  at -50 (encounter AUC 0.55, 6 false rows); the image check —
-with talmolab/luc3d#286's episode scoring, which was unmerged at the time —
-caught 19 at its -200 default for 15 false rows (0.4 per 10 min), 32 s per
-10-min, 3-mouse video. Most of the swaps it misses are not at an encounter it
-scores (multi-animal contacts, or one animal's detection missing for seconds
-while its track takes another animal).
+(x, y, 0), the detection under `instances`, and the session's `imageModel`. With
+`{pixelCamera: true}` its camera projects (x, y, 0) back to (x, y) for the summary
+box's gallery. The checks standardise their features, so pixels cost nothing, but a
+2D bone length also changes with posture, so the body-size check is optional on one
+camera (per-contact AUC 0.91 on 87 SLAP views) and Track All does not run it.
 
-**A fix swaps the tracks** (`swapSingleCameraIdentities`), so the saved file
-carries it, when each of the two identities is one track over the range (always
-true after single-camera Track All); otherwise — identities hand-edited apart
-from their tracks — it swaps the identity layer alone, like a multi-camera fix.
-It is its own inverse, which is how Undo works.
+**A Fix swaps the tracks** (`swapSingleCameraIdentities`), so the saved file
+carries it, when each identity is one track over the range (always true after
+Track All). Otherwise (an identity edited apart from its track) it swaps the
+identity layer alone and returns `tracks: false`; a file opened in SLEAP does not
+carry that fix, so the Fix dialog asks `singleCameraFixSwapsTracks` first and says
+"(their identities only)", and the status after it is a warning. Its own inverse
+(Undo).
 
-**Where to look: candidate moments.** Most of the switches the checks miss are
-not at an encounter they score: they happen in contacts of three animals, or
-while one animal's detection is missing for seconds and its track takes another
-animal. So Track All also returns `moments` (`candidateMoments`), read from the
-tracking itself at no cost: 'ambiguity' — two tracks whose EXCHANGED assignment
-would have cost the tracker less than `ambiguityMargin` (0.1, OKS units) more
-than the chosen one (through `SleapTracker`'s read-only observer); and
-'tracklet' — a tracklet of the INPUT file (SLEAP's own tracking, captured before
-it is rewritten) that passes from one identity to another within 5 frames. Per
-pair, candidates within 3 s are one moment at the run's last frame. They are
-kept on the session as `session._idSwitchCandidates` (NOT saved: the input
-tracklets they come from are gone once the project is saved) and tested by the
-checks (`pose/id-switch-check.js` `opts.moments`). On the 35 proofread videos
-they put a moment within 3 s of 44 of 59 switches (ambiguity alone 17,
-tracklets alone 42), about 10 moments per 10 min. Ambiguity is observed before
-connect-single-breaks renumbers tracks, so its ids are read through the final
-output, never from the observer.
+**Track All asks before replacing what a person made** (`retrackLosses`, shown by
+`ui/retrack-warning.js` from `pose/tracker.js`): tracks named anything but
+`track_<n>`, hand-labelled instances on a track, and the ID Switches tab's fixes
+and ticked rows. Raw predictions never ask; tracks proofread in SLEAP that kept
+`track_<n>` names on predicted instances are not detected.
 
-**The review list: where to look, as rows of their own.** Track All also returns
-`review` — the candidate moments plus HANDOVERS and the returns while the other
-animal was out of sight too, clustered the same way (`candidateMoments(..., extra)`
-with `handoverCandidates(frames, out, fps)` and `reviewReturnCandidates(frames, out,
-fps)`, below) — and
-`pose/tracker.js` puts it in the ID Switches tab as unscored rows
-(`reviewResult(moments, session, fps)` -> a result with `cue: 'review'`, one
-'onset' row per moment, `score` 0, `look` = its cues, no far edge). A handover is
-a LONE detection (none other within one body length) whose nearest detection in
-the last `lookSeconds` (1) lay within `nearBody` (0.5) body lengths and wore
-another track (`HANDOVER_DEFAULTS`; body length = median detection extent): the
-lone animal hopping onto a stray detection's track, or onto a track another animal
-left — the switches no contact sees. 1 s rather than 0.5 because a mouse often
-drops out of detection for over half a second and comes back on the other track
-(sham_gdx R289: 0.6 s, a switch the 0.5 s list missed entirely); 2 s added places
-without catching more. The checks test `moments`: the candidate moments plus
-RETURNS, not the handovers (see below).
+**Where a switch is likely: candidate moments** (`candidateMoments`, at no cost):
+'ambiguity', two tracks whose exchanged assignment would have cost the tracker
+less than `ambiguityMargin` (0.1) more (through `SleapTracker`'s read-only
+observer, read through the final ids since connect-single-breaks renumbers), and
+'tracklet', an input tracklet (SLEAP's own tracking, captured before it is
+rewritten) passing between identities within 5 frames. Per pair, candidates within
+3 s are one moment. Plus **returns** (`returnMoments`): a track back after more than
+1 s unseen, paired with each other track, `startFrame` where it was last seen.
+`trackSingleCamera`'s `moments` = candidates + returns, kept as
+`session._idSwitchCandidates` (not saved) for the coat-brightness check. On 35 SLAP
+videos the candidates alone came within 3 s of 44 of 59 switches.
 
-**The lone-animal rule (`loneAnimalPhase`, Wizard `scLoneAnimal`, on by default).**
-Until two animals are in view TOGETHER there is one animal, so it keeps one track.
-"Together": two tracked detections, both at least `score` (0.4) x the median
-detection score, centroids more than `apart` (0.15) body lengths apart, on frames
-filling at least `fill` (0.5) of `holdSeconds` (1) — huddled animals count, a
-duplicate does not (`LONE_DEFAULTS`). The lone phase ends where that arrival's
-CLUSTER starts (the first two-animal frame in the `clusterSeconds` (5) before it);
-from there the tracker's tracks stand, through the arrival. Before then the lone
-animal is followed by position and keeps the track its last pick before the
-cluster wore; other detections lose their track. It runs on the tracker's output in
-`trackSingleCamera` (`opts.lone`) before anything is written, so the counts,
-moments and rows read the result, and the review list gets an 'arrival' row from
-the cluster's start to the arrival (the place a person sees which one was already
-there). Why: on two-mouse recordings where the subject starts alone, the lone
-mouse moves between the two tracks (carried by hand, back at the edge after a gap,
-a stray detection on its holder taking its track) where no row looks, and the
-reviewer then meets it on whichever track it holds. Measured 2026-11-07 offline
-(the harness's simulated reviewer): Mae's intact set (725 videos, held out)
-99.877% -> 99.9245%, videos >= 99.9% 600 -> 614, review rows 6,113 -> 4,416;
-sham_gdx 99.975% -> 99.981%; SLAP (83 views) and SLAP-2M (163) unchanged to within
-1 detection on 2 views. Ending the lone phase at the arrival itself (the first
-version) gave 99.905%: while the newcomer is put down the lone animal is often
-undetected for a frame, the follower jumped to the newcomer and the whole lone
-phase took its track (10 videos, 2,478 detections; 154251_L 240523 f251L cdf_home
-100% -> 88.9%, now 98.8%). Without the arrival row intact fell to 99.31% (the
-reviewer met the mice later, sometimes swapped); at 0.5 body lengths huddled SLAP
-mice read as one animal. Left: one-frame blips where the follower takes the copy
-of a resting animal the proofreader deleted (138 intact videos, a median of 2
-detections each); nothing in the detections tells the copies apart.
-Measured 2026-10-21/27 offline through this code (the harness rebuilt in
-`~/luc3d-eval`, `measure_review.mjs` / `measure_fix.mjs`), a switch counting as on
-the list when one of its ends is within 2 s of a row:
-- **All of SLAP-2M (2026-10-28), the 195 multi-animal back/mid/top views whose raw
-  SLEAP tracks are not already the proofreading (1,632 min, 777 switches):** 1.52 rows
-  a minute, 96% of the switches on the list, 15.3% of the video within 2 s of a row;
-  2 mice 1.57 / 97% / 16.8%, 3–4 mice 1.37 / 91% / 10.9%; back pair 97%, mid 95%, top
-  94%. The 57 views whose raw tracks equal the proofreading: 0.12 a minute, 20 of 20.
-  (The 2022-10-19 recordings are 60 fps, the other dates 30; measured at 30 throughout
-  these were 1.45 / 95% of 817 / 13.9%. `~/luc3d-eval/lib.mjs` `slapFps`.)
-- **Mouse-Dyad-10M (2026-10-28; 2 mice, 150 fps; 244 of its 250 views, six left out
-  because their proofread file has 4–12 tracks):** its files hold only the proofread
-  detections (no SLEAP tracks, no videos), so Track All ran on them untracked: 90.24%
-  right, 172 switches. 2.09 rows a minute, 79% of the switches on the list, 16.1% of
-  the video; 84% with sleap-nn's default tracker standing in for the input's tracks. The
-  simulated reviewer takes every view to >= 99.93% (Spock `code/dyad-eval/`).
-  Those 57 had flattered the earlier 87-view figures below (25 of them were in it):
-  there the input-tracklet cue is the answer.
-- **87 proofread SLAP top/mid views:** 2 mice (held-out 16) 1.06 rows a minute,
-  97% of 232 switches on the list, 10.2% of the video within 2 s of a row; 3–4
-  mice (original six) 1.04 a minute, 86% of 44, 7.9%. (With the earlier 0.5 s
-  look-back: 0.97 a minute and 96% on 2 mice, 1.02 and 86% on 3–4.)
-- **207 sham_gdx conditions (2 mice, mostly a lone subject before its partner
-  enters):** 1.13 rows a minute, 94% of 139, 9.3% (0.5 s: 1.05, 91%, 8.6%). A
-  reviewer simulated on all 207 (it plays each row to the next place, keeping who is
-  who, and fixes where a mouse wears another label for most of half a second) takes
-  the 108 videos with errors from 88.1% to 99.96% correct on average, 101 of them to
-  >= 99.9%. In the app, after the image rows (2026-10-29, 193 videos, by minutes):
-  94.03% -> 96.30% -> 99.97% (the list alone 99.98%); on 62 hard SLAP-2M views
-  69.82% -> 80.54% -> 98.86% (alone 98.97%; 142111's two views left out, its nested
-  skeleton reads with the wrong node names on main; with them 70.79% -> 81.38% ->
-  98.91%, alone 99.01%). Since every row that stands for a place
-  offers the place's own fix, every video ends exactly at the simulated reviewer's
-  plan, with no place it could not fix (before: 98.61% on SLAP, 17 places blocked).
-  What is left is that plan itself: started from the labels the image rows leave, it
-  ends lower on 5 videos (one SLAP view, 161055/backL, 93.91% vs 98.17% alone, is
-  nearly all of the 0.11 points). An image row's Fix is accepted when it is right on
-  the stretch it changes, by each mouse's first-seen label: the whole-video score
-  drops for a right Fix while most of the video is swapped.
-- **The simulated reviewer** (`~/luc3d-eval/oracle_lib.mjs` `playReviewN`, majority
-  rule since 2026-10-28): a wrong label must hold for most of a 0.5 s stretch (one-frame
-  flickers had made it swap and swap back), and a mouse not seen before the first place
-  is met in that place's clip. Both change the measurement only.
-- **Every close encounter instead** would be 0.5–1.8 rows a minute but long ones
-  (median 3–16 s, p90 up to minutes), covering 34–80% of the video, which is why
-  encounters are not on the list (the checks flag the ones worth a look).
-- **Where a row lands:** the true switch is within the row's 2 s window in about
-  70–80% of switches found (median 0–0.7 s off), so a Fix from the frame the
-  reviewer stops on takes the right boundary; fixing from the row's own frame did
-  about as well as from the exact switch frame in the simulation.
-- **Its pair:** on 3–4 mice the row's pair was the swapped one in only a third to
-  two thirds of the switches it found, so the Fix dialog lets the reviewer pick the
-  two tracks (`ui/id-switch-modal.js`).
+**The review list** (`review` -> `reviewResult`, unscored 'review' rows in the ID
+Switches tab): the candidate moments plus **handovers** (`handoverCandidates`: a
+lone detection whose nearest detection in the last 1 s lay within 0.5 body lengths
+and wore another track) and **returns while the other animal was out of sight too**
+(`reviewReturnCandidates`: also unseen for 0.5 s of the absence; with the other
+tracked throughout, the one coming back can only take the track that is left),
+clustered as above; then a check row where every animal is first in view
+(`videoStartRow`, unless a row's clip, 2 s before to 5 s after, shows it) and one
+at the last tracked frame (`videoEndRow`, unless a row ends within 5 s of it).
+`pairEncounters` lists two identities' close encounters (centroids under 1.5 body
+lengths) for the tab's **◂ Earlier encounter**, to start a Fix where a swap began.
+Close encounters are not rows: they cover 34–80% of the video. Every return as a
+row would double the list on SLAP for a small gain. Evidence: about 1–1.5 rows a
+minute, within 2 s of 96% of the switches on proofread SLAP-2M (91% on 3–4 mice);
+with a simulated reviewer that knows which mouse is which (an upper bound), every
+set ends at 99.55–99.98% correct.
 
-**Returns: an animal back from out of sight, for the coat-brightness check.**
-`returnMoments(frames, out, fps, opts)` -> one moment `{frame, startFrame, identityA,
-identityB, cues: ['return']}` per return of a track (its first detection after more
-than `RETURN_DEFAULTS.gapSeconds` (1) unseen) and each other track, `startFrame` the
-frame it was last seen, so `testMoments` reads the labels before the animal went out
-of sight against the labels after it came back. `trackSingleCamera`'s `moments` =
-candidate moments + returns (sorted); the review list takes only the returns while
-the other animal was out of sight too (below: a place per return would add 1–2.5
-places a minute). Their rows note "an animal comes back
-after being out of sight". They cost no decoding: the check reads its 4 Hz samples
-anyway. Measured 2026-10-27 offline with the check's own code on precomputed coat
-vectors (`~/luc3d-eval/extract_bright.mjs`, `eval_bright.mjs`), the simulated reviewer
-working through the review list plus the check's rows:
-- **SLAP original six (3–4 mice of different coats, 23 views):** 1,450 returns tested
-  -> 13 rows, 11 at a real switch (2026-10-28: repeated returns after one swap share a
-  row, and a near-tie and a return at one place are one row, `momentChangePoints`); the
-  check's rows 13 (9 real) -> 21 (15 real); after review 99.75% -> 99.96% (150448/midL: two mice swapped from the start, put right
-  while out of view, which the list had no place for: 96.0% -> 99.98%). In the app on
-  that view: one return row, whose own Fix swaps 0:00.0–0:50.0 — 96.04% -> 99.86%.
-  On 190807/top (brown, brown, white; Track All 66.5%) the app raised 5 return rows;
-  accepting the 3 whose Fix made the labels right, as proposed, gave 85.0% (the other
-  two: one changed nothing, one — renamed by an earlier Fix — would have hurt).
-- **SLAP held-out (2 mice, 64 views):** 11 rows, 8 real; after review unchanged (99.90%).
-- **sham_gdx (2 light-coated mice, 193 videos):** 2,464 returns -> 1 row, false;
-  unchanged (99.97%). Coat brightness cannot tell look-alikes apart.
-- **All of SLAP-2M (2026-10-28):** every multi-animal back/mid/top view (and its L
-  twin) with proofread labels — 252 views, 42 sessions. 57 (all 2 mice) were set apart
-  because SLEAP's own tracks in the raw file already equal the proofreading (the
-  input-tracklet cue is then the answer): Track All 98.7%, the list takes them to 100%,
-  no return rows. On the other 195 (1,632 min), after review with the list plus the
-  check's rows: all 99.63% -> 99.77%; back pair 99.28% -> 99.55%, mid 99.77% -> 99.89%,
-  top 99.87% (same); 2 mice 99.68% -> 99.82%, 3–4 mice 99.56% -> 99.67%; 50 return rows, 35 real, Fix as
-  proposed helping 36 / hurting 13; 2 views better (10302022030623/backL 66.1% -> 100%,
-  150448/midL 96.0% -> 99.98%), none worse.
-- **Not adopted: search-zone stitching** after PrecisionTrack (Coulombe et al., 2025,
-  "PrecisionTrack: A Platform for Automated Long-Term Social Behavior Analysis in
-  Naturalized Environments", https://github.com/VincentCoulombe/precision_track): with
-  the animal count known, a lost track's search zone grows ahead of where it was going
-  and a returning detection takes the identity whose zone it comes back in. Reimplemented
-  offline after Track All (`~/luc3d-eval/stitch.mjs`) and swept over its tuning ranges, it
-  was neutral to worse (sham_gdx 94.08% -> 94.04%, 24 videos worse and 13 better; only
-  SLAP six gained, at beta 1.5): mice come back far from where they left (handled, hidden),
-  so where they were heading says little.
-
-**Returns on the review list: only while the other animal was out of sight too.**
-`reviewReturnCandidates(frames, out, fps, opts)` -> `[{f, a, b, cue: 'return'}]` for
-`candidateMoments`' `extra` (beside the handovers): a track back after more than
-`REVIEW_RETURN_DEFAULTS.gapSeconds` (1) unseen, paired with each other track that was
-ALSO unseen for at least `otherAwaySeconds` (0.5) of that absence. With the other
-animal tracked the whole time, the one coming back can only take the track that is
-left; with both out of sight (both in the bedding, both lifted out) the first one back
-can take either. Measured 2026-11-07 offline (Spock `runs/2026-11-07_lone/<set>/ret.mjs`,
-`oracle_win.mjs`), on the app's Track All + lone-animal rule, with two simulated
-reviewers. The one every figure above uses watches from a row up to the NEXT row, so
-it sees every return anyway. A stricter one watches only 2 s before to 5 s after each
-row, and does worse on the list without returns: intact 99.925 vs 99.825%, sham_gdx
-99.981 vs 99.939, SLAP 99.838 vs 99.423, SLAP-2M 99.595 vs 98.885.
-- **These returns:** +0.00–0.05 rows a minute; with the 5 s reviewer intact 99.840%
-  (2750m 220711 cdm_home 92.9 -> 100%), sham_gdx 99.942, SLAP 99.620, SLAP-2M
-  unchanged; with the other reviewer only SLAP moves (99.838 -> 99.919%, 150448/midL).
-  No video worse with either.
-- **Not adopted: every return as a row:** +0.2–0.3 rows a minute on Mae's sets, +0.8–1.4
-  on SLAP (doubling it); 5 s reviewer intact 99.867, SLAP 99.841, SLAP-2M 99.302, but
-  one SLAP-2M view 98.95 -> 73.93% (10192022183808/mid). Returns after 3 s unseen fall
-  in between.
-
-**A check row at the end, and stepping back through the pair's encounters.**
-`videoEndRow(frames, out, review, fps, opts)` adds a review row at the last tracked
-frame (cue `videoEnd`, "the end of the tracking: check who is who") unless a row
-already ends within `VIDEO_END_DEFAULTS.clearSeconds` (5) of it; its pair is the two
-tracks seen most in the last `pairSeconds` (2). `pairEncounters(session, idA, idB,
-from, to, opts)` lists the close encounters of two identities on a single-camera
-session as they are labelled now (centroids under `PAIR_ENCOUNTER_DEFAULTS.closeBody`
-(1.5) body lengths, runs joined across `gapSeconds` (0.25)), for the ID Switches
-tab's **◂ Earlier encounter** (`ui/id-switch-modal.js`). Why: measured 2026-11-09
-offline (Spock `runs/2026-11-07_lone/<set>/miss*.mjs`, `oracle_back*.mjs`), the
-5 s reviewer's loss comes from ~29 of 1,178 videos where two mice swap tracks in a
-close encounter with NO place near it (0.2–0.6 body lengths apart). The reviewer
-reaches it at the next place with the labels already swapped and fixes from there,
-or never when no place follows (SLAP 151549-top at 8:24, intact 111696_3328 at
-4:09). With the 5 s reviewer (intact / sham_gdx / SLAP / SLAP-2M):
-- the list: 99.840 / 99.942 / 99.620 / 98.885%;
-- the end row alone: 99.841 / 99.942 / 99.623 / 98.887 (a swap found there still needs finding where it began);
-- end row + stepping back through the pair's encounters (1.5 bodies; to the place
-  before, no cap) to where the label is still right, fixing from where it goes
-  wrong: **99.927 / 99.980 / 99.923 / 99.550**, against 99.925 / 99.981 / 99.919 /
-  99.595 for the reviewer who watches to the next place. +0.08–0.16 rows a minute;
-  a step-back on 32 of 725 intact videos, 7 of 207 sham_gdx, ~30 SLAP views, 46 of
-  163 SLAP-2M views, 0.8–1.9 steps each (max 7–20); no intact or sham_gdx video
-  worse, 0–2 SLAP / SLAP-2M views slightly worse against 9–12 better. A 5-step cap
-  cost SLAP-2M 99.55 -> 99.31% (not adopted). 1 body length instead of 1.5: the same
-  within 0.01 points but SLAP 99.916.
-- Not adopted: starting the Fix automatically at the pair's last encounter (no
-  help; SLAP 99.478%, the last encounter often is not the one), and a check row
-  every 60 s without one (99.902 / 99.942 / 99.698 / 99.608 for +0.6 rows a minute).
-
-**A check row where every animal is first in view.** `videoStartRow(frames, out,
-review, fps, opts)` adds a review row (cue `videoStart`, "every animal first in view:
-note who is who") at the first frame where every track is in view together, unless a
-row's clip already shows that frame (from `VIDEO_START_DEFAULTS.clipBeforeSeconds` (2)
-before its start to `clipAfterSeconds` (5) after its place; where one animal starts
-alone, the arrival row usually does). Its pair is the two lowest tracks in that frame
-(with more, the Fix dialog picks the pair); null with fewer than two tracks or when
-they are never all in view together. `trackSingleCamera` adds it after the end row and
-re-sorts the list by frame. The image pre-judge leaves it out (a look at who is who,
-not a suspected swap). Why: measured 2026-11-16 offline (Spock `runs/2026-11-16_jumps`,
-`start.mjs`, `summary_start.py`) with the 5 s reviewer on the list at 24fd6d4d1 (end
-row and Earlier encounter included), intact scored on the answer key with Mae's five
-confirmed proofreading errors corrected: SLAP-2M (163 views) 99.551 -> 99.834%, 3 views
-better, none worse, +0.13 rows a minute; intact (725) 99.928%, sham_gdx (207) 99.980%
-and SLAP (83) 99.923% unchanged, at +0.002, +0.002 and +0.08 rows a minute. The gain is
-close-encounter swaps with no row: the simulated reviewer catches one at a later place
-only once it has seen the animals the right way round, and it learns who is who only
-from rows. A person who looks at the start of the video anyway gets this without the
-row.
+**The coat-brightness check's options on one camera** (`singleCameraCheckOptions`):
+`skipEmpty`, encounters scoring exactly 0 had no samples on either side and say
+nothing about the labels (counted as "reads right", they started swapped stretches
+too late); `clearestEndLeads`, among 'end' rows within 5 s the clearest leads. The
+image and size checks score each contact label-free and take neither.
 
 **Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
-`SINGLE_CAMERA_LAZY_REASON` rather than tracked from its resident window. Track
-Frame and Track Frame Range are refused on one camera (the tracker is temporal,
-and a range would need its new tracks mapped onto the old ones).
+`SINGLE_CAMERA_LAZY_REASON`; Track Frame and Track Frame Range are refused on one
+camera (the tracker is temporal).
 
-**The image and size checks take none of the single-camera options (since #309 /
-#310).** They score each contact label-free, before vs after (`scoreContacts`), and
-have no runs of encounters, so this branch's single-camera image rule — a run
-ending only above +|threshold| (`singleCameraImageContinueBelow`, removed in the
-#309 merge) — went, and the options below apply to the coat-brightness check
-only. That rule was measured on the image check's previous scoring (SLAP top/mid
-false rows 71 -> 51; topC 93.8% -> 99.9% after both Fixes). Neither tests candidate
-moments. The new image check on one camera is measured under `pose/id-switch-check.js`
-("On one camera"): on the top and mid views of the 22 proofread SLAP sessions 91 rows,
-2 false, 82 of 276 swaps found; on topC 5 rows, 3 false, both swaps found.
-
-**Empty encounters are no evidence.** The coat-brightness check on one
-camera runs with `skipEmpty` (`singleCameraCheckOptions`): runs ignore encounters scoring exactly
-0, which had no samples on either side — 44.5% of the image check's encounters
-on the 35 SLAP videos (2 samples a second; one camera's animals are seldom alone
-for long), 24.4% of brightness's. Counted as "reads right", they started a
-swapped stretch at the first encounter WITH evidence: a Fix from 0:04.2 for a
-swap from 0:00, or from 0:25.9 when the pair's six encounters before it were all
-empty. Skipping them: image rows 78 -> 68 (false 51 -> 42), 18 of 59 swaps caught
-either way, rows whose Fix has a wrong far edge 4 -> 2, rows fully undone (with
-the boundary set by the user) 9 -> 11; brightness rows 21 -> 18 (false 7 -> 4),
-14 caught either way. The two far edges left are chained swaps — a pair's stretch starting
-where ANOTHER pair swapped, or a three-animal rotation — which one pair's rows
-cannot see.
+**Not adopted** (measured): sleap-nn's Kalman tracker; search-zone stitching after
+PrecisionTrack (Coulombe et al., 2025; mice come back far from where they left);
+starting a Fix automatically at the pair's last encounter; a check row every 60 s.
 
 **Key exports.** `singleCameraName(session)` (the camera, or null);
 `singleCameraTrackerConfig(numAnimals, {windowSize, oksStddev, connectBreaks})`;
@@ -3075,7 +2806,9 @@ opts)` -> the check row where every animal is first in view or null; `VIDEO_STAR
 to, opts)` -> `[{start, end}]` ascending; `PAIR_ENCOUNTER_DEFAULTS` (`closeBody` 1.5, `gapSeconds` 0.25);
 `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
--> `{frames, tracks: boolean}` | null; `singleCameraCheckOptions(cue)` -> the options
+-> `{frames, tracks: boolean}` | null; `singleCameraFixSwapsTracks(session, from, to,
+idA, idB)` -> boolean | null (whether that Fix would swap tracks; changes nothing);
+`retrackLosses(session)` -> `{names, namedDetections, user, fixes, reviewed, any}` | null; `singleCameraCheckOptions(cue)` -> the options
 the coat-brightness check runs with on one camera (`{skipEmpty: true,
 clearestEndLeads: true}`); `DUPLICATE_DEFAULTS` (`iou` 0.5, `oks` 0.6, `oksStddev`
 0.1, `minNodes` 3); `duplicateDetections(dets, o)` -> the indices of one frame's
@@ -3091,29 +2824,13 @@ stddev, minNodes)`; `SINGLE_CAMERA_LAZY_REASON`. In `trackSingleCamera`,
 **Imported by.** `pose/tracker.js` (Track All), `ui/id-switch-modal.js` (the
 checks, the fix, and Earlier encounter's `pairEncounters`).
 
-**Coverage.** `tests/test-single-camera-tracking.mjs` (one track per animal
-across 18 input tracklet breaks, the spurious detection and the user frame, the
-candidate moments, the stand-in and a planted swap found by the real size check,
-the track swap and its fallback, the refusals, §6/§7 `skipEmpty` and
-`clearestEndLeads` on the classifier's change points, and §9 the review list:
-handovers, its rows, their Fix plan and the saved checklist, and §11 the
-detection filters: each minimum leaves its failing detections without a track,
-counted as `filtered` — the Wizard's own count — all 0 changes nothing, and
-duplicates are looked for after the filters) and
-`tests/e2e/single-camera-track-all.mjs` (the real buttons, the refusals, a planted
-swap found, fixed and undone through the ID Switches tab, a swap away from every
-contact found by the coat-brightness check at a candidate moment, a "Both" row of
-size and brightness, §6 which checks take the single-camera options, §7b a Wizard
-filter counted in the Wizard, then left without a track by Track All and counted
-in the status and the summary box, §7c the Instances tab's mean node score, and §8 the
-review list after Track All: counted in the status and the summary box, listed in
-the tab, and a review row's Fix between two picked tracks, from here to the end,
-then Fix again from past its own window: only the stretch between stays swapped;
-then a check row on the same place: both Fixes offered, the check's taken, then the
-place's Fix again; then an image row shown with a coat-brightness return, not on the
-list: once its Fix is taken, Fix again is the return's, from here to the end).
-`tests/e2e/_real-single-camera.mjs` runs the whole thing on a real SLEAP file
-through File ▸ Load SLP.
+**Coverage.** `tests/test-single-camera-tracking.mjs` (tracks and identities,
+candidate moments, the stand-in, the Fix and its fallback, `retrackLosses`,
+refusals, duplicate removal, the detection filters, the lone-animal rule, returns,
+the start and end rows, `pairEncounters`); `tests/e2e/single-camera-track-all.mjs`
+(the real buttons end to end: Track All and its warning, a planted swap found,
+fixed and undone, the review list and its Fixes, the image pre-judge);
+`tests/e2e/_real-single-camera.mjs` runs it on a real SLEAP file.
 
 ---
 
@@ -3682,7 +3399,8 @@ and used by EVERY operation that must touch every frame. Hydrate a 2,000-frame
 window (`batchLoadLazyFrames`) → run the callback → drop the window's non-user
 `frameGroups` (pinning the on-screen frame and any user-edited frame) →
 `releaseWindow` → force a real collection every 5 windows. `opts.start`/`opts.end`
-restrict it to a range. Contract points:
+restrict it to a range; `opts.frames` (sorted) to just those frames, hydrating only the windows that hold them
+(the skeleton check's pass). Contract points:
 - **Playback eviction is HELD for the whole sweep** (`holdLazyResidency`,
   released in a `finally` by the exported wrapper around
   `_sweepLazyFrameWindowsHeld`): eviction protects windows around the on-screen
@@ -4425,6 +4143,16 @@ numbers are identical (Object.is) — except, with a reprojection-error
 threshold, the UNDISTORTED errors: the solve leaves out the observations it
 dropped, which the stored 3D does not record. ~20x cheaper than re-solving
 Refined. Used by `ui/rendering.js`'s reprojection fill.
+**`options.skeleton`** (measured chains from `pose/skeleton-check-run.js`) runs Triangulate's skeleton check after
+the reprojection-threshold rule (`pose/skeleton-check.js` `checkChains`): a chain whose bones leave their usual
+ranges gets the fewest point changes that make it plausible, each to a candidate from `subsetCandidates` — every
+pair of the cameras that see the point is triangulated, the cameras within `subsetPx` (12) of that point's
+reprojection form a group, each group of 2+ is re-solved (DLT) from its own detections, the `maxCandidates` (3)
+largest offered — or, only with a matched volume, dropped (NaN; `checkChains`' `allowDrop`: without one nothing
+independent says a point is wrong, and July 13 frame 105,413 lost a right nose). A point seen by 3+ cameras that all
+agree with it is locked. Candidates use
+every detection, from a copy taken before the threshold rule. The result then carries `skeleton: {chainsRepaired,
+nodesResolved, nodesDropped}`; without the option it is exactly the old one (no `skeleton` key).
 **`triangulationSummary(result)`** — `{points3d, meanError,
 meanErrorUndistorted, method}`, what a pool reply carries under `summaryOnly`.
 Covered by `tests/test-reproject-stored-3d.mjs` (incl. the threshold negative
@@ -4519,6 +4247,87 @@ only on `./pose-data.js`, so a worker can still load this module.
 **Imported by.** `pose/triangulation.js` (re-exports), `pose/triangulation-pool.js`,
 `pose/triangulation-worker.js`, `pose/cross-view-tracker.js` (and so
 `pose/tracker-worker.js`).
+
+---
+
+### pose/skeleton-check.js
+
+**Purpose.** Triangulate's skeleton check, import-free and DOM-free (the core runs it in the page or a worker):
+find body parts whose 3D breaks the skeleton's usual bone lengths and repair only the points that need it.
+- **Chains from the skeleton** (`skeletonChains(nodeCount, edges)`): hubs are the nodes with 3+ edges (on
+  DoublePoke's star skeleton TTI and the Head; a connected part without one is held at its centre); every group of
+  the other nodes that hangs together once the hubs are removed is a chain, anchored at the hubs it touches; its
+  bones are every edge with an end in it. On the star skeleton each tail point is its own chain (judged by its
+  distance to TTI), the ears are one chain, the shoulders one, the haunches one.
+- **Usual lengths** (`measureBones(chains, forEachPose)`): each bone's median and range
+  `[min(0.5, p2 × 0.85), max(1.5, p98 × 1.15)]` of the median, from up to 20,000 lengths per bone (reservoir,
+  fixed hash); fewer than `MIN_BONE_SAMPLES` (20) → the chain is skipped, with why. A steady bone gets exactly ±50 %;
+  TTI–TailTip (short whenever the tail curls; 19 % of July 13's poses are under half its median) gets a wider lower
+  bound and the same upper one.
+- **The repair** (`checkChains(points3d, chains, candidatesFor, opts)`): the trigger `chainBadness` (bones with both
+  ends present, outside their ranges; a missing point is absent, not implausible); every combination of keep / a
+  candidate / drop per chain point (≤ 4,096; drop only while `opts.allowDrop` is not false — the core passes false,
+  so a point is re-solved or kept, never dropped); the result must be plausible (`chainRepairBadness` 0: judged bones
+  inside their ranges and every kept point linked to an anchor through present bones, so a drop cannot cut a wrong
+  piece loose); fewest changes, then fewest drops, then most support, then smallest move; none plausible = the chain
+  is left, except its **out-of-reach points** (a chain of 2+ points): `chainReach(chain)` gives each point the
+  farthest it can be from its anchor (shortest path along the chain's bones, each at median × hi); a point beyond
+  that is impossible whatever its neighbours are, so it still takes an option within reach (a candidate, or a drop
+  where allowed), the one lowering `chainRepairBadness` most, everything else kept (`out.partial`; the core reports
+  it as `chainsPartial` and counts the chain as repaired). On SLAP's 22 proofread sessions with the tail linked in
+  order, this brought back 3 tail points up to 28,016 units off that a linked tail had left (the star's one-point
+  chains already fixed them). A one-point chain is judged by its one bone as before. A `locked` point is keep-only.
+  **Never swap a whole chain**: one wrong point among right ones is the common case (the volfuse study's July 13
+  frames 105,416 and 105,372, judged by eye).
+
+**Key exports.** `skeletonChains`, `measureBones`, `chainBadness`, `chainRepairBadness`, `chainReach`, `checkChains`,
+`SKELETON_CHECK_DEFAULTS`, `MIN_BONE_SAMPLES`.
+
+**Imports.** None. **Imported by** `pose/triangulation-core.js`, `pose/skeleton-check-run.js`. Tests:
+`tests/test-skeleton-check.mjs` (chains of a star, a chain-shaped and a hub-less skeleton; ranges; the repair; the
+solve on SLAP's 8 cameras; real data `fixtures/skeleton-check-real.json`: 84 animal-frames of two DoublePoke clips,
+production 2D, no volume — every flagged chain repaired to plausible or left, no plausible chain touched;
+`fixtures/skeleton-check-slap-far.json`: the 3 SLAP animal-frames the out-of-reach rule repairs, against their
+proofread 3D), `tests/e2e/skeleton-check.mjs`.
+
+---
+
+### pose/skeleton-check-run.js
+
+**Purpose.** The project side of the skeleton check: the browser-local setting (`localStorage.lucidSkeletonCheck`,
+`enabled`, off by default, and `chains`, the custom parts as text; never in the `.slp`), the session skeleton's
+chains named by their nodes (`sessionSkeletonChains(session, text?)`, cached per skeleton and parts text), their
+bones measured on every group's stored 3D in the session
+(`session.instanceGroups`, never evicted, so a lazy project is measured whole; cached until
+`invalidateSkeletonCheck`), and which groups a pass re-solves.
+- **Custom parts** (built from node tiles in Settings ▸ Triangulation Wizard ▸ Skeleton check,
+  `ui/skeleton-chain-editor.js`), stored as text: one part per line, node names in order along the body.
+  `parseChainText` splits them (lines or `;`, names by `,` or `→`); `resolveChainText(names, text)` matches names
+  (exactly, else ignoring case when only one node does) → `{ paths, problems }`, leaving out a part with an unknown
+  name, a repeated node or a single node; `checkLinks(edges, paths)` keeps the skeleton's links except those between
+  two nodes of one part and adds each part's consecutive pairs (direction does not matter). The chains come from those
+  links, so a star skeleton's tail in order is judged bone by bone, not by each point's distance from TTI (and a whole
+  spine, Nose to TailTip, makes Neck+Trunk a chain between the Head and TTI). A custom part's chain is named in the
+  part's order and marked `custom`; the chains array carries `problems`, and `skeletonCheckForRun`'s `skipped` lists
+  them too.
+- `skeletonCheckForRun(session)` → `options.skeleton` or null (off, no skeleton, no chain, nothing measurable).
+- Where it runs (`pose/triangulation.js`): This frame (`triangulateCurrentFrame`) and Range
+  (`triangulateMultiFrameInstances`, `_triangulateGroupStep`) inline with the bones measured from the 3D already
+  there; **Triangulate All in a pass after its solve** (`skeletonCheckPass`): measure on the run's own 3D, find the
+  frames with a flagged group (`framesNeedingSkeletonCheck`), re-solve only those groups with the check on the main
+  thread (`sweepLazyFrameWindows`' `frames`), drop those frames' derived reprojections. An edit's re-solve
+  (`reTriangulateGroup`) does not check: the user's points are authoritative.
+- A repaired group carries `group.skeletonRepaired` (in memory), so `ui/rendering.js`'s fill reprojects its stored
+  3D instead of re-solving it without the check; a re-solve without the check clears it. A dropped point is saved
+  as missing 3D.
+
+**Key exports.** `getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `parseChainText`, `resolveChainText`,
+`checkLinks`, `sessionSkeletonChains`, `invalidateSkeletonCheck`, `skeletonCheckForRun`, `groupNeedsSkeletonCheck`,
+`framesNeedingSkeletonCheck`.
+
+**Imports.** `./skeleton-check.js`. **Imported by** `pose/triangulation.js`, `ui/skeleton-check-field.js`,
+`ui/settings-modal.js`, `ui/skeleton-chain-editor.js`. Tests:
+`tests/test-skeleton-check.mjs`, `tests/e2e/skeleton-check.mjs`.
 
 ---
 
@@ -4840,22 +4649,15 @@ nearby 'end' rows sharing an animal, the clearest leads).
   the same pair with nothing reading right in between adds no row (same stretch);
   two moments of the same pair and side within 3 s (a near-tie and a return at one
   contact) are one row with both cues and the clearer score.
-  Measured 2026-10-27 by accepting each row's Fix as the dialog proposes it, alone,
-  on Track All's labels (with returns): SLAP six 34 rows, Fixes +45.0 / -8.5 points
-  summed -> 22 rows, +54.2 / -11.3; SLAP held-out 63 -> 58 rows, +488 / -4.6 ->
-  +542 / -9.8; sham_gdx 13 -> 10 rows, +42 / -19.8 -> +61 / -21.1.
-- **Calibrated on the 35 proofread single-camera SLAP videos (59 switches):**
-  moment rows caught 14 with no false rows (the image check's moment rows under
-  its old scoring: 13, 12 shared); encounter rows were noise at every threshold,
-  hence `threshold` -800. Not calibrated on multi-camera data.
+- **Calibrated on 35 proofread single-camera SLAP videos (59 switches), whose mice
+  have different coats:** moment rows caught 14 with no false rows; encounter rows
+  were noise at every threshold, hence `threshold` -800. Not measured where both
+  mice share a coat (on 193 light-coated two-mouse videos it raised 1 row, a false
+  one), nor on multi-camera data.
 
-**On one camera (2026-10-12), images**, at -0.8, top and mid views of all 22
-proofread SLAP sessions (87 views) and topC: original six 16 rows (14 real, 2
-naming the wrong pair), 14 of 44 swaps found; held-out 75 rows (59 real, 14
-wrong pair, 2 false), 68 of 232; topC both swaps, 3 false rows; no row at all on
-the 39 views Track All gets >= 99.9% right. 113 of the 276 swaps are one track
-changing animal alone, which no contact check can see. Harness:
-`tests/e2e/_real-single-camera.mjs` (`IMAGE=1`), scored in a session scratchpad.
+**On one camera, images** (at -0.8, top and mid views of the 22 proofread SLAP
+sessions): 91 rows, 2 false, 82 of 276 swaps found. 113 of the 276 swaps are one
+track changing animal alone, which no contact check can see.
 
 **Recalibrated for the 168-px model input (2026-10-22; `INPUT` was 224, the crop
 stays 160 — `ui/image-embedder.js`).** Same contacts and tracking (Track All
@@ -4910,7 +4712,7 @@ Same tracking, sampling and views; caught / rows / false of 65 change points:
 for DINOv2-small at -1.) DINOv3's real swaps sit further below the threshold
 (183527 8:28 -1.06 -> -1.66, five white mice 20:42 -1.16 -> -1.34). Separation of
 10 s means: all 0.959 -> 0.967, same coat 0.884 -> 0.903, five white mice ~0.74 ->
-~0.77. Held out: Mae's 193 single-camera sham_gdx recordings (light coats, 240
+~0.77. Held out: 193 proofread single-camera two-mouse recordings (light coats, 240
 truth changes, CPU fp32): at -1.2 DINOv3 catches 31 with 0 false (most with 0
 false: 33 at -1, vs 30 for DINOv2-small and 21 for DINOv2-base); single-crop
 separation 0.905 -> 0.947. The fp16 file through the app vs DINOv3 fp32 on 233,206
@@ -4995,59 +4797,33 @@ few crops on a side), `'unknown'` (fewer than 10 samples with both);
 (each pair separated once); `poolViews(vectors)` → the mean of an identity's unit
 vectors at one sample, re-normalised (one: itself; none: null); `prejudgeFor(prejudge, row)` (by frame and pair, either order); `unitVector(v)`.
 
-**Calibration (2026-11-09).** The study's code (`runs/2026-11-09_hard-swaps/audit.py`
-on cup) on 1,633 review rows of Mae's 395 intact two-mouse videos (100 proofread
-swaps; fine-tuned dinov2-small, held-out fold; crops every 2nd s), gate chosen in
-`gate_sweep/` there. Score alone: AUC 0.960 against the proofread files, 0.996 with
-the 7 rows the images show to be proofreading errors set aside (94 swaps). With
-that clean truth:
+**Calibration.** On 1,633 review rows of 395 proofread two-mouse top-camera
+videos (a fine-tuned dinov2-small package that never saw the video's animal;
+crops every 2nd s). The answer key is the proofread files with five confirmed
+label errors corrected (95 swaps); the score alone has AUC 0.996 (0.960 against
+the uncorrected files). The gate and margin were chosen on these rows and are
+scored on them:
 
 | gate (cos <) | rows with a verdict | swaps called | false alarms | misses |
 |---|---|---|---|---|
-| 0.5 | 981 (60%) | 29 | 0 | 1 |
-| 0.7 | 1,318 (81%) | 66 | 2 | 2 |
-| **0.7 + margin 0.1** | **1,312 (81%)** | **64** | **0** | **1** |
-| 0.8 + margin 0.2 | 1,440 (89%) | 76 | 1 | 1 |
-| none | 1,626 | 94 | 25 | 5 |
+| 0.5 | 60% | 30 | 0 | 1 |
+| **0.7, margin 0.1** (shipped) | **81%** | **65** | **0** | **1** |
+| 0.8, margin 0.2 | 89% | 77 | 1 | 1 |
+| none | 100% | 95 | 25 | 5 |
 
-Above cos 0.85 the AUC falls to ~0.8. Window lengths 1.5–8 s, gaps and medians did
-not beat ±3 s. Other packages use the same numbers, unmeasured.
+Out of sample, on 439 other videos of the same rig with a package that never saw
+their animals, the shipped settings called 49 of 89 swaps with 1 false alarm.
+Window lengths 1.5–8 s did not beat ±3 s. Other packages use the same numbers,
+unmeasured.
 
-**The built-in model (2026-11-10, `gate_sweep/builtin*.py`).** The frozen DINOv3
-ViT-S/16 at 192 px on the same rows: every pair looks alike to it (median
-separation 0.92, 10–90% 0.85–0.95, vs 0.16 for the package; none below 0.7, so
-the package's gate gave no verdict anywhere), the separation does not predict
-where its score holds (AUC 0.92–0.96 at every level), and its scores are ~6x
-smaller (median −0.10 swap, +0.13 kept; AUC 0.913, 0.945 clean). Hence
-`PREJUDGE_BUILTIN`, no gate:
-
-| margin | "look swapped": swaps / false | "look right": kept / swaps | unsure |
-|---|---|---|---|
-| 0.1 | 49 / 15 | 934 / 4 | 624 |
-| 0.15 | 31 / 4 | 644 / 3 | 944 |
-| **0.2** | **17 / 0** | **448 / 2** | **1,159** |
-| 0.25 | 9 / 0 | 303 / 1 | 1,313 |
-
-(gate 0.95 + margin 0.2: 13 / 0, 260 "can't tell"; no better.) The tab prompts
-to train a model for the rig.
-
-**The app on the same videos (2026-11-10, `runs/2026-11-10_prejudge-app` on cup).**
-Load SLP, Track All and the image check with each model, headless Chrome on the CPU,
-all 395 videos: the review list holds 1,632 of the 1,633 rows, and the scores follow
-the study's (package separation r 0.985, row score r 0.975; built-in score r 0.88,
-its crops being the app's, not the training script's). Answer key: the proofread
-files with the five stretches the proofreader confirmed as her mistakes corrected
-(2026-11-16, `runs/2026-11-16_gtfix`; 7 places change answer; 1,632 rows, 95 swaps),
-shipped settings:
-
-| model | swaps called | false alarms | misses | unsure / no verdict |
-|---|---|---|---|---|
-| package (gate 0.7, margin 0.1) | 67 | 1 | 1 | 5 unsure, 289 alike, 35 sparse |
-| built-in (margin 0.2) | 14 | 2 | 1 | 1,201 unsure, 37 sparse |
-
-Built-in at margin 0.25: 7 / 1; 0.3: 4 / 0. About 1,230 further rows (mostly
-arrivals and tracklet changes) have too few crops: their rows show no image note, and the summary line counts them. The tab's About text quotes
-these app numbers.
+**The built-in model** (frozen DINOv3 ViT-S/16 at 192 px) finds every pair alike
+(median separation 0.92 vs 0.16 for the package), its separation does not predict
+where its score holds, and its scores are ~6x smaller; hence `PREJUDGE_BUILTIN`:
+no gate, margin 0.2. In the app on the same rows it called 14 of 95 swaps with 2
+false alarms, about 3 rows in 4 unsure, and the tab prompts to train a model for
+the rig. About 4 rows in 10 (mostly arrivals and tracklet changes) have too few
+crops for any verdict: they show no image note and the summary line counts them.
+The tab's About text quotes these numbers.
 
 **Imports from project modules.** None.
 
@@ -5116,9 +4892,15 @@ required, `last_hidden_state` with CLS at token 0), `onnx/model_fp16.onnx`
 **Key exports.** `parseModelManifest(raw, crop)` -> `{ok, manifest}` | `{ok: false,
 error}` (a sentence for the user): `format: "lucid-image-model"`, `version: 1`,
 `name`, `input` (112–512 px, a multiple of 14 or 16: `validModelInput`), `crop`
-(must equal the app's `CROP`), `threshold` (−4..0), `fp16`, `sha256` (path -> hex),
-free-form `training` / `validation`. `modelKeyMaterial(manifest, fileHashes)`: the
-text a package's key hashes (input, crop, fp16, weight hashes; not the name).
+(must equal the app's `CROP`), `cropRule` (a whole number, absent = 1), `threshold`
+(−4..0), `fp16`, `sha256` (path -> hex), free-form `training` / `validation`.
+`modelKeyMaterial(manifest, fileHashes)`: the text a package's key hashes (input,
+crop, fp16, weight hashes; not the name, nor `cropRule`, so adding it to an old
+manifest keeps the key). `CROP_RULE` (2): how this app cuts crops, numbered — 1
+left only tail… nodes out, 2 also t0, t1… (`isTailNode`); bump it with
+`scripts/train_image_model.py`'s whenever `cutCrop` changes what lands in a crop.
+`cropRuleDiffers(rule, nodeNames)`: whether a package of that rule sees other crops
+on this skeleton (only rule 1 on one naming t0, t1…).
 `modelChoiceOf(pkg)` / `ingestModelChoice(raw)`: what a session saves
 (`metadata.lucid.imageModel`: key, name, input, threshold, url or folder) and its
 tolerant read (malformed -> null = built-in). `packageBaseUrl(input)`: a Hugging
@@ -5130,7 +4912,7 @@ Face repo id or an https folder URL (http only on localhost) -> the base URL;
 **Imported by.** `ui/image-model-package.js`, `ui/image-model-dialog.js`,
 `import-export/visibility-metadata.js`.
 
-**Coverage.** `tests/test-image-model-package.mjs`; the saved choice in
+**Coverage.** `tests/test-image-model-package.mjs` (also `cropRule`, `cropRuleDiffers`); the saved choice in
 `tests/test-visibility-metadata.js`.
 
 ---
@@ -5208,6 +4990,239 @@ and `tests/e2e/align-views-to-references.mjs` (the dialog in the real app).
 Real-data check: `tests/e2e/_diag-real-align-views.mjs`.
 
 ---
+
+### pose/outline-core.js
+
+**Purpose.** Animal outlines per camera frame, built the idtracker.ai way
+(Romero-Ferrero et al. 2019; https://idtracker.ai/latest/) and split between the
+animals by their poses. DOM-free, typed arrays only; runs in
+`pose/outline-worker.js` and in Node tests.
+1. **Blobs** (`segmentBlobs`): pixels brighter than the camera's empty arena, with
+   hysteresis (more than `thrLow` 8 grey levels, joined to pixels more than
+   `thrHigh` 22: an animal's shadowed parts stay, the floor and its shadows, never
+   brighter than the empty arena, stay out), a morphological open (3 px ellipse)
+   then close (5 px; OpenCV's `MORPH_ELLIPSE` elements, `ellipseElement`, and its
+   border rule), 8-connected components holding a bright pixel, at least
+   `minArea` (150) px, holes filled. The empty arena is the per-pixel median of
+   sampled frames with each frame's animals left out where their poses say they
+   are (`maskedMedian` over `poseMask`s: each animal's body-keypoint hull grown by
+   a third of its extent + 6 px, and its tail line grown 10 px; a pixel no frame
+   leaves free takes the plain median). Without poses, `medianImage` (Hoare
+   selection; the lower median for an even count). The plain median keeps any
+   animal resting in one place for most of the sampled frames (idtracker.ai's
+   limit): on the HardFight excerpt, ghost mice in the empty arena hid a dim tail.
+2. **What one animal looks like** (`singlePoseBlobs`, `poseAreaModel`): from the
+   sampled frames' blobs that hold exactly one animal's pose (at least
+   `inFraction` of its body keypoints, and no other animal's), the median area, a
+   robust s.d. (1.4826 x the median absolute deviation) and `reach`: the median
+   of each blob's 99th percentile of pixel distance to the animal's pose (body
+   skeleton, or tail line). A blob over median + `areaSigmas` (4) s.d. is a
+   crossing (idtracker.ai's test is one-sided). null with < 3 such blobs.
+   idtracker.ai's rule, median and s.d. over frames with exactly as many blobs as
+   animals (`areaModel`), stays for frames without poses: a camera that sees the
+   animals' reflections never has such a frame (DoublePoke 2026-07-13 topC, 5
+   mice: 2 to 13 blobs in 39 sampled frames, never 5), nor one that never sees
+   them all apart.
+3. **Per animal** (`computeOutlines`): an animal is IN a blob when at least a
+   quarter of its body keypoints (at least one) lie in it, so one stray keypoint
+   makes no crossing. One animal in a blob: all of it (`individual`). Two or more,
+   or one in a blob the area calls a crossing (then animals in no blob within
+   `reach` join it): split pixel by pixel by nearest BODY skeleton (`crossing`; one
+   animal and nobody near: `oversized`, all of it). Nobody in it: the animal whose
+   body keypoints come within `reach` (15 px), `near`; else nobody (`unassigned`,
+   listed as polygons when animal-sized, ≥ max(minArea, median/2)). In every
+   case an animal gets only the pixels within `envelope` (1.5) x the model's
+   `reach` of its body skeleton, or `tailWidth` of its tail line (no model, no
+   limit); the rest stay nobody's (`blobs[].beyond` counts them) and an
+   animal-sized part of them is listed in `unassigned` too. Something bright
+   touching an animal is not the animal: its reflection in a wall where the wall
+   meets the floor, or wall lit up beside it, which hysteresis joins (DoublePoke
+   2026-07-13 topC, 4,551-4,926: one mouse got 20-31 thousand px, three mice'
+   worth; HardFight 637: reflections in the side walls). Measured on 271 blobs
+   holding one pose (2 recordings, 8 cameras): own pixels lie within 25-45 px of
+   the pose on top cameras, 34-97 on side cameras (the belly below a side view's
+   skeleton), so the reach is learnt per camera; blobs with something attached
+   reach 150-300. A reflection touching the animal along its side keeps a band
+   within the limit. Capping how far dim pixels may join bright ones would cut
+   real side-view bodies (up to 59 % of a blob is dim), so hysteresis stays.
+4. **Tails**: pixels more than `tailThr` (14) grey levels over the empty arena
+   (tails are thin and dimmer than bodies) within `tailWidth` (7) px of an
+   animal's tail polyline become its own, unless they are another animal's: in
+   its body core (its mask eroded by `coreErode`, 4 px) or anywhere in a blob that
+   is that animal's alone (only a crossing's split can have handed a tail lying
+   alongside to the other animal). The split never uses tails: a tail lying across
+   another animal would pull that animal's back pixels to it (the topC 6,250
+   screenshot). Holes are filled BEFORE tracing, so a curled tail encloses no floor.
+   The polyline is smoothed first (`smoothTail`, centripetal Catmull-Rom): a tail
+   bends between its keypoints and straight segments cut its curves (frame 0 mid).
+   The polyline's node order comes from `tailChain`: along the edges when the tail
+   nodes form one path, else BY NAME — SLAP's DoublePoke skeleton hangs every tail
+   node off TTI (a star), and following edges gave TTI → TailTip → Tail_0 …, a
+   zigzag across the floor.
+5. **Small pieces**: bright pieces under `minArea` within `reattach` (6) px of
+   exactly one animal join it (a forepaw the open cut off; exempt from the next
+   rule); other pieces of an animal under `minPiece` (60) px go.
+6. **Contours** (`traceBoundary`): Moore-neighbour tracing of each piece's outer
+   boundary through pixel centres; it stops when the start pixel would step to
+   the same second pixel again (also ends one-pixel-wide pieces).
+
+**Exports.** `OUTLINE_PARAMS` (frozen defaults), `outlineParams(p)`, `rgbaToGray`,
+`medianImage`, `ellipseElement`, `morph`, `components(mask, w, h, sameValue)`,
+`fillHoles`, `segmentBlobs`, `areaModel`, `singlePoseBlobs(seg, w, h, animals,
+params)` → `[{blob, animal, area, reach}]`, `poseAreaModel(singles, params)` →
+`{median, sd, lo, hi, n, frames, reach, source: 'poses'}`, `computeOutlines(gray,
+bg, w, h, animals, model, params)` → `{labels: Uint8Array (0 = none, k =
+animals[k-1]), blobs: [{area, kind, animals, byArea, beyond}], animals: [{area, blobs, tail, reattached, posed}],
+contours: [[Float32Array]], unassigned: [Float32Array]}`, `traceBoundary`,
+`pointInPolygon`, `tailChain(nodeNames, edges)` (nodes named /tail/i; along the
+edges when they form one path from the body, else by name: base/root, numbers,
+mid, unnumbered, tip/end; the body node they hang from first),
+`animalFromInstance(inst, edges, chain)` (body points, body edges, tail polyline,
+and `tailPts`, the tail keypoints alone; missing nodes skipped), `normalizeAnimal`,
+`keypointCheck(labels, w, h, animals, reach, gray?, bg?, visThr?)` (per animal its
+body and tail keypoints no pixel of its own outline comes within `reach` px of,
+and which lie on another animal's; with the frame and empty arena, a keypoint off
+every outline counts only where something over `visThr` lies within `reach`: over
+plain floor it is an occluded part or a wrong keypoint; with `core`, a tail
+keypoint deep inside another animal's body is a tail hidden behind it. On the
+HardFight excerpt (659 frames x 8 cameras) a full Check… went from 2,626 suspects
+(plain median, every miss counted) to 216 (pose-masked empty arena, visible
+misses only, hidden tails skipped). `computeOutlines` returns it as `check`, run
+in the worker with `thrLow` and the final labels' cores),
+`smoothTail(L, k)`, `maskedMedian(frames, masks)`, `poseMask(w, h, animals,
+tailPad)`, `convexHull(pts)`, `outlineSuspects(check, areas, names)` (per animal at most
+one `{animal, reason, detail, weight}`: `missed` (a pose, no outline), `tail` (≥ 2
+tail keypoints off it), `split` (≥ 2 body keypoints on another's), `limb` (≥ 2 on
+none)), `labelImageContours(labels, w, h, n)`
+(a hand-painted label image's contours, as `computeOutlines` gives them).
+
+**With 3D** (an animal's `tubes`: its body edges projected into the camera,
+with pixels per calibration unit at each end, from `ui/animal-outlines.js`
+`bodyTubes`; `tubeError`: px between its 2D body keypoints and their
+projections): `tubeReach(T, x, y)` is a pixel's distance from the projected
+body in calibration units; `singlePoseBlobs` measures each blob's `reach3d`
+(its 99th percentile, tail pixels left out, only where `tubeError` ≤ a quarter
+of the blob's 2D reach), `poseAreaModel` takes the median (`reach3d`, `n3d`, at
+least 3). `computeOutlines` then keeps an animal's pixels within `envelope3d`
+(1.25) x `reach3d` of its projected body (`animals[].by3d`), for animals whose
+`tubeError` ≤ half that limit at their scale; others keep the 2D rule. On the
+5-mouse 2026-07-13 excerpt the 3D half-width came out 20-25 mm (top and mid
+cameras), 22-42 (sides).
+**Reflections** (a campy cage, `pose/cage-mirrors.js`; an animal's `mirrors`:
+`[{plane, tubes}]`, its body mirrored across a surface and projected where the
+camera sees that image in the surface, `bodyMirrors`): `mirrorEvidence(gray,
+bg, w, h, animals, reach3d, params)` counts, per surface, the images' points
+outside every animal's own body and how many land on something brighter than
+the empty arena; `reflectingSurfaces(ev)` keeps the surfaces with ≥ 20 points
+and ≥ half on something bright (the worker sums the sampled frames:
+`model.mirrors`, `model.mirrorStats`). In `computeOutlines`, a pixel within the
+limit of an animal's projected body but nearer (in units) a reflecting
+surface's mirror image of any animal is nobody's (`blobs[].mirrored`). The
+distance limits alone keep a reflection that touches the animal along its side
+(on topC, a band ~40 px deep under a mouse at the floor's edge): a round tube
+wide enough for the body takes in the image's near half. On that excerpt the
+front wall reflects in the four top cameras (63-90 % of points on something
+bright; matt surfaces 1-15 %, at most 47 %), no surface in mid or the sides;
+the mouse at the floor's edge on topC 4,926: 15,081 px → 9,542 (one mouse:
+9,457), suspects unchanged.
+
+**Speed.** ~80 ms per 1280×1024 camera frame (Node, warm); the 39-frame median ~0.2 s.
+
+**Imports.** None. **Imported by.** `pose/outline-worker.js`, `ui/animal-outlines.js`.
+**Tests.** `tests/test-outline-core.mjs` (§19 3D, §20 reflections), `tests/e2e/animal-outlines.mjs`.
+
+### pose/outline-worker.js
+
+**Purpose.** `pose/outline-core.js` off the page's thread: a module worker from
+`ui/animal-outlines.js`'s pool. One camera always goes to the same worker, which
+keeps that camera's empty arena (`{bgs: Map}`), so a frame request sends only the
+frame. Frames arrive as ImageBitmaps (transferred) and are turned grey on an
+OffscreenCanvas.
+
+**Messages.** `background` (sampled frames, `nAnimals`, and per frame the animals'
+poses there, `poses` (`{body, tail, segments, tubes, tubeError, mirrors}`),
+left out of the median and used for the blobs holding one pose and, with
+`reach3d`, for which surfaces reflect: `mirrorEvidence` summed over the frames,
+`reflectingSurfaces` → `model.mirrors`, `model.mirrorStats`) → `{bg (a copy),
+model (`poseAreaModel`, else `areaModel`), counts, areas, singles}`; `setBackground`; `outline` (frame, animals, model, params) →
+`computeOutlines`' result with its buffers transferred; `drop`. Each reply echoes
+`id`; a failure replies `{error}`.
+
+**Exports.** `handleOutlineMessage(msg, store, makeCanvas)` → `{reply, transfer}`:
+the whole handler, which the page runs inline where a module worker or
+OffscreenCanvas is missing (`self.onmessage` is installed only inside a worker).
+
+**Imports.** `./outline-core.js`. **Imported by.** `ui/animal-outlines.js` (the worker
+by `new URL('../pose/outline-worker.js', import.meta.url)`, and statically for the
+inline path). **Tests.** `tests/e2e/animal-outlines.mjs` (the pool's workers).
+
+### pose/cage-mirrors.js
+
+**Purpose.** The arena's floor and walls as mirrors, from a campy cage
+(`<calibration>.cage.json`, written by campy's `campy-cage` from the box's
+printed grid, in the calibration's units). Import-free, DOM-free. A mouse near a
+glossy wall shows a mirror image as bright as itself; where the image touches
+the mouse, only the 3D pose mirrored across the wall says which pixels are the
+image (`ui/animal-outlines.js` `bodyMirrors`, `pose/outline-core.js`).
+
+**Exports.** `isCampyCageName(name)` (`*.cage.json`); `parseCampyCage(text)` →
+`{corners (4, the floor's, in order), up (unit), height, units}` or null;
+`cagePlanes(cage)` → the floor, then a wall per floor edge, each `{name, point,
+normal (into the box), quad}`; `mirroredPoint(X, plane)`;
+`reflectionVisible(C, X, Xm, plane)` (camera and point on the box's side, and
+the line from the camera to the image crosses the plane inside its quad).
+
+**Imports.** None. **Imported by.** `loading/session-loader.js` (`adoptCampyCage`),
+`ui/animal-outlines.js`. **Tests.** `tests/test-cage-mirrors.mjs` (DoublePoke's
+2026-07-13 cage).
+
+### pose/outline-edits.js
+
+**Purpose.** Outlines corrected by hand with the Outlines brush (`ui/outline-brush.js`):
+per camera frame one label image (0 = no animal, k = `animals[k-1]`) copied from the
+outline shown there when the first stroke lands, then painted. On
+`session.outlineEdits` (a Map by `outlineEditKey(frame, camera)`); saved as
+run-length rows in `metadata.lucid.outlineEdits` (through
+`import-export/outline-flags-metadata.js`), a few KB per corrected camera frame;
+in memory w*h bytes each. DOM-free.
+
+**Exports.** `BRUSH_MIN`/`BRUSH_MAX` (px), `outlineEditKey`, `outlineEdits(session)`
+(never null), `outlineEditAt`, `beginOutlineEdit(session, frame, camera, w, h,
+labels, animals)` (copies; returns the existing edit when there is one),
+`revertOutlineEdit`, `paintDisc(labels, w, h, x, y, r, value, stroke)` and
+`paintSegment(...)` (discs every half radius, so a fast drag leaves no gap; 0
+erases; `stroke` records each changed pixel's old value once), `pushStroke(edit,
+stroke, max=30)` / `undoStroke(edit)`, `rleEncode` / `rleDecode` (`[value, count,
+…]`; null when the rows do not add up), `serializeOutlineEdits` (`{v: 1, edits:
+[{frame, camera, w, h, rle, animals, at}]}` or null; no undo history),
+`ingestOutlineEdits` (REPLACES; bad rows skipped). Every change bumps
+`edit.version`, which `editedEntry` re-traces contours on.
+
+**Imports.** None. **Imported by.** `import-export/outline-flags-metadata.js`,
+`ui/animal-outlines.js`, `ui/outline-brush.js`, `ui/outline-flags-panel.js`.
+**Tests.** `tests/test-outline-flags.mjs` §4, `tests/e2e/animal-outlines.mjs` §6b/§7b.
+
+### pose/outline-flags.js
+
+**Purpose.** Flags on bad animal outlines: "this camera, this frame, this animal's
+outline is wrong, and why" — the Outlines panel's review list and what its export
+hands on as feedback and training data. DOM-free. A flag is `{frame (0-based),
+camera, animal (its name as the outline showed it, or null = several / not sure),
+identity, track (its track in that camera), source ('2d' own detection | '3d'
+projected), reason, note (≤ 200 chars), at (ISO time)}`; one per (frame, camera,
+animal), kept sorted by frame, camera, animal on `session.outlineFlags`.
+
+**Exports.** `OUTLINE_FLAG_REASONS` (`limb` Missed limb, `tail` Tail on the wrong
+animal, `bleed` Bleed onto floor or shadow, `missed` Missed animal, `split` Wrong
+split between animals, `other`), `outlineFlagReasonLabel`, `OUTLINE_NOTE_MAX`,
+`normalizeOutlineFlag`, `outlineFlagKey`, `outlineFlags(session)` (never null),
+`addOutlineFlag` (replaces the same key; stamps `at`), `removeOutlineFlag`,
+`outlineFlagsAt`, `serializeOutlineFlags` (`{v: 1, flags}` with empty fields left
+out, or null), `ingestOutlineFlags` (REPLACES; garbage reads as none).
+
+**Imports.** None. **Imported by.** `import-export/outline-flags-metadata.js`,
+`ui/outline-flags-panel.js`. **Tests.** `tests/test-outline-flags.mjs`,
+`tests/e2e/animal-outlines.mjs`.
 
 ## ui/
 
@@ -6414,6 +6429,8 @@ In-memory only; see `ui/app-state.js`.
   `setSkeletonEditWarningSuppressed` for `#skeletonWarnOffNote`.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
   the ID Switches tab (and its seekbar markers) for the active session.
+- `./outline-flags-panel.js` — `refreshOutlinePanel`: likewise the Outlines panel
+  (empty arenas per camera, flags on bad outlines).
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
   `rememberSkeleton`, `buildRememberedSkeleton`, `setProjectSkeleton`,
   `getProjectSkeleton`.
@@ -8081,6 +8098,12 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   - An edit to the current frame shows immediately — resident frames are always
     counted live.
 
+  **Animal outlines draw behind.** Right after `drawFrameOverlays` for a view,
+  `drawAnimalOutlines(view, vIdx, …)` (`ui/animal-outlines.js`) paints the
+  view's outlines at the frame THAT view shows with `destination-over`, so they
+  sit under the skeletons already drawn; a no-op while Visibility ▸ Animal
+  Outlines is off. Pinned by `tests/e2e/animal-outlines.mjs`.
+
   **Plane placements draw last.** After `drawFrameOverlays` returns for a view,
   the loop calls `drawPlaneOverlays(view)` (`ui/plane-overlays.js`, via its
   `ui/plane-definition.js` re-export) on the same canvas — `drawFrameOverlays`
@@ -8124,6 +8147,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `computeLazyCameraBaseline`, `createFrameCounterBaselineBuilder`,
   `countFrameCounters`, `nonResidentCameraCounts`, `refreshCountedFrame`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+- `./animal-outlines.js` — `drawAnimalOutlines`. **Circular** (it imports
+  `drawAllOverlays` back for its one redraw when outlines land); safe, both
+  uses are in function bodies.
 - `./smoothing-button.js` — `syncSmoothingButton` (every draw).
 - `./run-buttons.js` — `syncRunButtons` (every draw).
   **Circular** (that module imports `drawAllOverlays` back); safe because both
@@ -8221,6 +8247,39 @@ an action.
 `updateTrackingThresholds`, `onTrackingThresholdsChange`),
 `../import-export/save-load.js` (`setStatus`). **Imported by** `ui/ui-wiring.js`.
 Test: `tests/e2e/toolbar-reproj-threshold.mjs`.
+
+### ui/skeleton-chain-editor.js
+
+**Purpose.** Settings ▸ Triangulation Wizard ▸ Skeleton check's node-tile editor for the check's custom parts
+(`pose/skeleton-check-run.js`, `settings.chains`). A bank holds a tile per skeleton node; each part is a row of tiles
+in order along the body. A tile dragged from the bank into a row is a copy (the bank keeps it), placed before the tile
+it is dropped on or at the row's end; dragged within a row it moves, into another row it moves there (a row already
+holding that node refuses it), onto "New part" it starts a part, back onto the bank it comes out. Without dragging, a
+click (or Enter, Space) on a bank tile adds it to the end of the selected part (a row's number selects it; "New part"
+starts one), and a tile's × takes it out. Every control is a `<button>`: the Settings modal stops keydown in the
+capture phase, so nothing here listens for keys. A stored name the skeleton lacks shows as a warning tile
+(`.sk-chain-tile-unknown`), never dropped silently. HTML5 drag and drop, with the dragged tile kept in a closure
+(`dragging`), since `dataTransfer` cannot be read during dragover.
+
+**Key exports.** `buildSkeletonChainEditor({ nodes, text, onChange })` → `{ el, getText() }`; the pure, DOM-free model:
+`textToParts`, `partsToText`, `dropTile(parts, from, to)`, `appendTile(parts, name, part)`, `removeTile(parts, part,
+index)` (an emptied part goes).
+
+**Imports.** `../pose/skeleton-check-run.js` (`parseChainText`). **Imported by** `ui/settings-modal.js`. Tests:
+`tests/test-skeleton-chain-editor.mjs` (the model, Node), `tests/e2e/skeleton-check.mjs` §7 (dragging in the page).
+
+### ui/skeleton-check-field.js
+
+**Purpose.** The Triangulate menu's **Skeleton check** checkbox (`#tbSkeletonCheck`), below Reprojection error:
+edits `pose/skeleton-check-run.js`'s browser-local `enabled` (off by default), which every Triangulate run reads
+when it starts. Its tooltip explains the check and names the parts it judges (custom ones marked "(custom)", and any
+custom part it left out), refreshed when the menu opens. Not in Defining Plane Mode's toolbar lock: a setting, not an
+action.
+
+**Key exports.** `wireSkeletonCheckField()`.
+
+**Imports.** `./app-state.js`, `../pose/skeleton-check-run.js`, `../import-export/save-load.js` (`setStatus`).
+**Imported by** `ui/ui-wiring.js`. Test: `tests/e2e/skeleton-check.mjs`.
 
 ### ui/animal-count-field.js
 
@@ -10012,6 +10071,8 @@ multi-video docking layout.
 **Imports from project modules.**
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
   session's ID-switch results and markers (try/catch, like `populateTimelineVisibility`).
+- `./outline-flags-panel.js` — `refreshOutlinePanel`: the new session's outline
+  flags and empty arenas (same try/catch).
 - `./app-state.js` — `state`, controllers + setters.
 - `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`,
   `someValidPoint3d`, `pooledPoints3d` (the re-solved groups' 3D).
@@ -10266,12 +10327,8 @@ such as an animal coming back after being out of sight — `look`, so on one cam
 every coat-brightness row at a candidate moment or a return). Unfixed, a check's
 row shows the place's fix as **Fix from here…** beside its own **Fix switch…**;
 once fixed, as **Fix again…** (both carry `data-place`, and the dialog then
-explains the place's fix), and the row stays selected. Before 2026-10-29 only a
-review-list row offered it before the check's Fix, and a fixed check row with a
-return behind it offered only Undo: the walkthrough's reviewer could not make 13
-place fixes on the 64 hard SLAP-2M views (0.38 points) and 4 on sham_gdx; with it,
-none (SLAP 98.61% -> 98.91%, sham_gdx 99.95% -> 99.97%). A check's fix starting a
-second too early once cost a sham_gdx video 90.2% instead of 99.9%. With more than two tracks it lets the reviewer
+explains the place's fix), and the row stays selected. Without it a simulated
+reviewer could not make 13 place fixes on 64 hard SLAP-2M views. With more than two tracks it lets the reviewer
 pick the two tracks (`pairSelect`, `#idSwitchFixA` / `#idSwitchFixB`, defaulting to
 the row's pair): on 3–4 mice the row's own pair was the swapped one in only a third
 to two thirds of the switches found. The dialog keeps Esc / Cancel.
@@ -10286,10 +10343,8 @@ From then on that place's own Fix may start anywhere back to the place before
 (the dialog says "before this place (you went back to an earlier encounter)");
 without it a frame before the place still falls back to just after it. The
 state (`st.stepBack`: key, bound, last encounter, count) is in memory only, never
-saved. Measured with the check row at the end (`pose/single-camera-tracking.js`,
-2026-11-09): a reviewer watching 5 s past each place and stepping back this way
-matched one who watches every frame between places; on 22 proofread 8-camera
-recordings, without it the review lost 0.3–0.4 points (2026-11-16).
+saved. With the check row at the end, a simulated reviewer watching 5 s past each
+place and stepping back this way matched one who watches every frame between places.
 
 **The coat-brightness check** (`brightness: true`, `runBrightness`) runs
 `checkBrightnessSwitches` with `ui/brightness-sampler.js`'s vectors under the same
@@ -10320,7 +10375,11 @@ the coat-brightness check also tests Track All's candidate moments
 (`session._idSwitchCandidates`) with `skipEmpty` / `clearestEndLeads`. A moment's
 row reads "at …" instead of "close …" and says why it was looked at. A Fix swaps
 the two TRACKS (`swapSingleCameraIdentities`, also the undo) and renames them in
-the stored candidates; its dialog says "(their tracks)".
+the stored candidates; its dialog says "(their tracks)", or, when an identity was
+edited apart from its track (`singleCameraFixSwapsTracks` false, re-asked when the
+pair is picked), "(their identities only)" with a warning that SLEAP will not see
+the fix, and the status after it is a warning too. Frame numbers go through
+`formatFrameNumber` (`ui/frame-readout.js`).
 
 **The image check.** Needs the session's videos (else it says why), and the
 network the first time, to download the model. An error the embedder marks
@@ -10470,8 +10529,9 @@ scores here and its `onProgress: yieldToPaint` lets the page paint between the t
 halves. On the 8-camera, 108,000-frame project no task of the check passes ~50 ms),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `pose/single-camera-tracking.js` (`singleCameraName`, `singleCameraCheckSession`,
-`swapSingleCameraIdentities`, `singleCameraCheckOptions`, `pairEncounters`),
+`swapSingleCameraIdentities`, `singleCameraFixSwapsTracks`, `singleCameraCheckOptions`, `pairEncounters`),
 `pose/multi-camera-review.js` (`pairEncounters3d`),
+`ui/frame-readout.js` (`formatFrameNumber`),
 `pose/size-check-pool.js` (`scoreSizeGridOffThread`),
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
@@ -10665,6 +10725,160 @@ hydrated); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost
 with a row selected).
 
 ---
+
+### ui/animal-outlines.js
+
+**Purpose.** Visibility ▸ Animal Outlines (`#visOutlines`, shortcut `O`; fill
+`#visOutlineFill`, both browser-local in `visibilitySettings`): an outline per
+camera and animal (`pose/outline-core.js`), drawn BEHIND the skeletons
+(`destination-over`) in every docked view by `drawAllOverlays`.
+- **Empty arenas** (`ensureBackgrounds`, `buildBackground`): per camera, once per
+  session and decoder, `BACKGROUND_FRAMES` (39) frames over the whole video
+  (`sampleFrames`: the keyframe nearest each even spacing, from
+  `keyframeIndices`, so each is one decode; evenly spaced frames when there are
+  fewer than min(39, 15) keyframes; every frame when asked for at least as many
+  as the video has) read with `decoder.peekFrame`, each with the animals' poses
+  on it (`posesAt`: body, tail, body segments, and with 3D `tubes`, `tubeError`,
+  `mirrors`; the active lazy project's
+  frames hydrated first) so the worker leaves them out of the median and learns
+  one animal's area and reach from the blobs holding one pose (never the
+  playback path), sent to the camera's worker. A progress card counts the
+  frames; up to 4 cameras at once. Only without such blobs does the area model
+  count blobs against a number of animals: `session.numAnimals` when it is a
+  count, else the animals in view on the current frame; `refitAreaModels` redoes
+  the models from the kept blobs (`singles`, else `areas`).
+- **Outlines** (`drawAnimalOutlines`, `computeViewOutlines`): while paused, a
+  missing camera frame is requested (one in flight per camera, the newest wins)
+  with the frame (`peekFrame`, a cache hit for the frame on screen) and the poses;
+  the result is cached (`OUTLINE_CACHE_SIZE` 64 camera frames) by camera, frame and
+  a signature of the poses, so editing a pose recomputes, and the overlay redraws
+  once (`redrawSoon`). During playback only cached outlines draw.
+- **Animals** (`animalsInView`): the frame's instance groups, each from its own
+  detection in this camera, else its 3D projected (`groupReprojection`, source
+  `'3d'`), then the ungrouped detections (a prediction duplicating a user
+  instance's track, or lying on a placed pose, is left out). Names from
+  `groupDisplayName` / track names; colours from `getGroupColor` /
+  `unlinkedBaseColor` (never computed separately); identity and track recorded
+  for flags.
+- **Paint** (`paintOutlines`): each animal's polygons stroked in its colour over a
+  fill at the slider's alpha; animal-sized blobs nobody was given, dashed grey.
+  `opts.over` paints on top (the export's previews).
+- **Corrected outlines win**: a camera frame with an edit (`pose/outline-edits.js`)
+  draws `editedEntry` (contours re-traced from its label image when its `version`
+  moved, `labelImageContours`) instead of the computed outline.
+- **Memory**: only a camera's newest computed outline keeps its label image whole;
+  older cached ones keep it run-length encoded (`labelsRle`), decoded by
+  `entryLabels(entry)` when the brush, a hit-test or the export needs it.
+- A request that never settles is given up after `JOB_TIMEOUT_MS` (30 s), so it
+  cannot hold its camera's queue.
+- `setOutlinePaintHook(fn)` runs `fn(view, frame, entry, opts)` after a view's
+  outlines are painted (the brush's ring).
+- **Suspects**: every computed outline gets `entry.check` (the worker's
+  `keypointCheck`, visible misses only; `KEYPOINT_REACH` 3 px) and
+  `entry.suspects` (`outlineSuspects`); the keypoints
+  behind a suspect get red rings over everything (`paintSuspectKeypoints`).
+  `scanOutlines(session, views, frames, onProgress, cancelled)` works out (or
+  reuses) the outlines of every camera on `frames` and returns every suspect;
+  the last scan is `outlineScan(session)` (in memory). A landed outline fires
+  `lucid:outlines-landed` (debounced) for the panel's suspect list.
+- `outlineAnimalAt(session, cam, x, y)` hit-tests the outline last drawn in a
+  camera (label image, then polygons); `drawnOutlines`, `cachedOutlines`,
+  `outlineCameraState`, `resetOutlines`, `outlineAnimalCount`, `outlinesEnabled`,
+  `currentOutlineParams` (`window.LUCID_OUTLINE_PARAMS` overrides, for tests),
+  `__outlinePoolInfo`, `bodyTubes(group, camera, edges, chain, inst2d)` (an
+  animal's 3D body projected into a camera with the image scale per end, and
+  how far its 2D pose lies from it: `{tubes, tubeError}`), `bodyMirrors(group,
+  camera, edges, chain, cage)` (its mirror images in the cage's surfaces as the
+  camera sees them: `[{plane, tubes}]`). `animalsInView` gives each grouped
+  animal with 3D its `tubes`/`tubeError`, and `mirrors` when
+  `session.campyCage` is set; `refitAreaModels` keeps a model's `mirrors`.
+- **Pool**: up to 4 module workers (half the cores); inline on the page
+  (`handleOutlineMessage`) without Worker/OffscreenCanvas, after a worker fails,
+  or with `window.LUCID_OUTLINE_INLINE`.
+
+**Imports.** `./app-state.js`, `./overlays.js` (`groupReprojection`,
+`getGroupColor`, `unlinkedBaseColor`, `unlinkedDupIndices`), `./image-embedder.js`
+(`keyframeIndices`), `./rendering.js` (`drawAllOverlays`; **circular**, used in
+function bodies only), `./loading-overlay.js`, `../pose/pose-data.js`
+(`groupDisplayName`), `../pose/outline-core.js`, `../pose/outline-worker.js`,
+`../pose/outline-edits.js` (`outlineEditAt`, `rleEncode`, `rleDecode`).
+**Imported by.** `ui/rendering.js`, `ui/outline-flags-panel.js`, `ui/outline-brush.js`.
+**Tests.** `tests/e2e/animal-outlines.mjs`.
+
+### ui/outline-brush.js
+
+**Purpose.** The Outlines brush (`B`, or the Outlines panel's Brush button; turning
+it on shows the outlines): hold the LEFT button over a camera view to draw an
+animal's outline, the RIGHT button to erase outline (any animal's) under the brush.
+A stroke that starts on an animal draws that animal; one that starts off every
+animal draws the animal chosen in the panel (default: the last one drawn; the only
+one if there is one). `[`/`]` change the size (`BRUSH_MIN`..`BRUSH_MAX` video px,
+kept in `localStorage['lucid.outlineBrush']`), Cmd/Ctrl+Z undoes the last stroke on
+the camera frame under the pointer, Esc puts the brush away.
+- Capture-phase listeners on `document` while on: a button press over a view's
+  overlay canvas paints and stops the event, so it never selects or drags a pose;
+  the wheel still zooms; the context menu is held off over views. Nothing paints
+  during playback.
+- The first stroke on a camera frame starts its edit (`beginOutlineEdit`) from the
+  outline shown (`entryLabels` of `drawnOutlines`); from then on that camera frame
+  draws the edit (`editedEntry`). A stroke that changed nothing leaves no edit.
+  A finished stroke marks the project dirty.
+- The ring cursor is drawn through `setOutlinePaintHook` after the view's outlines.
+- `onBrushChange(fn)` tells the panel what changed (`'state'`, `'radius'` — so the
+  size slider is not rebuilt mid-drag — or `'edit'`).
+
+**Exports.** `setBrushOn`, `toggleOutlineBrush`, `brushState`, `setBrushRadius`,
+`setBrushAnimal`, `undoBrushStroke`, `onBrushChange`, `outlineBrushActive`.
+**Imports.** `./app-state.js`, `./animal-outlines.js`, `./rendering.js`
+(`drawAllOverlays`), `../pose/outline-edits.js`, `../import-export/save-load.js`.
+**Imported by.** `ui/outline-flags-panel.js`, `ui/ui-wiring.js` (the `outlineBrush`
+handler). **Tests.** `tests/e2e/animal-outlines.mjs` §6b.
+
+### ui/outline-flags-panel.js
+
+**Purpose.** The Outlines panel (`#tabOutlines` / `#outlinePanel`): per camera, how its
+empty arena stands (frames sampled, single-animal area median ± s.d.), Show/Hide
+and Rebuild empty arenas; and the flags on bad outlines (`pose/outline-flags.js`).
+- **Flag** (`openOutlineFlagDialog`, `flagOutlineUnderPointer` = shortcut
+  `Shift+O`, or the panel's Flag outline… button): a dialog for the view the pointer
+  was last over (`interactionManager.lastInteractedView`), at the frame on screen,
+  with the animal under the pointer chosen (`outlineAnimalAt` on
+  `lastCursorPos`); animal (or Several / not sure), reason, optional note; Enter
+  flags (Enter on a focused button is that button), Esc closes, and the app's
+  shortcuts are held off while it is open. Flagging marks the project dirty.
+- **List**: by frame (shown 1-based like the readout); a click on a row goes to its
+  frame with its camera as the active view (`goToFlag`); ✕ removes one (dirty).
+- **Export…** (`exportOutlineFlags`, `buildOutlineFlagsExport`): a ZIP download of
+  every flagged camera frame: its frame (PNG), its outlines as they stand now (an
+  8-bit label PNG and a JPEG preview), each camera's empty arena, a manifest
+  (`lucid-outline-flags` v1: flags, parameters, area models, per camera frame the
+  animals the label image numbers and its blobs). Lazy frames are hydrated first;
+  a camera frame without outlines is listed with `missing`.
+- **Suspect outlines**: the outlines the poses disagree with (`entry.suspects`) on
+  the frame shown, plus the last Check… (N frames spread over the video,
+  `sampleFrames` at the first camera's keyframes; Esc stops; progress card):
+  click goes there, Flag makes a flag with the reason and the finding as its note,
+  Flag all flags every listed one (`suspectRows`, `checkOutlineFrames`,
+  `refreshSuspectList` on `lucid:outlines-landed`).
+- **Correct outlines**: the brush's on/off, size, which animal a stroke off every
+  animal draws (the last view's animals), and the corrected camera frames (click
+  goes there, ✕ throws the correction away, dirty).
+- The export also takes every corrected camera frame, flagged or not: its label
+  image is the correction (`edited: true`), with the computed one beside it
+  (`labels_auto/`, numbered by `animals_auto`).
+- `refreshOutlinePanel()` — called by `updateInfoPanel`, a session switch, the
+  `visOutlines` change, and the `lucid:outlines-changed` event an empty-arena run
+  fires.
+
+**Imports.** `./app-state.js`, `./animal-outlines.js`, `./frame-readout.js`,
+`./info-tip.js`, `./plane-definition.js` (`ICON_INFO`), `./loading-overlay.js`,
+`../pose/outline-flags.js`, `../pose/triangulation.js`
+(`getInstanceGroupsForFrame`, `ensureLazyFrameData`),
+`../import-export/outline-export.js`, `../import-export/save-load.js`
+(`markDirty`, `setStatus`), `../pose/outline-edits.js`, `./outline-brush.js`,
+`./rendering.js` (`drawAllOverlays`, circular through info-panel; function bodies
+only). **Imported by.** `ui/ui-wiring.js`, `ui/info-panel.js`,
+`ui/sessions-panes.js`. **Tests.** `tests/e2e/animal-outlines.mjs`.
 
 ### ui/image-embedder.js
 
@@ -11284,6 +11498,27 @@ replaced).
 
 ---
 
+### ui/retrack-warning.js
+
+**Purpose.** Asks before a single-camera Track All replaces tracks a person made.
+`confirmRetrack(losses)` -> Promise<boolean> shows what `retrackLosses`
+(`pose/single-camera-tracking.js`) counted: tracks named anything but `track_<n>`
+(with their detections; names in the file's track order, built with
+`textContent` since they come from the file), hand-labelled instances on a track,
+and the ID Switches tab's fixes and ticked rows, with no undo. Title + one
+sentence + counts. Cancel is focused; Esc or a backdrop click cancels; every key
+stops at the dialog (capture phase), Enter presses the focused button.
+
+**Imports from project modules.** None.
+
+**Imported by.** `pose/tracker.js` (`runSingleCameraTrackAll`).
+
+**Coverage.** `tests/e2e/single-camera-track-all.mjs` §8 (named tracks ask; Esc
+keeps every track; Replace tracks goes on); the counts in
+`tests/test-single-camera-tracking.mjs` §3b.
+
+---
+
 ### ui/image-model-dialog.js
 
 **Purpose.** Which model the image ID-switch check uses for a session
@@ -11292,8 +11527,8 @@ shows the model with a **Change…** button (`imageModelLineHtml`,
 `wireImageModelLine`); the dialog (`showImageModelDialog(session, {pickFiles?})`)
 lists the built-in model and every package loaded on the page, loads one from a
 folder (`<input webkitdirectory>`) or a URL / Hugging Face repo, shows its details
-(base, license, input, threshold, precision, source, training and validation
-notes), and on **Use this model** sets `session.imageModel = modelChoiceOf(pkg)`
+(base, license, input, threshold, precision, crop rule, source, training and
+validation notes), and on **Use this model** sets `session.imageModel = modelChoiceOf(pkg)`
 (null for the built-in one) and marks the project dirty when it changed. Esc,
 Cancel and a backdrop click change nothing. Its **Train a model for this rig**
 fold (`trainingHelpHtml(open)`) gives the three steps — save tracked recordings,
@@ -11310,8 +11545,11 @@ FOLDER choice not loaded throws an Error whose message is the check's skip reaso
 (never a silent fall-back to another model).
 
 **Imports from project modules.** `ui/image-embedder.js` (`BUILTIN_IMAGE_MODEL`),
-`ui/image-model-package.js`, `pose/image-model-manifest.js` (`modelChoiceOf`),
-`import-export/save-load.js` (`markDirty`).
+`ui/image-model-package.js`, `pose/image-model-manifest.js` (`modelChoiceOf`,
+`cropRuleDiffers`, `CROP_RULE`), `import-export/save-load.js` (`markDirty`).
+
+The model line adds "(trained on older crops: retrain it)" when the loaded
+package's `cropRule` cuts this session's skeleton differently (`cropRuleDiffers`).
 
 **Imported by.** `ui/id-switch-modal.js`.
 
@@ -11331,7 +11569,8 @@ the association math but still shown in the GUI), the cross-view **tracking thre
 and the benchmark-derived levers `track3dWeight` / `filterMinVisibleNodes` /
 `filterMinInstanceScore`; see `pose/tracker.js`), plus a comprehensive **catalog
 of every keyboard shortcut**
-(`ACTION_CATALOG`). Settings persist to `localStorage` (`lucid.settings.v1`) and
+(`ACTION_CATALOG`; View ▸ `toggleOutlines` `o`, `flagOutline` `Shift+o` and
+`outlineBrush` `b`, all dispatched, are the animal outlines'). Settings persist to `localStorage` (`lucid.settings.v1`) and
 survive reloads. The catalog is the single source of truth for the Settings ▸
 Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 
@@ -11539,6 +11778,14 @@ The same panel's footer also says what will be used (`.settings-tri-readout`): t
 reprojection error threshold, from `working`, so it holds wherever the panel is scrolled and follows
 an edit made on the Tracking Wizard. A value not yet applied is lit, with what it was (`paintFooter`).
 
+**Skeleton check's custom parts.** Below the methods figure, a "Skeleton check" section (`buildSection`) holds the
+node-tile editor (`buildSkeletonChainEditor`, `ui/skeleton-chain-editor.js`) for the custom parts Triangulate's
+skeleton check judges. Below it, the parts the check would judge with them
+(`sessionSkeletonChains(activeSession, working.skeletonChains)`, custom ones marked) and each part it leaves out
+(`.settings-chains-problem`). The parts are `working.skeletonChains` (the setting's text), stored by Apply through
+`setSkeletonCheckSettings({ chains })` like every other edit; the check is still turned on in the Triangulate menu.
+Test: `tests/e2e/skeleton-check.mjs` §7.
+
 **The threshold card's examples.** It builds `buildThresholdExamples`
 (`ui/threshold-examples-panel.js`), hands it to the figure as `opts.examples`, starts it
 when the Triangulation Wizard panel is first shown, re-solves it when a Camera Views
@@ -11647,7 +11894,9 @@ background shortcuts from firing while it is open, and is removed on teardown.
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
 `./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply);
-`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf).
+`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf); `../pose/skeleton-check-run.js`
+(`getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `sessionSkeletonChains`: the skeleton check's custom
+parts); `./skeleton-chain-editor.js` (`buildSkeletonChainEditor`).
 
 **Imported by.** `ui/ui-wiring.js`.
 
@@ -12546,7 +12795,7 @@ either ID-switch check is run.
   samples stay 40% of a slot apart even in a crowded cage. Only frames where the
   animal has at least half its keypoints count (`keypointShare`): a stray
   detection — one keypoint wearing the identity for a frame between its real
-  stretches — made an empty "no keypoints" picture (seen on a real sham_gdx
+  stretches — made an empty "no keypoints" picture (seen on a real two-mouse
   video). A slot with none in its middle takes the usable frame nearest that
   middle, on either side; only an identity with no usable frame at all falls back
   to whatever is tracked. A gap wider than a slot would send several slots to one
@@ -13101,6 +13350,12 @@ branch in the arrow-key handler, so it holds on a project with no decoder.
 the sole pane's Display Legend steps down a slot instead of hiding under the
 chip (styles.css). Removed on every path that hides the chip, or the legend
 would sit low in grid mode.
+
+**Animal outlines.** `visOutlines` / `visOutlineFill` are in `visCheckIds` /
+`visSliderIds` (browser-local); a `visOutlines` change redraws and calls
+`refreshOutlinePanel`. Handlers `toggleOutlines` (`O`) and `flagOutline`
+(`Shift+O`, `flagOutlineUnderPointer`) come from `./outline-flags-panel.js`,
+`outlineBrush` (`B`, `toggleOutlineBrush`) from `./outline-brush.js`.
 
 **Imports from project modules.** Nearly every other module — see file
 header for the full list. Notable ones: `app-state.js`,
@@ -14572,11 +14827,16 @@ TDZ for whichever side initializes second.
 - `REBASED_CALIBRATION_NAME` — `'calibration-rebased.toml'`, the file BOTH
   origin actions write (byte-identical TOML for a given origin). Deliberately not
   `calibration.toml`: that one is usually shared with tools outside LUCID.
-- `pickCalibrationFile(matches)` → `{file, ambiguous}`. Prefers
+- `pickCalibrationFile(matches)` → `{file, ambiguous, cage}`. Prefers
   `REBASED_CALIBRATION_NAME` (case-insensitively), else the lexicographically
   first match, so the choice is DETERMINISTIC across loads of the same folder.
   `ambiguous` is the NAMES of the candidates passed over, so a caller can say
   what it ignored. Does not mutate its argument: the loaders keep scanning.
+  A campy cage (`*.cage.json`, campy's `campy-cage`) matches `*calib*.json` and
+  sorts before `calibration.toml`, so it used to be loaded AS the calibration
+  (no cameras); it is never a candidate, and the picked file's own cage
+  (`<its name without extension>.cage.json`) comes back as `cage` (none for a
+  re-based calibration: the original's cage is in another frame).
 
 **Why it exists.** With two matches, last-scanned-wins depends on an
 enumeration order neither the File System Access API nor `webkitdirectory`
@@ -14948,6 +15208,11 @@ filesystem enumeration, decoder rebuild.
   deferVideos, folderHandle)` takes the handle as its third argument, which
   `handleLoadMultiSession` passes for each session subfolder. Test:
   `tests/e2e/save-opens-in-recording-folder.mjs`.
+- **campy cage** (`adoptCampyCage(session, file)`): the cage `pickCalibrationFile`
+  returns beside the calibration the load read, parsed (`pose/cage-mirrors.js`)
+  onto `session.campyCage` (in memory only, never written; null without one or
+  when it does not parse). Called by the per-camera and single-SLP loaders,
+  needing no session.json. Animal outlines use its walls and floor as mirrors.
 - **campy recordings** (`loading/campy-session.js`):
   `adoptCampyRecording(session, files, {record, calibFile, calibrationNames})`
   reads a picked folder's session.json (+ campy-live's manifests) onto
@@ -15204,6 +15469,8 @@ calibration. Test: `tests/e2e/nocalib-folder-save-reopen.mjs`.
   `yieldToPaint`), `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
   `../import-export/visibility-metadata.js` (`readVisibilityMetadata`),
+  `../import-export/outline-flags-metadata.js` (`readOutlineFlagsMetadata`, beside it in
+  both readers),
   `../import-export/smoothing-metadata.js` (`readSmoothingMetadata`),
   `../import-export/frame-identity-metadata.js` (`readFrameIdentityMetadata`,
   called by `handleLoadProjectSlpLazy` after the groups are rebuilt) and
@@ -16377,6 +16644,46 @@ the v2 and v3 project-JSON shapes) — and the four readers —
 
 ---
 
+### import-export/outline-flags-metadata.js
+
+**Purpose.** The `metadata.lucid` ↔ Session mapping for the Outlines panel's flags
+on bad animal outlines and the outlines corrected with its brush: the fourth
+`metadata.lucid` writer module, beside visibility, smoothing and plane.
+Two keys per session, each written only when the session has some:
+`outlineFlags` (`{v: 1, flags}`, `pose/outline-flags.js`) and `outlineEdits`
+(`{v: 1, edits}`, run-length label images, `pose/outline-edits.js`); an unflagged,
+uncorrected project's bytes do not move (`save-golden-digest.mjs`).
+Reading REPLACES both, so a file without a key leaves none; only
+`lucid` is touched; nothing throws on a malformed payload; SLEAP and sleap-io
+carry it as opaque JSON.
+
+**Exports.** `OUTLINE_FLAGS_METADATA_KEYS`, `writeOutlineFlagsMetadata(lucid,
+session)`, `readOutlineFlagsMetadata(session, lucid)`.
+
+**Imports.** `../pose/outline-flags.js`, `../pose/outline-edits.js`. **Imported by.** the writers
+`import-export/file-io.js` (`buildSlpLabelsAllViews`),
+`import-export/slp-streaming-write.js` (`buildSessionRefGraph`),
+`import-export/save-load.js` (project JSON v2/v3 and `_restoreProjectV2`), and the
+readers `import-export/slp-import.js` (`handleLoadSlpFile`),
+`loading/session-loader.js` (`handleLoadSessionFolderSingleSlp`,
+`handleLoadProjectSlpLazy`) — each next to its visibility call.
+**Tests.** `tests/test-outline-flags.mjs`, `tests/e2e/animal-outlines.mjs` §7 (eager
+and streaming writers; eager and lazy readers).
+
+### import-export/outline-export.js
+
+**Purpose.** The file side of Outlines ▸ Export…: a stored (uncompressed: PNG and
+JPEG already are) ZIP with UTF-8 names (`zipStore`; `unzipStore` reads one back for
+tests), 8-bit greyscale PNGs (`encodePngGray`, zlib through
+`CompressionStream('deflate')`), `crc32`, `safeFileName`, `outlineEntryBase(frame,
+camera)` ('000045_topC'), and `OUTLINE_EXPORT_README` (the layout:
+`manifest.json`, `backgrounds/<cam>.png`, `frames/`, `labels/` (0 = no animal, k =
+the entry's k-th animal), `previews/`). No ZIP64: under 4 GB and 65,535 entries.
+DOM-free.
+
+**Imports.** None. **Imported by.** `ui/outline-flags-panel.js`, `tests/e2e/animal-outlines.mjs`.
+**Tests.** `tests/test-outline-flags.mjs` §3, `tests/e2e/animal-outlines.mjs` §6.
+
 ### import-export/frame-identity-metadata.js
 
 **Purpose.** How `Session.frameIdentityMap` is stored in a `.slp`'s
@@ -16997,6 +17304,8 @@ session's resident/total) rather than truncate silently. Covered by
 - `./visibility-metadata.js` — `writeVisibilityMetadata` (its only deps are
   dependency-free `ui/` leaves, so it adds nothing to this module's import
   graph).
+- `./outline-flags-metadata.js` — `writeOutlineFlagsMetadata` (the Outlines panel's
+  flags; DOM-free, imports only `pose/outline-flags.js`).
 - `./frame-identity-metadata.js` — `writeFrameIdentityMetadata` (fills
   `metadata.lucid.frameIdentityMap` in `buildSlpLabelsAllViews`; no imports).
 - `./plane-metadata.js` — `writePlaneMetadata`.
@@ -17194,7 +17503,8 @@ full grouping (identities + 3D) + 2D corrections.
 (`import-export/file-io.js`); `points3dNodeCount` (`pose/pose-data.js`);
 `writeVisibilityMetadata` (`import-export/visibility-metadata.js` — must stay in
 lockstep with the eager writer in `file-io.js`, which is why both call the one
-helper); `writeFrameIdentityMetadata` (`import-export/frame-identity-metadata.js`,
+helper); `writeOutlineFlagsMetadata` (`import-export/outline-flags-metadata.js`,
+same reason); `writeFrameIdentityMetadata` (`import-export/frame-identity-metadata.js`,
 same reason); `writePlaneMetadata` (`import-export/plane-metadata.js`, same reason);
 `writeSmoothingMetadata` + `smoothingSourceFor` (`import-export/smoothing-metadata.js`,
 same reason).
@@ -17415,7 +17725,9 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `./slp-import.js`, `./visibility-metadata.js`
   (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
   settings in the legacy v2/v3 project JSON — same keys and omit-the-defaults
-  rule as the `.slp` writers, at the session-dict level), `./plane-metadata.js`
+  rule as the `.slp` writers, at the session-dict level),
+  `./outline-flags-metadata.js` (`writeOutlineFlagsMetadata`/`readOutlineFlagsMetadata`,
+  the same way), `./plane-metadata.js`
   (`writePlaneMetadata`/`readPlaneMetadata`/`resetPlaneState`, same reason),
   `./smoothing-metadata.js` (Temporal Smoothing: `unsmoothedPoints3d` per group
   and the session-level key in the project JSON, same reason),
@@ -17686,7 +17998,7 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
   `../ui/frame-readout.js` (`refreshReadoutTotals`, when a video-less import
   sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
-  (`readVisibilityMetadata`), `./frame-identity-metadata.js`
+  (`readVisibilityMetadata`), `./outline-flags-metadata.js` (`readOutlineFlagsMetadata`), `./frame-identity-metadata.js`
   (`stampFrameIdentitiesFromGroups`, `readFrameIdentityMetadata`), `./plane-metadata.js` (`readPlaneMetadata`,
   `resetPlaneState`), `./smoothing-metadata.js` (`readSmoothingMetadata`, and
   `adoptSmoothingSource` in both typed group rebuilders), `./import-track-resolve.js`

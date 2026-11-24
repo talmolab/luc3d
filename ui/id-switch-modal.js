@@ -40,8 +40,9 @@ import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js';
 import { scoreSizeGridOffThread } from '../pose/size-check-pool.js';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraFixSwapsTracks, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js';
 import { pairEncounters3d } from '../pose/multi-camera-review.js';
+import { formatFrameNumber } from './frame-readout.js';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
          inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js';
 import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js';
@@ -923,14 +924,19 @@ function openFixDialog(session, st, f, asPlace) {
         endWhy = plan.edge == null ? 'the end of the video'
             : 'the end of their next encounter (' + fmtTenths(plan.edge) + '), after which the labels look right again';
     }
+    var single = !!singleCameraName(session);
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-fix-modal" role="dialog" aria-labelledby="idSwitchFixTitle">' +
         '<h3 id="idSwitchFixTitle">Fix ID switch</h3>' +
         '<p>Swap ' + (pickPair ? pairSelect(session, 'idSwitchFixA', plan.nameA) + ' ↔ ' + pairSelect(session, 'idSwitchFixB', plan.nameB)
             : idName(session, plan.nameA) + ' ↔ ' + idName(session, plan.nameB)) + ' on <b>frames ' +
-        (plan.from + 1).toLocaleString() + '–' + (plan.to + 1).toLocaleString() + '</b> (' + fmtTenths(plan.from) + '–' +
-        fmtTenths(plan.to) + ')' + (singleCameraName(session) ? ' (their tracks)' : ', in every camera view') + '.</p>' +
+        formatFrameNumber(plan.from + 1) + '–' + formatFrameNumber(plan.to + 1) + '</b> (' + fmtTenths(plan.from) + '–' +
+        fmtTenths(plan.to) + ')' + (single ? ' <span id="idSwitchFixWhere">(their tracks)</span>' : ', in every camera view') + '.</p>' +
+        // One camera, an identity edited apart from its track: the Fix can swap identities only (swapSingleCameraIdentities).
+        (single ? '<p class="id-switch-fix-warn" id="idSwitchFixIdsOnly" style="display:none">These two do not each keep one ' +
+            'track over these frames (an identity was edited apart from its track), so this swaps their identities only: ' +
+            'a file opened in SLEAP will not carry the fix.</p>' : '') +
         '<ul class="id-switch-fix-why"><li>Starts at ' + fr(plan.from) + ': ' + startWhy + '.</li>' +
         '<li>Ends at ' + fr(plan.to) + ': ' + endWhy + '.</li></ul>' +
         (f.followOf != null ? '<p class="id-switch-fix-warn">This flag follows the switch at ' + fmtTime(f.followOf) +
@@ -951,6 +957,20 @@ function openFixDialog(session, st, f, asPlace) {
     document.addEventListener('keydown', onKey, true);
     overlay.querySelector('#idSwitchFixCancel').addEventListener('click', close);
     overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(); });
+    // One camera: say whether this pair's Fix swaps their tracks or (identities edited apart) only the identities.
+    var showWhere = function () {
+        if (!single) return;
+        var a = idA, b = idB;
+        if (pickPair) {
+            a = identityIdByName(session, overlay.querySelector('#idSwitchFixA').value);
+            b = identityIdByName(session, overlay.querySelector('#idSwitchFixB').value);
+        }
+        var idsOnly = a != null && b != null && a !== b && singleCameraFixSwapsTracks(session, plan.from, plan.to, a, b) === false;
+        overlay.querySelector('#idSwitchFixWhere').textContent = idsOnly ? '(their identities only)' : '(their tracks)';
+        overlay.querySelector('#idSwitchFixIdsOnly').style.display = idsOnly ? '' : 'none';
+    };
+    showWhere();
+    if (pickPair) ['#idSwitchFixA', '#idSwitchFixB'].forEach(function (sel) { overlay.querySelector(sel).addEventListener('change', showWhere); });
     overlay.querySelector('#idSwitchFixOk').addEventListener('click', function () {
         if (pickPair) {
             var a = overlay.querySelector('#idSwitchFixA').value, b = overlay.querySelector('#idSwitchFixB').value;
@@ -1036,8 +1056,15 @@ function applyFix(session, st, f, plan, idA, idB) {
     if (nav) nav(idSwitchLeadInFrame(f, state.fps, idSwitchLeadSeconds(session)));   // back to the lead-in: play to see the fixed labels
     afterIdentityChange(session);
     updateIdSwitchProgress(state.currentFrame);
-    setStatus('Fixed: swapped ' + plan.nameA + ' ↔ ' + plan.nameB + ' on frames ' + (plan.from + 1).toLocaleString() + '–' +
-        (plan.to + 1).toLocaleString() + ' (' + r.frames.toLocaleString() + ' tracked frames changed) — press play to check it', 'success');
+    var span = ' on frames ' + formatFrameNumber(plan.from + 1) + '–' + formatFrameNumber(plan.to + 1) +
+        ' (' + formatFrameNumber(r.frames || 0) + ' tracked frames changed)';
+    if (r && r.tracks === false) {
+        // One camera, but an identity was edited apart from its track: only the identity layer moved.
+        setStatus('Fixed the identities only: swapped ' + plan.nameA + ' ↔ ' + plan.nameB + span + '. Their tracks are as they ' +
+            'were (an identity had been edited apart from its track), so a file opened in SLEAP will not carry this fix — press play to check it', 'warning');
+    } else {
+        setStatus('Fixed: swapped ' + plan.nameA + ' ↔ ' + plan.nameB + span + ' — press play to check it', 'success');
+    }
 }
 
 /** Swap the latest fix's frames back (the swap is its own inverse) and forget it. */

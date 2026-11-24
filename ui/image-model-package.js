@@ -88,7 +88,7 @@ function makePackage(manifest, key, source, sizes) {
     return {
         key: key, id: modelRepoId(key), builtin: false,
         name: manifest.name, base: manifest.base, license: manifest.license,
-        input: manifest.input, threshold: manifest.threshold, fp16: manifest.fp16,
+        input: manifest.input, threshold: manifest.threshold, fp16: manifest.fp16, cropRule: manifest.cropRule,
         // download / memory size in MB per dtype, for the status lines (0 = unknown, a URL package before download)
         mb: { fp32: Math.round(fp32 / 1e6), fp16: Math.round(fp16 / 1e6) },
         manifest: manifest, source: source,

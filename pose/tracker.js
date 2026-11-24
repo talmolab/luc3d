@@ -18,7 +18,8 @@ import {
     hungarianAlgorithm
 } from './triangulation.js';
 import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js';
-import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, reviewResult, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, reviewResult, retrackLosses, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js';
+import { confirmRetrack } from '../ui/retrack-warning.js';
 import { multiCameraReview } from './multi-camera-review.js';
 import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js';
 
@@ -1954,6 +1955,13 @@ async function runSingleCameraTrackAll(session, bail) {
     // with the image check that can follow the run, but no node weights.
     if (!numAnimalsAnswered(session)) {
         if (!(await askTrackSetup(session, 'Track All', true, true))) return bail;
+    }
+    // This run replaces every track and clears the ID Switches tab: ask first when a person made any of it
+    // (named tracks, hand-labelled instances, fixes or ticked rows). Raw predictions never ask.
+    var losses = retrackLosses(session);
+    if (losses && losses.any && !(await confirmRetrack(losses))) {
+        setStatus('Track All cancelled: the tracks are as they were');
+        return bail;
     }
     var userCount = sessionNumAnimals(session);
     var numAnimals = userCount || computeMaxInstancesPerView(session);

@@ -31,6 +31,9 @@ export const RAIL_ICONS = {
     eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/>' +
         '<circle cx="12" cy="12" r="3"/>',
     // ID Switches: two opposing arrows (identity swap)
+    // Outlines (ui/outline-flags-panel.js): a lasso drawn round something
+    lasso: '<path d="M3.704 14.467a10 8 0 1 1 3.115 2.375"/>' +
+        '<path d="M7 22a5 5 0 0 1-2-3.994"/><circle cx="5" cy="16" r="2"/>',
     'arrow-left-right': '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/>' +
         '<path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
     // sleap-app Videos
