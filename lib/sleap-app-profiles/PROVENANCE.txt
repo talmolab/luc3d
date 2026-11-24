@@ -1,0 +1,15 @@
+sleap-app baseline training profiles
+====================================
+
+Upstream:  https://github.com/talmolab/sleap-app
+Files:     src/assets/training_profiles/*.yaml (+ labels from src/lib/trainingProfiles.ts)
+Commit:    c97c6a5568316e08cd2ff55fb023859d11bae829
+License:   BSD 3-Clause, Copyright (c) 2026, Talmo Lab (see lib/LICENSES.txt)
+
+Vendored as one ES module (profiles.js: one JSON string per YAML) by
+scripts/vendor_sleap_app_profiles.py, so the deploy stamp and the offline and
+desktop bundles see a static import. Left out: baseline.bbox_centernet.yaml,
+baseline.bbox_ssd.yaml, baseline_{medium,large}_rf.topdown_bbox.yaml (box
+detectors; LUC3D has no box labels).
+
+Re-vendor: python3 scripts/vendor_sleap_app_profiles.py <sleap-app checkout>

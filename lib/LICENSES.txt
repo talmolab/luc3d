@@ -30,6 +30,11 @@ sleap-io.js 0.5.5                                             BSD-3-Clause
     the source with a "LUCID local patch" comment. See CLAUDE.md for what each one
     changes and why. Full text: lib/sleap-io/LICENSE
 
+sleap-app training profiles (c97c6a5)                         BSD-3-Clause
+    The Training panel's baseline config presets (lib/sleap-app-profiles/).
+    https://github.com/talmolab/sleap-app  Copyright (c) 2026, Talmo Lab.
+    Unmodified YAML, stored as JS strings; see its PROVENANCE.txt.
+
 mediabunny 1.30.0                                             MPL-2.0
     Video decode (via sleap-io.js) and video encode (via ui/video-encode.js).
     https://github.com/Vanilagy/mediabunny

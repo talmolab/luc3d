@@ -8934,6 +8934,77 @@ div.track-summary-steps { padding-left: 0; }
 .inf-view-blocked { cursor: default; opacity: 0.75; }
 
 /* ============================================
+   Training panel (ui/training-panel.js) — sleap-app's TrainingPanel.tsx look on the
+   Inference panel's classes; trn-* adds the config slots, the sessions × views list,
+   the "Models for views" switch and one progress row per model.
+   ============================================ */
+.trn-rec { display: flex; align-items: flex-start; gap: 4px; margin: 0; font-size: 10px; color: var(--success-color); }
+.trn-rec .inf-icon { flex-shrink: 0; margin-top: 1px; }
+.trn-warnline { margin: 0; font-size: 10px; color: var(--warning-color); }
+.trn-slots { display: flex; flex-direction: column; gap: 6px; }
+.trn-slot { border: 1px dashed var(--border-light); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; }
+.trn-slot-set { border: 1px solid rgba(46, 204, 113, 0.5); background: rgba(46, 204, 113, 0.05); }
+.trn-slot-drag { border-color: var(--accent); background: var(--accent-dim); }
+.trn-slot-meta { font-size: 10px; color: var(--text-muted); font-family: monospace; }
+.trn-ok-note { border: 1px solid rgba(46, 204, 113, 0.25); background: rgba(46, 204, 113, 0.06); color: var(--success-color);
+  border-radius: 6px; padding: 6px 8px; font-size: 10.5px; }
+.trn-views { border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-primary); padding: 4px 6px;
+  display: flex; flex-direction: column; gap: 2px; }
+.trn-vsess { display: flex; align-items: center; gap: 6px; padding-top: 2px; font-size: 10px; font-weight: 500; color: var(--text-secondary); }
+.trn-lazy { font-size: 9px; font-weight: 400; color: var(--text-muted); border: 1px solid var(--border-light); border-radius: 3px; padding: 0 3px; }
+.trn-vrow { display: grid; grid-template-columns: 14px minmax(36px, auto) minmax(0, 1fr) auto; align-items: center; gap: 6px; font-size: 10px; padding-left: 4px; }
+.trn-vrow input { margin: 0; }
+.trn-vname { font-weight: 500; }
+.trn-vfile { color: var(--text-muted); font-family: monospace; font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.trn-vcount { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.trn-vrow-empty .trn-vcount { color: var(--warning-color); }
+.trn-vrow-empty .trn-vname, .trn-vrow-empty .trn-vfile { opacity: 0.6; }
+.trn-vworker { display: flex; align-items: center; gap: 6px; padding-left: 24px; font-size: 9.5px; color: var(--text-muted); min-width: 0; }
+.trn-vworker-text { font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.trn-locate { margin-left: auto; flex-shrink: 0; height: 20px; font-size: 10px; padding: 0 6px; }
+.trn-seg { display: flex; border: 1px solid var(--border-color); border-radius: 4px; overflow: hidden; }
+.trn-seg-btn { flex: 1; background: transparent; border: none; border-right: 1px solid var(--border-color); color: var(--text-secondary);
+  font-size: 10.5px; padding: 4px 2px; cursor: pointer; }
+.trn-seg-btn:last-child { border-right: none; }
+.trn-seg-btn[aria-pressed="true"] { background: var(--accent-dim); color: var(--text-primary); }
+.trn-seg-btn:disabled { cursor: default; opacity: 0.6; }
+.trn-tabs { margin-bottom: 2px; }
+.trn-chips { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 4px; }
+.trn-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 1px 6px; border: 1px solid var(--border-light); border-radius: 4px; }
+.trn-chip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.trn-pathrow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.trn-path { flex: 1; min-width: 0; font-family: monospace; font-size: 10px; overflow-wrap: anywhere; color: var(--text-secondary); }
+.trn-center { text-align: center; }
+.trn-btns { display: flex; gap: 8px; }
+.trn-btns .btn { flex: 1; height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.trn-stop { background: transparent; color: var(--warning-color); border: 1px solid rgba(243, 156, 18, 0.5); }
+.trn-tiny { margin: 0; font-size: 9px; color: var(--text-muted); text-align: center; }
+.trn-rows { display: flex; flex-direction: column; gap: 8px; }
+.trn-row-done { opacity: 0.7; }
+.trn-row-lab { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; margin-bottom: 4px; }
+.trn-row-lab .inf-icon { width: 12px; height: 12px; }
+.trn-row-text { min-width: 0; overflow-wrap: anywhere; }
+.trn-running { color: var(--accent-hover); }
+.trn-completed { color: var(--success-color); }
+.trn-failed { color: var(--error-color); }
+.trn-cancelled, .trn-pending { color: var(--text-muted); }
+.trn-dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border-light); display: inline-block; flex-shrink: 0; }
+.trn-bar { height: 6px; margin-bottom: 4px; }
+.trn-fill-completed { background: var(--success-color); }
+.trn-fill-failed { background: var(--error-color); }
+.trn-fill-cancelled { background: var(--text-muted); }
+.trn-stats { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.trn-logbtns { display: inline-flex; gap: 2px; }
+.trn-banner-ok { border: 1px solid rgba(46, 204, 113, 0.3); background: rgba(46, 204, 113, 0.06); color: var(--success-color);
+  border-radius: 6px; padding: 8px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
+.trn-strong { font-weight: 600; }
+.trn-path-ok { font-family: monospace; font-size: 10px; overflow-wrap: anywhere; }
+.trn-banner-next { border: 1px solid rgba(102, 126, 234, 0.35); background: rgba(102, 126, 234, 0.08); color: var(--accent-hover);
+  border-radius: 6px; padding: 8px; font-size: 11px; }
+.trn-errout { display: flex; flex-direction: column; gap: 4px; }
+.trn-errout .inf-log { color: var(--error-color); }
+
+/* ============================================
    Connect panel (ui/connect/*) — sleap-app's ConnectPanel.tsx look:
    10px caps label, compact worker cards with a status dot, a pairing card.
    ============================================ */

@@ -57,6 +57,7 @@ const EXPECTED = [
     ['tabInstances', 'Instances'], ['tabVisibility', 'Visibility'], ['tabIdSwitches', 'ID Switches'],
     ['tabVideos', 'Videos'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
     ['tabInference', 'Inference'],   // added after init by ui/inference-panel.js, web (remote only) and desktop
+    ['tabTraining', 'Training'],   // added after init by ui/training-panel.js (sleap-app's order: after Inference)
     ['tabConnect', 'Connect'],   // added after init by ui/connect/index.js, web and desktop
 ];
 // First path of the Lucide glyph each panel must show. Instances/Visibility/
