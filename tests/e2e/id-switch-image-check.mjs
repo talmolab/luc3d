@@ -185,8 +185,11 @@ try {
     await page.evaluate(async () => {
         await window.__buildSwap([1, 1, 1]);
         const M = await import('/ui/id-switch-modal.js');
+        // the machine's CPU pressure (Compute Pressure API) stood in for, so the line does not depend on this browser
+        window.__pressureStopped = false;
         window.__done = M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(40,
-            { backend: 'webgpu', comparing: false, dtype: 'fp16', adapter: 'Test GPU', fallback: false }) } });
+            { backend: 'webgpu', comparing: false, dtype: 'fp16', adapter: 'Test GPU', fallback: false }),
+            createPressureWatch: () => ({ state: () => 'fair', stop: () => { window.__pressureStopped = true; } }) } });
     });
     await page.waitForSelector('.id-switch-progress', { timeout: 10000 });
     const gpuLine = () => page.evaluate(() => { const el = document.querySelector('.id-switch-progress-gpu');
@@ -199,7 +202,7 @@ try {
     check(load > 0 && load <= 100 && /other apps/.test(g1.title), `…and its load while embedding, with a tooltip saying what that measures ("${g1.text}")`);
     // the CPU line, ABOVE the GPU line, and the load graph to the right of both
     const hw = await page.evaluate(() => {
-        const WIDEST_GPU_LINE = 'GPU: WebGPU, fp16 · load 100%';
+        const WIDEST_GPU_LINE = 'GPU: WebGPU, fp16 · load 100%', WIDEST_CPU_LINE = 'CPU: 64 cores · load 100% · critical';   // 100+ threads at 100% and critical wraps (~3 px over)
         const q = (c) => document.querySelector('.id-switch-progress ' + c), box = (el) => el.getBoundingClientRect();
         const cpu = q('.id-switch-progress-cpu'), gpu = q('.id-switch-progress-gpu'), graph = q('.id-switch-progress-graph'), svg = graph.querySelector('svg');
         const key = (el) => getComputedStyle(el, '::before').backgroundColor;
@@ -218,13 +221,19 @@ try {
                  gpuOneLine: (() => {   // the widest common line (no adapter name — a named one wraps after its key by design)
                      const saved = gpu.textContent; gpu.textContent = WIDEST_GPU_LINE;
                      const one = box(gpu).height < 1.5 * parseFloat(getComputedStyle(gpu).lineHeight);
-                     gpu.textContent = saved; return one; })() };
+                     gpu.textContent = saved; return one; })(),
+                 cpuOneLine: (() => {
+                     const saved = cpu.textContent; cpu.textContent = WIDEST_CPU_LINE;
+                     const one = box(cpu).height < 1.5 * parseFloat(getComputedStyle(cpu).lineHeight);
+                     cpu.textContent = saved; return one; })() };
     });
     const cores = await page.evaluate(() => navigator.hardwareConcurrency);
-    const cpuLoad = +((hw.cpuText.match(/load (\d+)%$/) || [])[1]);
-    check(!hw.cpuHidden && hw.cpuAbove && new RegExp('^CPU: ' + cores + ' cores? · load \\d+%$').test(hw.cpuText) && cpuLoad >= 0 && cpuLoad <= 100,
-          `a CPU line ABOVE the GPU line, with the core count and its load ("${hw.cpuText}" over "${hw.gpuText}")`);
-    check(/cores kept busy over the last 5 s by this check/.test(hw.cpuTitle) && /video decoding/.test(hw.cpuTitle), `…with a tooltip saying what it counts ("${hw.cpuTitle}")`);
+    const cpuLoad = +((hw.cpuText.match(/load (\d+)% · fair$/) || [])[1]);
+    check(!hw.cpuHidden && hw.cpuAbove && new RegExp('^CPU: ' + cores + ' cores? · load \\d+% · fair$').test(hw.cpuText) && cpuLoad >= 0 && cpuLoad <= 100,
+          `a CPU line ABOVE the GPU line, with the core count, its load and the machine's CPU pressure ("${hw.cpuText}" over "${hw.gpuText}")`);
+    check(/cores kept busy over the last 5 s by this check/.test(hw.cpuTitle) && /video decoding/.test(hw.cpuTitle) && /waiting \(for the video decoder, the GPU/.test(hw.cpuTitle) &&
+          /"fair": the whole machine's CPU pressure/.test(hw.cpuTitle), `…with a tooltip saying what it counts, and what the pressure is ("${hw.cpuTitle}")`);
+    check(hw.cpuOneLine, '…and "CPU: 64 cores · load 100% · critical" still fits on one line');
     check(hw.shown === 'visible' && hw.right && hw.topAligned && hw.leftOfCrop, 'the load graph sits to the right of both lines, level with them, left of the sample crop');
     check(hw.gpuOneLine, '…and "GPU: WebGPU, fp16 · load 100%" still fits on one line beside it');
     {   // the card every progress popup now shares: opaque, the app not greyed out, the CPU line left-justified
@@ -310,9 +319,11 @@ try {
     const cancelled = await page.evaluate(async () => { const r = await window.__done;
         return { reason: r && r.image && r.image.reason, status: document.getElementById('statusText').textContent,
                  progress: !!document.querySelector('.id-switch-progress'), rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length,
-                 markers: (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().filter(m => m.cue === 'image').length }; });
+                 markers: (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().filter(m => m.cue === 'image').length,
+                 pressureStopped: window.__pressureStopped }; });
     check(cancelled.reason === 'cancelled' && /cancelled/.test(cancelled.status), `Esc cancels the image check ("${cancelled.status}")`);
-    check(!cancelled.progress && !cancelled.rows && cancelled.markers === 0, 'nothing left behind: no progress dialog, no listed results, no image markers');
+    check(!cancelled.progress && !cancelled.rows && cancelled.markers === 0 && cancelled.pressureStopped,
+          'nothing left behind: no progress dialog, no listed results, no image markers, the pressure watch stopped');
 
     // ---- 4. no GPU: the check still runs, on the CPU, to the end — as the Tracking Wizard's after-tracking
     //         image check (`auto`, the way pose/tracker.js calls it), which used to report "skipped — needs WebGPU"
@@ -333,7 +344,7 @@ try {
         gpuKey: document.querySelector('.id-switch-progress-gpu').classList.contains('has-series'),
         cpuPath: document.querySelector('.id-switch-progress-graph path.is-cpu').getAttribute('d') || '',
         gpuPath: document.querySelector('.id-switch-progress-graph path.is-gpu').getAttribute('d') || '' }));
-    check(/· load \d+%$/.test(noGpuGraph.cpu) && noGpuGraph.cpuKey && !noGpuGraph.gpuKey && noGpuGraph.cpuPath && !noGpuGraph.gpuPath,
+    check(/· load \d+%( · (nominal|fair|serious|critical))?$/.test(noGpuGraph.cpu) && noGpuGraph.cpuKey && !noGpuGraph.gpuKey && noGpuGraph.cpuPath && !noGpuGraph.gpuPath,
           `…and graphs the CPU alone: no GPU series, no key on the warning line ("${noGpuGraph.cpu}")`);
     const noGpu = await page.evaluate(async () => { const r = await window.__done;
         return { ok: r && r.image && r.image.ok, status: document.getElementById('statusText').textContent }; });
