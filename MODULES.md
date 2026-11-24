@@ -2791,6 +2791,49 @@ walked until the next run.
 `ui/run-buttons.js`. **Tests.** `tests/test-run-state.mjs`,
 `tests/e2e/run-buttons-blue.mjs`.
 
+### pose/training-data.js
+
+**Purpose.** The DOM-free rules behind a training file (Training panel): the
+validation split by MOMENT and the checks a project must pass before training.
+sleap-nn's own `validation_fraction` picks labelled frames at random, so one
+camera's view of a moment can be in training while another camera's view of the
+same moment is in validation. A moment is (session, frame index): all views of a
+session share frame numbers. Sizes follow sleap-io's `make_training_splits` (a
+fraction of the moments, at least one on each side when there are two or more;
+one moment, or overfit mode, makes validation = training), shuffled by a seeded
+PRNG over sorted keys so the split is reproducible. Also refuses names with
+`${` (sleap-nn copies node and track names into the run's `training_config.yaml`,
+which OmegaConf resolves on a later load) and says why an identity ("+ ID")
+model cannot train (instances without identity, identities only on predictions,
+per-camera tracks across views or sessions, unnamed or differently named
+identities across sessions).
+
+**Exports.** `DEFAULT_VALIDATION_FRACTION`, `DEFAULT_SPLIT_SEED`,
+`momentKey(sessionIndex, frameIdx)`, `seededRandom(seed)`,
+`splitMoments(keys, {fraction, seed, overfit})` → `{train, val, sameAsTrain,
+reason}`, `interpolationProblem(lists)`, `ID_MODEL_TYPES`, `BOX_MODEL_TYPES`,
+`idModelProblem(sessions, {views})`, `isIdModelType(t)`, `isBoxModelType(t)`.
+
+**Imports.** None. **Imported by** `import-export/training-slp.js`.
+**Tests.** `tests/test-training-data.mjs`, `tests/e2e/training-data.mjs`.
+
+### pose/training-groups.js
+
+**Purpose.** Which camera views train which model ("Models for views") and the
+run names. A group is a set of camera NAMES (a camera name stands for that
+camera in every session, as Inference ▸ Assign models… maps views). Modes:
+`shared` (one model for all views, the default) and `perview` (one model per
+camera). Run names follow sleap-app (`YYMMDD_HHMMSS.<head>.n=<N>`) and add the
+view for a per-view group; `RUN_NAME_RE` is the charset Rust will accept.
+
+**Exports.** `TRAINING_GROUP_MODES`, `DEFAULT_GROUP_MODE`, `GROUP_COLORS`,
+`trainingGroups(mode, views)` → `[{id, name, views, color}]`,
+`groupModelLabel(modelLabel, group)`, `safeRunPart(s)`,
+`trainingRunName({timestamp, head, group, mode, nFrames})`, `RUN_NAME_RE`.
+
+**Imports.** None. **Imported by** (the Training panel, next phase).
+**Tests.** `tests/test-training-groups.mjs`.
+
 ### pose/triangulation.js
 
 **Purpose.** DLT triangulation, bundle-adjustment refinement, reprojection
@@ -15739,6 +15782,8 @@ makes, without changing the session) and an instance with no identity is
 trackless; with none assigned, instances keep their own tracks. The verbatim
 `lazyCameraExportBytes` path and the shared-store copy (`sharedStoreCopyContext`)
 run only when `_storeHoldsIdentityTracks` says the store already agrees. Pinned by `tests/test-export-identity-tracks.js`.
+`_exportTrackSource` is also exported as `exportTrackSource` for the training
+file (`import-export/training-slp.js`), which names tracks the same way.
 `exportSlpClientSide` and single-selection `exportSlpMultiSession` route here
 whenever `_exportWouldTruncate(session)`; fully-resident projects keep the eager
 path. **Coverage precondition:** `sweepLazyFrameWindows` hydrates via
@@ -15997,6 +16042,35 @@ session's resident/total) rather than truncate silently. Covered by
 Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.
 
 ---
+
+### import-export/training-slp.js
+
+**Purpose.** The training and validation `.slp` files of one training group.
+LUC3D builds a dedicated file instead of handing sleap-nn the project: one video
+per (session, view) of the group in selection order (the caller names each
+video: a placeholder the local backend replaces with `--video-paths`, or a
+worker path), the SAME video table in the train and validation files; USER
+instances only (no predictions, no reprojections, no instance without a visible
+point, no empty frame); tracks = identities exactly as every export names them
+(`exportTrackSource`); the current in-memory edits; the split by moment
+(`pose/training-data.js`). Lazy sessions: resident frames come from
+`session.frameGroups`, every other frame with a user row from the store
+(`loader.getFrameSync` + `lazyRowInstance`, then `releaseFrame`), so a long
+recording is never hydrated as a whole. Occluded/nulled nodes are written
+invisible with their position; sleap-nn reads them as NaN (masked).
+
+**Exports.** `userInstancesByFrame(session, cam)`,
+`countUserLabels(session, cams)` (no instance objects for lazy rows),
+`collectGroupLabels(selections)` → `{frames, sessions}` (the per-session report
+`idModelProblem` takes), `buildTrainingLabels(selections, {split, SIO,
+collected})` → `{train, val, split, stats}`, `trainingSlpBytes(labels, SIO)`.
+
+**Imports.** `./file-io.js` (`_buildSioPoints`, `cameraExportVideo`,
+`exportTrackSource`), `./slp-merge.js` (`validateSkeletonCompatibility`),
+`../pose/lazy-residency.js` (`lazyRowInstance`), `../pose/training-data.js`.
+**Imported by** (the Training panel, next phase). **Tests.**
+`tests/e2e/training-data.mjs` (eager, lazy = eager incl. a resident edit and an
+unsaved instance, refusals; `DUMP_DIR=` writes the files for a Python check).
 
 ### import-export/slp-rows-worker.js
 **Purpose:** Module worker that writes and gzips ONE By Cam export's four big
