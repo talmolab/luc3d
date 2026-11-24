@@ -239,7 +239,35 @@ export function createRemoteTraining(host) {
         return '';
     }
 
+    /**
+     * Small text files of a run on the worker (View Metrics: `metrics.*.json`, `training_config.yaml`), over
+     * `fs.stat` / paged `fs.read` (shared folders only). Capped at 8 MiB; never a checkpoint or an `.npz`.
+     */
+    const workerFiles = {
+        exists: async function (p) {
+            try { const st = await (await S().clientFor(workerId())).fsStat(p); return st.type === 'file'; } catch (e) { return false; }
+        },
+        readText: async function (p) {
+            if (/\.(ckpt|pt|pth|pkl|pickle|joblib|npz|npy)$/i.test(p)) throw new Error('not a text file: ' + p);
+            const client = await S().clientFor(workerId());
+            const parts = [];
+            let off = 0;
+            for (;;) {
+                const r = await client.fsRead(p, off, 1 << 20);
+                parts.push(r.content);
+                off += r.content.length;
+                if (r.eof || !r.content.length) break;
+                if (off > 8 << 20) throw new Error(p + ' is over 8 MB');
+            }
+            const all = new Uint8Array(off);
+            let at = 0;
+            parts.forEach(function (b) { all.set(b, at); at += b.length; });
+            return new TextDecoder().decode(all);
+        },
+    };
+
     return {
+        workerFiles: workerFiles,
         sync: sync, connected: connected, workerId: workerId, tag: tag,
         workerVideo: workerVideo, videoStatus: videoStatus, canLocate: canLocate, locate: locate,
         outputDir: function () { return out.dir; }, outputSource: function () { return out.source; },

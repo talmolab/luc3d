@@ -27,8 +27,14 @@
  *     the same sampled frames, Skip user labeled honoured; REAL sleap-nn predictions merged (20 per
  *     view), your labels kept; the status box says "Predictions merged into the project".
  *  8. The skeleton changed while the models trained: skipped, naming the node; nothing runs.
+ *  9. Trained runs, Fine-tune / Resume, View Metrics: the runs folder's trained runs are [Trained] entries of
+ *     their head's slot (a REAL metrics JSON in each); picking one loads its config and offers its checkpoint;
+ *     Full Configuration's training mode: Fine-tune locks Model, Resume every section; a model folder picked
+ *     with Choose… gives its checkpoint (a legacy .h5 for Fine-tune), with a head-mismatch warning from its
+ *     training_config.yaml; Resume refuses an .h5 and Start waits; training_prepare gets each model's
+ *     `init`; View Metrics lists the runs with the real numbers, a row opens the detail (boxplot + list).
  *
- * Usage: node tests/e2e/desktop-training.mjs   (PORT= to move its server; SHOT=file.png screenshots 7)
+ * Usage: node tests/e2e/desktop-training.mjs   (PORT= to move its server; SHOT=file.png screenshots 7, SHOT9=file.png 9)
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -42,6 +48,8 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const SHIM = fs.readFileSync(path.join(repoRoot, 'src-tauri', 'js', 'lucid-desktop.js'), 'utf8');
 const EVENTS = JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'sleap-nn-training', 'run-3epoch.events.json'), 'utf8'));
 const PNG_B64 = fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'sleap-nn-training', 'validation-sample.png')).toString('base64');
+// A REAL run's metrics (tests/fixtures/sleap-nn-training/run.full), put into every mock run folder.
+const METRICS_JSON = fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'sleap-nn-training', 'run.full', 'metrics.val.0.json'), 'utf8');
 // REAL sleap-nn predictions (nodes A,B; 20 predicted instances on frames 0-9), as desktop-inference uses.
 const PRED_B64 = fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'sleap-nn-predictions', 'two-node.predictions.slp')).toString('base64');
 const PORT = Number(process.env.PORT || 9399);
@@ -70,11 +78,13 @@ function installMock(cfg) {
     const mock = {
         files, dirs, grants, calls,
         runPlan: [],          // per training_run: 'ok' | 'fail' | 'hold' (wait for stop / cancel)
+        mtimes: {},           // run folder -> mtime (newest last trained)
         prepared: [],         // training_prepare args, as sent
         picks: [],
         runsPicks: ['refuse', 'ok'],
         stopped: new Set(), cancelled: new Set(), released: new Set(),
         inference: [],        // run_python_command argv (post-training inference)
+        modelPicks: [],       // what pick_model_directory returns, in order
         inputPick(p, directories) { grants.push({ path: p, kind: 'dir' }); mock.picks.push({ paths: [p], directories, seq: mock.picks.length + 1 }); },
         put(p, bytes) { files.set(p, bytes); mkdirp(parent(p)); },
     };
@@ -131,6 +141,11 @@ function installMock(cfg) {
                 return false;
             }
             for (const n of ['0000', '0001', '0002']) mock.put(runDir + '/viz/validation.' + n + '.png', b64(cfg.png));
+            // sleap-nn's run folder: its config (JSON is YAML) and the evaluation metrics JSON.
+            const enc = new TextEncoder();
+            mock.put(runDir + '/training_config.yaml', enc.encode(JSON.stringify(Object.assign({}, args.models[modelIndex].config))));
+            mock.put(runDir + '/metrics.val.0.json', enc.encode(cfg.metrics));
+            mock.mtimes[runDir] = Date.now();
             const evs = cfg.events.filter((e) => e.event !== 'finished');
             const half = plan === 'hold' ? evs.findIndex((e) => e.event === 'progress' && e.data.name === 'epoch_end') + 1 : evs.length;
             for (let i = 0; i < half; i += 60) { evs.slice(i, Math.min(half, i + 60)).forEach(send); await sleep(5); }
@@ -145,6 +160,20 @@ function installMock(cfg) {
             return true;
         },
         make_dir: ({ path: p }) => { if (!writable(p)) deny(p); mkdirp(p); return null; },
+        list_dir: ({ path: p }) => {
+            if (!readable(p)) deny(p);
+            const out = [];
+            const pre = p.replace(/\/$/, '') + '/';
+            for (const d of dirs) if (d.startsWith(pre) && !d.slice(pre.length).includes('/')) out.push({ name: d.slice(pre.length), kind: 'directory', size: 0, mtimeMs: mock.mtimes[d] || 0 });
+            for (const [f, b] of files) if (f.startsWith(pre) && !f.slice(pre.length).includes('/')) out.push({ name: f.slice(pre.length), kind: 'file', size: b.length, mtimeMs: 0 });
+            return out.sort((a, b) => (a.name < b.name ? -1 : 1));
+        },
+        pick_model_directory: () => {
+            const p = mock.modelPicks.shift();
+            if (!p) return null;
+            grants.push({ path: p, kind: 'model' });
+            return p;
+        },
         run_python_command: async ({ program, args, onEvent }) => {
             const send = (m) => { if (onEvent && onEvent.onmessage) onEvent.onmessage(m); };
             mock.inference.push({ program, args: args.slice() });
@@ -179,7 +208,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
     page.setDefaultTimeout(60000);
     page.on('pageerror', (e) => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
-    await page.addInitScript(installMock, { events: EVENTS, png: PNG_B64, pred: PRED_B64 });
+    await page.addInitScript(installMock, { events: EVENTS, png: PNG_B64, pred: PRED_B64, metrics: METRICS_JSON });
     await page.addInitScript(SHIM);
     await page.goto(`${BASE}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
@@ -366,6 +395,91 @@ try {
     await page.waitForFunction(() => { const b = document.getElementById('trnPostInference'); return b && !b.hidden && /skipped/.test(b.textContent); }, null, { timeout: 60000 });
     const h8 = await page.evaluate(() => ({ box: document.getElementById('trnPostInference').textContent, n: window.__mock.inference.length }));
     check(/skeleton changed while the models trained \(removed Z\)/.test(h8.box) && h8.n === 0, 'skipped, naming the node; no inference ran', h8);
+
+    console.log('\n9. Trained runs, Fine-tune / Resume, View Metrics');
+    await page.selectOption('#trnPostTarget', 'nothing');
+    await page.click('#trnTrainAgain');
+    await page.evaluate(async () => (await import('./ui/training-panel.js'))._scanTrainedRuns());
+    const t9 = await page.evaluate(async () => {
+        const T = (await import('./ui/training-panel.js'))._trainingState();
+        return { trained: T.local.trained.map((r) => ({ path: r.path, head: r.head, ck: r.checkpoint, runName: r.runName })),
+            opts: Array.from(document.querySelectorAll('#trnSlot-centroid option')).map((o) => [o.value, o.textContent]) };
+    });
+    const cRuns = t9.trained.filter((r) => r.head === 'centroid');
+    check(cRuns.length >= 1 && t9.trained.some((r) => r.head === 'centered_instance') && t9.trained.every((r) => /\/best\.ckpt$/.test(r.ck)),
+        'the runs folder\'s trained runs (training_config.yaml + checkpoint) are found', t9.trained);
+    const tOpts = t9.opts.filter((o) => o[0].startsWith('trained:'));
+    check(tOpts.length === cRuns.length && tOpts.every((o) => /^\[Trained\] .*centroid.* \(training_config\.yaml\)$/.test(o[1])) && tOpts[0][0] === 'trained:' + cRuns[0].path,
+        'the Centroid slot lists its head\'s trained runs, newest first', tOpts);
+    const cRun = cRuns[0];
+    await page.selectOption('#trnSlot-centroid', 'trained:' + cRun.path);
+    await page.waitForFunction((p) => document.getElementById('trnSlot-centroid').value === 'trained:' + p, cRun.path);
+    const s9 = await page.evaluate(async () => { const c = (await import('./ui/training-panel.js'))._trainingState().cfg.slots.centroid; return { tp: c.trainedPath, ck: c.checkpoint, mode: c.mode }; });
+    check(s9.tp === cRun.path && s9.ck === cRun.ck && s9.mode === 'scratch', 'picking it loads its config and offers its checkpoint (Train from scratch)', s9);
+
+    await page.click('#trnFullConfig');
+    await page.waitForSelector('#trnConfigDialog');
+    await page.click('#trnConfigDialog .tcd-tabs .trn-seg-btn[data-tab="centroid"]');
+    await page.check('#tcdMode input[value="finetune"]');
+    const dis = (id) => page.evaluate((i) => { const r = document.querySelector(`#trnConfigDialog .tcd-field[data-field="${i}"]`); const c = r && r.querySelector('input,select'); return c ? c.disabled : null; }, id);
+    const l1 = { stride: await dis('maxStride'), epochs: await dis('maxEpochs'), path: await page.textContent('#tcdMode .tcd-ckpt-path') };
+    await page.check('#tcdMode input[value="resume"]');
+    const l2 = { stride: await dis('maxStride'), epochs: await dis('maxEpochs') };
+    check(l1.stride === true && l1.epochs === false && l1.path === cRun.ck && l2.stride === true && l2.epochs === true,
+        'Fine-tune locks Model; Resume locks every section; the run\'s checkpoint is shown', { l1, l2 });
+    await page.check('#tcdMode input[value="finetune"]');
+    await page.click('#trnConfigDialog .tcd-tabs .trn-seg-btn[data-tab="centered_instance"]');
+    await page.check('#tcdMode input[value="finetune"]');
+    check(/^Centered Instance: Choose the checkpoint to fine-tune from/.test(await page.textContent('#trnWhy')), 'Fine-tune without a checkpoint: Start waits for one');
+    await page.evaluate((p) => { window.__mock.put('/models/legacy/best_model.h5', new Uint8Array(4)); window.__mock.modelPicks.push(p, '/models/legacy'); }, cRun.path);
+    await page.click('#tcdChooseCheckpoint');
+    await page.waitForFunction(() => /head mismatch/.test(document.querySelector('#tcdMode .tcd-ckpt-msg').textContent));
+    const w9 = await page.evaluate(() => ({ path: document.querySelector('#tcdMode .tcd-ckpt-path').textContent, warn: document.querySelector('#tcdMode .tcd-ckpt-msg').className }));
+    check(w9.path === cRun.ck && /tcd-ckpt-warn/.test(w9.warn), 'Choose… a centroid run for the centered-instance model: its checkpoint, with a head-mismatch warning', w9);
+    await page.click('#tcdChooseCheckpoint');
+    await page.waitForFunction(() => document.querySelector('#tcdMode .tcd-ckpt-path').textContent === '/models/legacy/best_model.h5');
+    check(await page.isHidden('#tcdMode .tcd-ckpt-msg'), 'a legacy SLEAP folder: its best_model.h5 (Fine-tune takes .h5), no warning');
+    await page.check('#tcdMode input[value="resume"]');
+    const r9 = await page.evaluate(() => ({ msg: document.querySelector('#tcdMode .tcd-ckpt-msg').textContent, bad: /tcd-ckpt-bad/.test(document.querySelector('#tcdMode .tcd-ckpt-msg').className),
+        why: document.getElementById('trnWhy').textContent, start: document.getElementById('trnStart').disabled }));
+    check(r9.bad && /Resume training requires a \.ckpt file/.test(r9.msg) && r9.start && /Resume training requires/.test(r9.why), 'Resume refuses the .h5; Start waits', r9);
+    await page.check('#tcdMode input[value="finetune"]');
+    if (process.env.SHOT9) await page.screenshot({ path: process.env.SHOT9.replace(/\.png$/, '-mode.png') });
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trnConfigDialog'));
+    check(/fine-tune from best\.ckpt/.test(await page.textContent('.trn-slots .trn-slot[data-slot="centroid"] .trn-slot-meta')), 'the slot says it fine-tunes from best.ckpt');
+
+    const nPrep9 = await page.evaluate(() => window.__mock.prepared.length);
+    await page.waitForFunction(() => !document.getElementById('trnStart').disabled, null, { timeout: 20000 });
+    await page.click('#trnStart');
+    await page.waitForFunction(() => /Complete/.test((document.querySelector('#trnProgress .inf-status-text') || {}).textContent || ''), null, { timeout: 60000 });
+    const init9 = await page.evaluate((n) => window.__mock.prepared[n].models.map((m) => m.init || null), nPrep9);
+    check(JSON.stringify(init9) === JSON.stringify([{ mode: 'finetune', checkpoint: cRun.ck }, { mode: 'finetune', checkpoint: '/models/legacy/best_model.h5' }]),
+        'training_prepare: each model\'s init (Rust checks the checkpoint is in a model grant)', init9);
+
+    await page.click('#trnViewMetrics');
+    await page.waitForFunction(() => document.querySelectorAll('#trnMetrics .tmd-row').length >= 2 && !/Loading/.test(document.getElementById('trnMetrics').textContent), null, { timeout: 20000 });
+    const oks = JSON.parse(METRICS_JSON).voc_metrics['oks_voc.mAP'].toFixed(4);
+    const m9 = await page.evaluate(() => ({
+        rows: Array.from(document.querySelectorAll('#trnMetrics .tmd-row')).map((r) => Array.from(r.cells).map((c) => c.textContent)),
+        dirs: [...document.querySelectorAll('#trnMetrics .tmd-row')].map((r) => r.dataset.path),
+        add: !document.getElementById('tmdAdd').hidden,
+    }));
+    const done9 = await page.evaluate(async () => (await import('./ui/training-panel.js'))._trainingState().run.modelDirs);
+    check(m9.dirs.slice(0, 2).join() === done9.join() && m9.dirs.length > 2 && m9.rows.every((r) => r[4] === oks) && m9.rows[0][2] === 'Centroid' && /^UNet, max stride/.test(m9.rows[0][3]) && m9.add,
+        'View Metrics: this run\'s models first, then the trained runs, with the real OKS mAP; Add Trained Model(s)… offered', { rows: m9.rows.slice(0, 3), oks });
+    if (process.env.SHOT9) await page.screenshot({ path: process.env.SHOT9.replace(/\.png$/, '-table.png') });
+    await page.click('#trnMetrics .tmd-row');
+    await page.waitForSelector('#trnMetricsDetail .tmd-box');
+    const d9 = await page.evaluate(() => ({ nodes: Array.from(document.querySelectorAll('#trnMetricsDetail .tmd-node')).map((t) => t.textContent),
+        list: document.querySelectorAll('#trnMetricsDetail .tmd-list dt').length, title: document.getElementById('trnMetricsDetailTitle').textContent }));
+    check(d9.nodes.length >= 1 && d9.list >= 10, 'a row opens the detail: per-node distance boxplots and the metrics list', d9);
+    if (process.env.SHOT9) await page.screenshot({ path: process.env.SHOT9.replace(/\.png$/, '-detail.png') });
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trnMetricsDetail') && !!document.getElementById('trnMetrics'));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trnMetrics'));
+    check(true, 'Esc closes the detail, then the table');
 } catch (e) {
     console.error(e);
     fails++;

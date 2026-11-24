@@ -20,8 +20,12 @@
  *  6. One per view: Train Again → Start sends cam1's job only (one video in its file); Cancel sends
  *     `mode: "cancel"`; the run ends Failed "Training cancelled", the row "cancelled", nothing more is
  *     submitted.
- *  7. Retry → a failing job: the error banner names the model and "exit code 1", and Error output
- *     (sleap-nn) shows the worker's error line.
+ *     View Metrics reads the runs ON THE WORKER (`fs.stat` / `fs.read`): run.centroid's real metrics JSON
+ *     gives its numbers, run.centered_instance (no metrics file) shows "—"; no Add Trained Model(s)… there.
+ *  7. Retry with Resume from a worker checkpoint (typed in Full Configuration: a worker has no folder picker)
+ *     → the centroid job's config resumes from it (`resume_ckpt_path`), the other model's does not; then the
+ *     failing job: the error banner names the model and "exit code 1", and Error output (sleap-nn) shows the
+ *     worker's error line.
  *  8. The Inference panel's Backend keeps its own ids (two pickers on one page).
  *
  * Usage: node tests/e2e/connect-training.mjs   (PORT= to move its server)
@@ -29,6 +33,11 @@
 import { FakeWorker } from '../connect/fake-worker.mjs';
 import { runConnectE2E, check, fail, watchPage, pair } from './fixtures/connect-e2e.mjs';
 import { loadTrainingSession } from './fixtures/training-session.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const METRICS_JSON = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'sleap-nn-training', 'run.full', 'metrics.val.0.json'), 'utf8');
 
 const WS = 'ws://127.0.0.1:9641';
 
@@ -170,6 +179,19 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     check(tracks.length === 2 && tracks.map((t) => t.data).join() === '/data/sess/cam1/cam1.mp4,/data/sess/cam2/cam2.mp4' &&
         tracks.every((t) => t.models.join() === '/data/sess/models/run.centroid,/data/sess/models/run.centered_instance' && t.frames === tracks[0].frames),
         'one track job per view with both trained folders (centroid first), the same frames', tracks);
+    worker.addDir('/data/sess/models/run.centroid');
+    worker.addFile('/data/sess/models/run.centroid/metrics.val.0.json', METRICS_JSON);
+    worker.addFile('/data/sess/models/run.centroid/training_config.yaml',
+        'model_config:\n  head_configs:\n    centroid:\n      confmaps: {sigma: 2.5}\n  backbone_config:\n    unet: {max_stride: 16, filters: 16}\ntrainer_config:\n  run_name: 261123_101500.centroid.n=12\n');
+    await page.click('#trnViewMetrics');
+    await page.waitForFunction(() => document.querySelectorAll('#trnMetrics .tmd-row').length === 2, null, { timeout: 20000 });
+    const mt = await page.evaluate(() => ({ rows: Array.from(document.querySelectorAll('#trnMetrics .tmd-row')).map((r) => Array.from(r.cells).map((c) => c.textContent)),
+        add: !document.getElementById('tmdAdd').hidden }));
+    const oks = JSON.parse(METRICS_JSON).voc_metrics['oks_voc.mAP'].toFixed(4);
+    check(mt.rows[0][0] === 'run.centroid' && mt.rows[0][1] === '2026-11-23 10:15:00' && mt.rows[0][2] === 'Centroid' && mt.rows[0][4] === oks &&
+        mt.rows[1][4] === '\u2014' && !mt.add, 'View Metrics reads the runs on the worker: the real numbers, "—" without a metrics file, no Add', mt);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trnMetrics'));
 
     console.log('\n6. One per view, then Cancel');
     await page.click('#trnTrainAgain');
@@ -193,11 +215,26 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     await new Promise((r) => setTimeout(r, 800));
     check(worker.jobs.size === before + 1, 'nothing more was submitted after Cancel', worker.jobs.size - before);
 
-    console.log('\n7. Retry, then a failing job');
+    console.log('\n7. Retry with Resume from a worker checkpoint, then a failing job');
     await page.click('#trnRetry');
+    await page.click('#trnFullConfig');
+    await page.waitForSelector('#trnConfigDialog');
+    await page.click('#trnConfigDialog .tcd-tabs .trn-seg-btn[data-tab="centroid"]');
+    await page.check('#tcdMode input[value="resume"]');
+    const rm = await page.evaluate(() => ({ text: !document.getElementById('tcdCheckpoint').hidden, choose: !document.getElementById('tcdChooseCheckpoint').hidden,
+        why: document.getElementById('trnWhy').textContent }));
+    check(rm.text && !rm.choose && /Centroid: Choose the checkpoint to resume from/.test(rm.why), 'remote: the checkpoint is a worker path typed in; Start waits for it', rm);
+    await page.fill('#tcdCheckpoint', '/data/sess/models/run.centroid/best.ckpt');
+    await page.dispatchEvent('#tcdCheckpoint', 'change');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trnConfigDialog'));
     const before2 = worker.jobs.size;
+    await page.waitForFunction(() => !document.getElementById('trnStart').disabled, null, { timeout: 20000 });
     await page.click('#trnStart');
     await waitJobs(before2 + 1);
+    const rcfg = await page.evaluate(async (c) => { const Y = await import('yaml'); const d = Y.parse(c); return { resume: d.trainer_config.resume_ckpt_path, bb: d.model_config.pretrained_backbone_weights }; },
+        [...worker.jobs.values()][before2].spec.config_contents[0]);
+    check(rcfg.resume === '/data/sess/models/run.centroid/best.ckpt' && rcfg.bb == null, 'the centroid job resumes from the worker checkpoint (resume_ckpt_path)', rcfg);
     const j4 = [...worker.jobs.values()][before2];
     worker.setJobState(j4.job_id, 'running');
     worker.log(j4.job_id, 'Traceback (most recent call last):');

@@ -233,6 +233,63 @@ export function finalizeConfig(doc, o) {
     return d;
 }
 
+/** sleap-app's training modes (TrainingConfigDialog's radios). */
+export const TRAINING_MODES = Object.freeze([
+    ['scratch', 'Train from scratch'],
+    ['finetune', 'Fine-tune (start from prior weights)'],
+    ['resume', 'Resume training (continue from checkpoint)'],
+]);
+
+/** sleap-app `parseYamlConfig`: a config that names a checkpoint is a Resume / Fine-tune of it. */
+export function detectTrainingMode(doc) {
+    const d = obj(doc) || {};
+    const t = obj(d.trainer_config) || {}, m = obj(d.model_config) || {};
+    if (typeof t.resume_ckpt_path === 'string' && t.resume_ckpt_path) return { mode: 'resume', checkpoint: t.resume_ckpt_path };
+    if (typeof m.pretrained_backbone_weights === 'string' && m.pretrained_backbone_weights) return { mode: 'finetune', checkpoint: m.pretrained_backbone_weights };
+    return { mode: 'scratch', checkpoint: null };
+}
+
+/**
+ * sleap-app `applyHyperparamsToYaml`'s resume / fine-tune block on a copy: all three keys are always
+ * written, so a stale checkpoint baked into a trained config never rides along. Resume =
+ * `trainer_config.resume_ckpt_path`; Fine-tune = `model_config.pretrained_backbone_weights` and
+ * `pretrained_head_weights`. (Local runs: Rust writes these itself from the checked checkpoint.)
+ */
+export function applyTrainingMode(doc, mode, checkpoint) {
+    const d = clone(obj(doc) || {});
+    if (!obj(d.trainer_config)) d.trainer_config = {};
+    if (!obj(d.model_config)) d.model_config = {};
+    const ck = checkpoint || null;
+    d.trainer_config.resume_ckpt_path = mode === 'resume' && ck ? ck : null;
+    d.model_config.pretrained_backbone_weights = mode === 'finetune' && ck ? ck : null;
+    d.model_config.pretrained_head_weights = mode === 'finetune' && ck ? ck : null;
+    return d;
+}
+
+/** Why a slot's training mode cannot start, or null (sleap-app: Resume needs a .ckpt; Fine-tune .ckpt or .h5). */
+export function checkpointProblem(mode, checkpoint) {
+    if (mode !== 'resume' && mode !== 'finetune') return null;
+    if (!checkpoint) return mode === 'resume' ? 'Choose the checkpoint to resume from' : 'Choose the checkpoint to fine-tune from';
+    const lower = String(checkpoint).toLowerCase();
+    if (mode === 'resume' && !lower.endsWith('.ckpt')) return 'Resume training requires a .ckpt file (.h5 is only supported for Fine-tune).';
+    if (mode === 'finetune' && !lower.endsWith('.ckpt') && !lower.endsWith('.h5')) return 'Fine-tune needs a .ckpt or .h5 file';
+    return null;
+}
+
+/**
+ * sleap-app `pickCheckpointFile`: the checkpoint of a run folder: `last.ckpt` (the newest epoch), else
+ * `best.ckpt`, else another `.ckpt`; for Fine-tune, a legacy SLEAP `.h5` (`best_model.h5` first) last.
+ */
+export function pickCheckpointFile(names, mode) {
+    const list = (names || []).map(String);
+    const ckpts = list.filter(function (n) { return /\.ckpt$/i.test(n); });
+    const pick = ckpts.find(function (n) { return n === 'last.ckpt'; }) || ckpts.find(function (n) { return n === 'best.ckpt'; }) || ckpts[0];
+    if (pick) return pick;
+    if (mode !== 'finetune') return null;
+    const h5 = list.filter(function (n) { return /\.h5$/i.test(n); });
+    return h5.find(function (n) { return n === 'best_model.h5'; }) || h5[0] || null;
+}
+
 /** Anchor Part choices: Auto (none) then the skeleton's nodes. */
 export function anchorChoices(nodeNames) {
     return [['', 'Auto']].concat((nodeNames || []).map(function (n) { return [n, n]; }));

@@ -202,7 +202,8 @@
              * Local training (src-tauri/src/training.rs). Rust builds sleap-nn's argv and owns
              * every path, port and the staging folder; the page sends configs (JSON) and bytes.
              *   pickRunsDirectory(title) -> {path, existingRuns} | null  (a READ-ONLY model grant)
-             *   prepare({runsRoot, models: [{config, runName}], trainSlp, valSlp?, videoPaths}) -> token
+             *   prepare({runsRoot, models: [{config, runName, init?: {mode: 'finetune'|'resume', checkpoint}}],
+             *            trainSlp, valSlp?, videoPaths}) -> token   (a checkpoint must be inside a model grant)
              *   run(token, modelIndex, onEvent, {dryRun}) -> bool; events: {event: 'stdout'|'stderr'|
              *     'progress'|'finished', data}
              *   stop(token) (Stop Early) / cancel(token) / release(token)

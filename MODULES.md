@@ -2837,6 +2837,18 @@ view for a per-view group; `RUN_NAME_RE` is the charset Rust will accept.
 **Imports.** None. **Imported by** `ui/training-panel.js`.
 **Tests.** `tests/test-training-groups.mjs`.
 
+### pose/training-model-metrics.js
+
+**Purpose.** A trained model's evaluation metrics, DOM-free (port of sleap-app `loadModelMetrics.ts` +
+`boxplot.ts`): `buildModelMetricsRow(runDir, io)` reads `metrics.{test,val,train}.0.json` (first found) and
+`training_config.yaml` through injected `{exists, readText, parseYaml}` and returns the table row (run name,
+timestamp from the run name, model type, architecture, node names, `summary`); failures become `row.error`.
+Never reads the `.npz` (pickled object arrays). VOC keys read flat (sleap-nn) or nested. Also
+`normalizeMetrics`, `summarizeMetrics`, `trainingConfigInfo`, `labeledMetrics` (classic SLEAP order),
+`computeNodeBoxplots` / `distanceAxisMax` / `percentileSorted`, `parseTimestampFromRunName`, `runDirName`,
+`joinPath`. **Imports.** None. **Imported by.** `ui/training-metrics-dialog.js`. **Tests.**
+`tests/test-training-model-metrics.mjs` (a REAL run's files, `tests/fixtures/sleap-nn-training/run.full/`).
+
 ### pose/training-metrics.js
 
 **Purpose.** The Training Monitor's runtime lines, port of sleap-app `trainingMetrics.ts`
@@ -13297,7 +13309,17 @@ local or worker, as trained), skipped when the skeleton's node names changed sin
 it went, with Show Inference panel. A Start clears the dry run's result (sleap-app). "Full Configuration..." (above
 the Start row, not while a run goes) opens `ui/training-config-dialog.js` on the slots' configs: the panel's fields
 are baked into them first (`applyPanelSettings` via `effectiveHp`) and `hyperparamsFromConfig` re-reads them after
-each edit; Reset to profile defaults re-reads each slot's original text (`cfg.slots[slot].text`). A row with a chart
+each edit; Reset to profile defaults re-reads each slot's original text (`cfg.slots[slot].text`). Each slot has a
+training mode and checkpoint (`mode`, `checkpoint`, read from its config by `detectTrainingMode`): locally each
+model's `init` goes to `prepare` (Rust checks it), a worker's config gets `applyTrainingMode` (`sentConfig`);
+Start waits on `slotCheckpointProblem` (`checkpointProblem`, and where the checkpoint is: one picked on this computer
+never goes to a worker, a typed worker path never runs locally); Choose… picks a model folder (`pickModelDirectory`) and takes its checkpoint,
+warning on a head mismatch from its `training_config.yaml`. The runs folder's trained runs (`scanTrainedRuns`, after
+picking it and after each local run) are "[Trained] <run> (training_config.yaml)" slot entries of their head
+(`selectTrainedRun` loads the config and offers the run's checkpoint; listed for local runs only; one scan at a
+time, rescanning when asked meanwhile). View Metrics (after a completed run) opens
+`ui/training-metrics-dialog.js` on this run's models (+ the trained runs locally), read locally or on the worker
+(`remote.workerFiles`). A row with a chart
 opens the Training Monitor (`ui/training-monitor.js`); rows keep their start / epoch / end times and the
 config's plateau settings for its runtime lines. The label counts walk every lazy store row, so they are recomputed when the project changes or
 every 15 s while the panel shows, not on each 2 s refresh. Loaded on every build by one literal dynamic
@@ -13310,8 +13332,8 @@ import in `pose/initialization.js`, after the Inference panel. **Exports.** `TRA
 `./connect/backend-picker.js`, `./connect/remote-training.js`, `../pose/connect/remote-training-plan.js`,
 `../pose/connect/store.js` (`configureConnect`: the YAML parser for `withYamlRunName`),
 `../pose/connect/timestamp.js`, `../pose/training-metrics.js`, `./training-monitor.js`, `../pose/training-local-progress.js`,
-`../pose/training-handoff.js`, `./inference-panel.js`, `./training-config-dialog.js`; the importmap's `yaml` (dynamic). **Imported by.**
-`pose/initialization.js` (dynamic). **Exports** also `_openTrainingConfig(tab)` (tests). **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/desktop-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/training-config-dialog.mjs`, `tests/e2e/panel-rail.mjs`.
+`../pose/training-handoff.js`, `./inference-panel.js`, `./training-config-dialog.js`, `./training-metrics-dialog.js`; the importmap's `yaml` (dynamic). **Imported by.**
+`pose/initialization.js` (dynamic). **Exports** also `_openTrainingConfig(tab)`, `_scanTrainedRuns()` (tests). **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/desktop-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/training-config-dialog.mjs`, `tests/e2e/panel-rail.mjs`.
 
 ### ui/training-config-dialog.js
 
@@ -13326,7 +13348,23 @@ Vanilla DOM card (Esc / Done / scrim close, Tab trapped by `trapModal`, `data-sh
 is the one scroller. LUCID changes: no W&B, devices fixed at 1, no job package or run scripts, backbone shown (UNet
 settings only). **Exports.** `openTrainingConfigDialog(host)` → `{close, update, focus, isOpen}`,
 `trainingConfigDialog()`. **Imports.** `./training-config-fields.js`, `./connect/layers.js` (`trapModal`),
-`./panel-form.js`, `./ask.js`. **Imported by.** `ui/training-panel.js`. **Tests.** `tests/e2e/training-config-dialog.mjs`.
+`./panel-form.js`, `./ask.js`, `./training-args.js` (`TRAINING_MODES`). A model tab starts with the training
+mode block (radios, the checkpoint: a picked folder locally via `host.chooseCheckpoint`, a typed worker path
+remotely; the problem / head-mismatch note); Fine-tune disables the Model section's fields, Resume every field
+of the tab (sleap-app `modelLocked` / `allLocked`). **Imported by.** `ui/training-panel.js`. **Tests.**
+`tests/e2e/training-config-dialog.mjs`, `tests/e2e/desktop-training.mjs` §9, `tests/e2e/connect-training.mjs` §7.
+
+### ui/training-metrics-dialog.js
+
+**Purpose.** View Metrics: sleap-app's "Metrics for Trained Models" table (`ModelMetricsDialog.tsx`: Path,
+Timestamp, Model Type, Architecture, OKS mAP, Vis Precision, Vis Recall, Dist 95% / 75% / Avg) and, on a row,
+its detail (`DetailedModelMetricsDialog.tsx`: per-node distance boxplots as inline SVG, then classic SLEAP's
+labelled metrics list). Rows from `pose/training-model-metrics.js` through `host.io` (local runs folder, or the
+worker's `fs.read`); "Add Trained Model(s)…" only where a model folder can be picked. Stacked vanilla DOM cards
+(`.tmd-scrim`, a `layerAbove` layer, so Esc closes the detail first), `data-shortcut-modal`. **Exports.**
+`openTrainingMetricsDialog(host)`, `trainingMetricsDialog()`. **Imports.** `../pose/training-model-metrics.js`,
+`./connect/layers.js`, `./panel-form.js`. **Imported by.** `ui/training-panel.js`. **Tests.**
+`tests/e2e/desktop-training.mjs` §9, `tests/e2e/connect-training.mjs` §5.
 
 ### ui/training-config-fields.js
 
@@ -13365,7 +13403,10 @@ onCancel, readFile})` → `{update, close, isOpen}`, `trainingMonitor()`. **Impo
 `hyperparamsFromConfig` (Max Epochs, Batch Size, Rotation / Scale Augmentation, Anchor Part, validation
 fraction, seed) and `applyPanelSettings` (sleap-app's YAML keys; every other value of the config kept),
 `finalizeConfig` (run name, W&B off, no baked-in skeleton / part names / data paths), `anchorChoices`,
-`ROTATION_OPTIONS` and the hint texts. **Imports.** `../lib/sleap-app-profiles/profiles.js`.
+`ROTATION_OPTIONS` and the hint texts; training modes (sleap-app): `TRAINING_MODES`, `detectTrainingMode(doc)`
+(a config naming a checkpoint is a Resume / Fine-tune of it), `applyTrainingMode(doc, mode, checkpoint)` (all
+three keys always written, so no stale checkpoint rides along), `checkpointProblem`, `pickCheckpointFile`
+(last / best / other `.ckpt`, then `best_model.h5` for Fine-tune). **Imports.** `../lib/sleap-app-profiles/profiles.js`.
 **Imported by.** `ui/training-panel.js`. **Tests.** `tests/test-training-args.mjs` (parses every preset when
 the offline `yaml` package is installed).
 
@@ -13478,8 +13519,9 @@ remote-browser-store,remote-browser}.js`, `ui/panel-rail-icons.js`. **Imported b
 every included (session, view) video is on the worker (one `resolveViewVideos` per session; one Locate on
 worker… per session root adds a rule), the output folder (`defaultOutputDir`; models go in
 `<folder>/models/`), `submitGroup` (the store's `submitJob` with telemetry and per-model completion),
-`stopCurrent` (`jobs.cancel {mode: "stop"}` on the running train job only) and `cancelAll` (`mode:
-"cancel"` on every active train job of the run). **Exports.** `createRemoteTraining(host)`. **Imports.**
+`stopCurrent` (`jobs.cancel {mode: "stop"}` on the running train job only), `cancelAll` (`mode:
+"cancel"` on every active train job of the run) and `workerFiles` `{exists, readText}` (View Metrics: small
+text files of a run over `fs.stat` / paged `fs.read`, 8 MiB cap, never a checkpoint / `.npz`). **Exports.** `createRemoteTraining(host)`. **Imports.**
 `pose/connect/{store,project-tag,remote-output-dir,remote-inference-plan}.js`, `./remote-file-browser.js`.
 **Imported by.** `ui/training-panel.js`.
 
@@ -13512,7 +13554,7 @@ through it), `fetchJobPredictions(workerId, jobId, {name, onProgress})` (blob or
 
 #### ui/connect/layers.js
 **Purpose.** Which modal layer is on top: `layerAbove(el)` is true when another Connect layer (`.cw-scrim`,
-`.njw-scrim`, `.rfb-scrim`, `.cj-scrim`, the in-app `.ask-modal-overlay`) sits over the one `el` is in
+`.njw-scrim`, `.rfb-scrim`, `.cj-scrim`, the in-app `.ask-modal-overlay`, `.plane-confirm-overlay`, View Metrics' `.tmd-scrim`) sits over the one `el` is in
 (computed z-index, then DOM order). Every capture-phase Esc/Tab handler (wizard, job viewer, merge dialog,
 file browser, devices popover, queue menu) returns early when it is not the top layer, because listeners on
 one `document` run in registration order and the layer opened first used to close together with the dialog

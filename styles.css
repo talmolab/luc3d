@@ -9083,6 +9083,54 @@ div.track-summary-steps { padding-left: 0; }
   border-top: 1px solid var(--border-color); flex-shrink: 0; }
 .tcd-foot-right { display: flex; gap: 8px; }
 @media (max-width: 720px) { .tcd-nav { display: none; } .tcd-head { flex-wrap: wrap; } }
+/* Full Configuration: training mode (Fine-tune / Resume) */
+.tcd-mode-radios { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.tcd-mode-radios .inf-check { font-size: 12px; }
+.tcd-ckpt { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tcd-ckpt-path { flex: 1; min-width: 0; font-family: monospace; font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.tcd-ckpt-input { flex: 1; min-width: 0; height: 28px; font-family: monospace; font-size: 11px; padding: 0 8px; background: var(--bg-primary);
+  color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; }
+.tcd-ckpt-msg { margin: 0; font-size: 11px; color: var(--text-muted); }
+.tcd-ckpt-msg.tcd-ckpt-bad { color: var(--error-color); }
+.tcd-ckpt-msg.tcd-ckpt-warn { color: var(--warning-color); }
+/* View Metrics (ui/training-metrics-dialog.js, sleap-app ModelMetricsDialog) */
+.trn-metrics-btn { width: 100%; height: 28px; }
+.tmd-scrim { position: fixed; inset: 0; z-index: 10000; background: rgba(0, 0, 0, 0.55); display: flex;
+  align-items: center; justify-content: center; padding: 16px; }
+.tmd-scrim [hidden] { display: none !important; }
+.tmd-card { width: min(1200px, 96vw); max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); font-size: 12px; }
+.tmd-head { padding: 14px 20px 8px; flex-shrink: 0; }
+.tmd-title { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.tmd-sub { margin: 4px 0 0; font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.tmd-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 20px 12px; display: flex; flex-direction: column; gap: 10px; }
+.tmd-table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 860px; font-size: 11px; }
+.tmd-table th { position: sticky; top: 0; background: var(--bg-secondary); text-align: left; font-weight: 600; padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color); white-space: nowrap; }
+.tmd-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-color); }
+.tmd-row { cursor: pointer; }
+.tmd-row:hover, .tmd-row:focus-visible { background: var(--bg-tertiary); outline: none; }
+.tmd-mono { font-family: monospace; }
+.tmd-num { font-variant-numeric: tabular-nums; }
+.tmd-path { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmd-nowrap { white-space: nowrap; }
+.tmd-empty { text-align: center; color: var(--text-muted); padding: 18px; }
+.tmd-error { margin: 0; color: var(--warning-color); }
+.tmd-h3 { margin: 4px 0 0; font-size: 12px; font-weight: 600; }
+.tmd-box { width: 100%; max-width: 640px; height: auto; }
+.tmd-box .tmd-grid { stroke: var(--border-color); stroke-width: 1; }
+.tmd-box .tmd-tick { fill: var(--text-muted); font-size: 10px; }
+.tmd-box .tmd-node { fill: var(--text-secondary); font-size: 11px; }
+.tmd-box .tmd-whisker { stroke: var(--text-muted); stroke-width: 1.5; }
+.tmd-box .tmd-iqr { fill: rgba(91, 141, 239, 0.35); stroke: #7aa7ff; stroke-width: 1; }
+.tmd-box .tmd-median { stroke: var(--text-primary); stroke-width: 2; }
+.tmd-list { display: grid; grid-template-columns: 1fr auto; gap: 4px 24px; margin: 0; }
+.tmd-list dt { color: var(--text-secondary); }
+.tmd-list dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.tmd-foot { display: flex; justify-content: space-between; gap: 8px; padding: 10px 20px; border-top: 1px solid var(--border-color); flex-shrink: 0; }
+.tmd-foot > :last-child { margin-left: auto; }
+.tmd-card.tmd-card-detail { width: min(720px, 94vw); }
 /* Post-training inference (sleap-app's postTrainingInference box) */
 .trn-post-opts { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 .trn-post-msg { font-size: 10px; color: var(--text-muted); overflow-wrap: anywhere; }

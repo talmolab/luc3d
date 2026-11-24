@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
     MODEL_TYPE_OPTIONS, getConfigSlots, getSlotLabel, slotToHeadType, headLabel, profilesForHead, defaultProfile,
     detectHeadType, hyperparamsFromConfig, applyPanelSettings, finalizeConfig, anchorChoices, DEFAULT_MODEL_TYPE,
+    TRAINING_MODES, detectTrainingMode, applyTrainingMode, checkpointProblem, pickCheckpointFile,
 } from '../ui/training-args.js';
 import { BASELINE_PROFILES } from '../lib/sleap-app-profiles/profiles.js';
 
@@ -107,4 +108,27 @@ if (fs.existsSync(yamlPath)) {
 } else {
     console.log('test-training-args: (offline yaml package not installed: preset parsing skipped)');
 }
+// Training modes (sleap-app TrainingConfigDialog / applyHyperparamsToYaml / pickCheckpointFile).
+assert.deepEqual(TRAINING_MODES.map((m) => m[0]), ['scratch', 'finetune', 'resume']);
+assert.deepEqual(detectTrainingMode({ trainer_config: { resume_ckpt_path: '/m/last.ckpt' } }), { mode: 'resume', checkpoint: '/m/last.ckpt' });
+assert.deepEqual(detectTrainingMode({ model_config: { pretrained_backbone_weights: '/m/best.ckpt' } }), { mode: 'finetune', checkpoint: '/m/best.ckpt' });
+assert.deepEqual(detectTrainingMode({ trainer_config: { resume_ckpt_path: null } }), { mode: 'scratch', checkpoint: null });
+const stale = { trainer_config: { resume_ckpt_path: '/old.ckpt' }, model_config: { pretrained_backbone_weights: '/old.ckpt', pretrained_head_weights: '/old.ckpt' } };
+const ft = applyTrainingMode(stale, 'finetune', '/m/best.ckpt');
+assert.deepEqual([ft.trainer_config.resume_ckpt_path, ft.model_config.pretrained_backbone_weights, ft.model_config.pretrained_head_weights], [null, '/m/best.ckpt', '/m/best.ckpt']);
+const sc = applyTrainingMode(stale, 'scratch', '/m/best.ckpt');
+assert.deepEqual([sc.trainer_config.resume_ckpt_path, sc.model_config.pretrained_backbone_weights], [null, null], 'a stale checkpoint never rides along');
+assert.equal(applyTrainingMode(stale, 'resume', '/m/last.ckpt').trainer_config.resume_ckpt_path, '/m/last.ckpt');
+assert.equal(stale.trainer_config.resume_ckpt_path, '/old.ckpt', 'the source is not changed');
+assert.equal(checkpointProblem('scratch', null), null);
+assert.match(checkpointProblem('resume', null), /Choose the checkpoint to resume from/);
+assert.match(checkpointProblem('resume', '/m/best_model.h5'), /requires a \.ckpt/);
+assert.equal(checkpointProblem('finetune', '/m/best_model.H5'), null);
+assert.match(checkpointProblem('finetune', '/m/model.pt'), /\.ckpt or \.h5/);
+assert.equal(pickCheckpointFile(['best.ckpt', 'last.ckpt', 'epoch=3.ckpt'], 'resume'), 'last.ckpt');
+assert.equal(pickCheckpointFile(['epoch=3.ckpt', 'best.ckpt'], 'finetune'), 'best.ckpt');
+assert.equal(pickCheckpointFile(['x.h5', 'best_model.h5'], 'finetune'), 'best_model.h5');
+assert.equal(pickCheckpointFile(['best_model.h5'], 'resume'), null);
+assert.equal(pickCheckpointFile([], 'finetune'), null);
+
 console.log('test-training-args: ok');

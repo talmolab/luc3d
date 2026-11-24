@@ -89,6 +89,41 @@ pub struct RunsFolder {
 pub struct PrepareModel {
     pub config: Value,
     pub run_name: String,
+    /// Start from a trained model (sleap-app's Fine-tune / Resume); none = from scratch.
+    #[serde(default)]
+    pub init: Option<PrepareInit>,
+}
+
+/// sleap-app's training modes other than "Train from scratch". The checkpoint is a PICKLE that
+/// sleap-nn loads (`torch.load`), so it must lie inside a MODEL grant: a folder the user picked as
+/// read-only (`pick_model_directory` / `pick_runs_directory`), which the page can never write into.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareInit {
+    /// `"resume"` (sleap-nn `trainer_config.resume_ckpt_path`: optimizer, scheduler and epoch restored)
+    /// or `"finetune"` (`model_config.pretrained_backbone_weights` + `pretrained_head_weights`: a new run
+    /// seeded with the weights).
+    pub mode: String,
+    pub checkpoint: String,
+}
+
+/// What a model starts from once checked: the resolved checkpoint path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitFrom {
+    Resume(PathBuf),
+    Finetune(PathBuf),
+}
+
+/// sleap-app's rule: Resume needs a Lightning `.ckpt`; Fine-tune also takes a legacy SLEAP `.h5`.
+pub fn init_from(mode: &str, resolved: PathBuf) -> Result<InitFrom, String> {
+    let ext = resolved.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+    match mode {
+        "resume" if ext == "ckpt" => Ok(InitFrom::Resume(resolved)),
+        "resume" => Err("Resume training needs a .ckpt file (.h5 is only supported for Fine-tune)".into()),
+        "finetune" if ext == "ckpt" || ext == "h5" => Ok(InitFrom::Finetune(resolved)),
+        "finetune" => Err("Fine-tune needs a .ckpt or .h5 file".into()),
+        other => Err(format!("unknown training mode {other:?}")),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -352,7 +387,7 @@ pub mod imp {
     pub struct Run {
         pub staging: PathBuf,
         pub runs_root: PathBuf,
-        pub models: Vec<(Value, String)>,
+        pub models: Vec<(Value, String, Option<InitFrom>)>,
         pub videos: Vec<String>,
         pub has_val: bool,
         pub next: Mutex<usize>,
@@ -416,7 +451,18 @@ pub mod imp {
                 return refuse(format!("a run named {} already exists in the runs folder", m.run_name));
             }
             train_config::check(&m.config, table, cpus).map_err(|e| format!("{TRAINING_NOT_ALLOWED}model {i}: {e}"))?;
-            models.push((m.config, m.run_name));
+            let init = match m.init {
+                None => None,
+                Some(init) => {
+                    // Inside a model grant (read-only to the page), an existing file of the right kind.
+                    let p = grants.check_model(&init.checkpoint).map_err(|e| format!("{TRAINING_NOT_ALLOWED}model {i} checkpoint: {e}"))?;
+                    if !p.is_file() {
+                        return refuse(format!("model {i}: checkpoint {} is not an existing file", p.display()));
+                    }
+                    Some(init_from(&init.mode, p).map_err(|e| format!("{TRAINING_NOT_ALLOWED}model {i}: {e}"))?)
+                }
+            };
+            models.push((m.config, m.run_name, init));
         }
         let mut videos = Vec::new();
         for v in &a.video_paths {
@@ -573,7 +619,7 @@ pub mod imp {
             }
             *next += 1;
         }
-        let (config, run_name) = &run.models[model_index];
+        let (config, run_name, init) = &run.models[model_index];
         let run_dir = run.runs_root.join(run_name);
         if run_dir.exists() {
             return refuse(format!("{} already exists", run_dir.display()));
@@ -593,15 +639,20 @@ pub mod imp {
         let val = run.has_val.then(|| s(run.staging.join("val.slp")));
         let cache = s(run.staging.join(format!("cache_{model_index}")));
         let root = s(run.runs_root.clone());
+        let (resume, finetune) = match init {
+            Some(InitFrom::Resume(p)) => (Some(s(p.clone())), None),
+            Some(InitFrom::Finetune(p)) => (None, Some(s(p.clone()))),
+            None => (None, None),
+        };
         let forced = Forced {
             train_labels: &train,
             val_labels: val.as_deref(),
             cache_dir: &cache,
             ckpt_dir: &root,
             run_name,
-            resume_ckpt: None,
-            pretrained_backbone: None,
-            pretrained_head: None,
+            resume_ckpt: resume.as_deref(),
+            pretrained_backbone: finetune.as_deref(),
+            pretrained_head: finetune.as_deref(),
             controller_port: pubs.port(),
             publish_port: sub.port(),
         };
@@ -783,6 +834,89 @@ mod tests {
         assert!(parse_progress(b"not json").is_none());
     }
 
+    #[test]
+    fn init_modes_follow_sleap_app() {
+        let p = |s: &str| PathBuf::from(s);
+        assert_eq!(init_from("resume", p("/m/last.ckpt")), Ok(InitFrom::Resume(p("/m/last.ckpt"))));
+        assert_eq!(init_from("finetune", p("/m/best.CKPT")), Ok(InitFrom::Finetune(p("/m/best.CKPT"))));
+        assert_eq!(init_from("finetune", p("/m/best_model.h5")), Ok(InitFrom::Finetune(p("/m/best_model.h5"))));
+        assert!(init_from("resume", p("/m/best_model.h5")).unwrap_err().contains("needs a .ckpt"));
+        assert!(init_from("finetune", p("/m/model.pt")).is_err());
+        assert!(init_from("finetune", p("/m/ckpt")).is_err(), "no extension");
+        assert!(init_from("scratch", p("/m/best.ckpt")).is_err());
+    }
+
+    /// A checkpoint is a pickle sleap-nn loads: prepare takes it only from inside a MODEL grant
+    /// (read-only to the page), as an existing file of the mode's kind, and keeps the resolved path.
+    #[cfg(feature = "sleap-nn")]
+    #[test]
+    fn prepare_takes_checkpoints_only_from_model_grants() {
+        let base = std::env::temp_dir().join(format!("lucid-init-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (runs, models, data) = (base.join("runs"), base.join("models"), base.join("data"));
+        for d in [&runs, &models.join("m1"), &data] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        for f in [models.join("m1/best.ckpt"), models.join("m1/best_model.h5"), data.join("x.ckpt"), data.join("v.mp4")] {
+            std::fs::write(f, b"x").unwrap();
+        }
+        let grants = GrantState::default();
+        grants.grant_model_dir(&runs).unwrap();
+        grants.grant_model_dir(&models).unwrap();
+        grants.0.lock().unwrap().grant_dir(&data.canonicalize().unwrap());
+        let state = TrainingState::default();
+        let prep = |mode: &str, ckpt: PathBuf| {
+            let r = imp::prepare(
+                &state,
+                &grants,
+                PrepareArgs {
+                    runs_root: runs.to_string_lossy().into_owned(),
+                    models: vec![PrepareModel {
+                        config: serde_json::json!({}),
+                        run_name: "r1".into(),
+                        init: Some(PrepareInit { mode: mode.into(), checkpoint: ckpt.to_string_lossy().into_owned() }),
+                    }],
+                    train_slp: "AA==".into(),
+                    val_slp: None,
+                    video_paths: vec![data.join("v.mp4").to_string_lossy().into_owned()],
+                },
+            );
+            if let Ok(t) = &r {
+                imp::release(&state, t).unwrap();
+            }
+            r
+        };
+        assert!(prep("finetune", models.join("m1/best.ckpt")).is_ok());
+        assert!(prep("finetune", models.join("m1/best_model.h5")).is_ok());
+        assert!(prep("resume", models.join("m1/best.ckpt")).is_ok());
+        let e = prep("finetune", data.join("x.ckpt")).unwrap_err();
+        assert!(e.starts_with(TRAINING_NOT_ALLOWED), "a writable folder's checkpoint is refused: {e}");
+        assert!(prep("resume", models.join("m1/best_model.h5")).unwrap_err().contains("needs a .ckpt"));
+        assert!(prep("finetune", models.join("m1/missing.ckpt")).is_err());
+        assert!(prep("finetune", models.join("m1")).is_err(), "a folder is not a checkpoint");
+        // The run keeps the resolved path for the forced config.
+        let t = imp::prepare(
+            &state,
+            &grants,
+            PrepareArgs {
+                runs_root: runs.to_string_lossy().into_owned(),
+                models: vec![PrepareModel {
+                    config: serde_json::json!({}),
+                    run_name: "r2".into(),
+                    init: Some(PrepareInit { mode: "resume".into(), checkpoint: models.join("m1/best.ckpt").to_string_lossy().into_owned() }),
+                }],
+                train_slp: "AA==".into(),
+                val_slp: None,
+                video_paths: vec![data.join("v.mp4").to_string_lossy().into_owned()],
+            },
+        )
+        .unwrap();
+        let run = state.0.lock().unwrap().get(&t).cloned().unwrap();
+        assert_eq!(run.models[0].2, Some(InitFrom::Resume(models.join("m1/best.ckpt").canonicalize().unwrap())));
+        imp::release(&state, &t).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[cfg(feature = "sleap-nn")]
     #[test]
     fn training_children_keep_no_credentials() {
@@ -821,7 +955,7 @@ mod tests {
         let state = TrainingState::default();
         let b64 = |p: &str| base64::engine::general_purpose::STANDARD.encode(std::fs::read(dir.join(p)).unwrap());
         let config: Value = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
-        let prepare = |name: &str, epochs: i64| {
+        let prepare_from = |name: &str, epochs: i64, init: Option<PrepareInit>| {
             let mut cfg = config.clone();
             cfg["trainer_config"]["max_epochs"] = Value::from(epochs);
             imp::prepare(
@@ -829,7 +963,7 @@ mod tests {
                 &grants,
                 PrepareArgs {
                     runs_root: runs.to_string_lossy().into_owned(),
-                    models: vec![PrepareModel { config: cfg, run_name: name.into() }],
+                    models: vec![PrepareModel { config: cfg, run_name: name.into(), init }],
                     train_slp: b64("train.slp"),
                     val_slp: Some(b64("val.slp")),
                     video_paths: vec![dir.join("video.mp4").to_string_lossy().into_owned()],
@@ -837,6 +971,7 @@ mod tests {
             )
             .unwrap()
         };
+        let prepare = |name: &str, epochs: i64| prepare_from(name, epochs, None);
         let recording = || {
             let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
             let sink = Arc::clone(&seen);
@@ -941,6 +1076,25 @@ mod tests {
         assert_eq!(fin["data"]["cancelled"], Value::Bool(true));
         assert!(!runs.join("run.cancelled").exists(), "the cancelled run's folder is deleted");
         assert!(state.0.lock().unwrap().is_empty(), "no token left");
+
+        // 4. Fine-tune from run.full's checkpoint (inside the runs folder, a model grant): a new run
+        //    seeded with its weights; sleap-nn records the checkpoint in the run's config.
+        let ckpt = runs.join("run.full").join("best.ckpt").to_string_lossy().into_owned();
+        let token = prepare_from("run.finetuned", 2, Some(PrepareInit { mode: "finetune".into(), checkpoint: ckpt.clone() }));
+        let (ch, seen) = recording();
+        assert!(imp::run(&state, &token, 0, false, &ch).unwrap(), "fine-tune succeeded: {}", finished(&seen));
+        assert_eq!(progress(&seen, "epoch_end"), 2);
+        assert!(runs.join("run.finetuned/best.ckpt").is_file());
+        let saved = std::fs::read_to_string(runs.join("run.finetuned/training_config.yaml")).unwrap();
+        assert!(saved.contains("pretrained_backbone_weights") && saved.contains("run.full/best.ckpt"), "the weights it started from are recorded");
+
+        // 5. Resume run.full (3 epochs done) up to 5: sleap-nn restores the epoch and trains the rest.
+        let token = prepare_from("run.resumed", 5, Some(PrepareInit { mode: "resume".into(), checkpoint: ckpt }));
+        let (ch, seen) = recording();
+        assert!(imp::run(&state, &token, 0, false, &ch).unwrap(), "resume succeeded: {}", finished(&seen));
+        let ends = progress(&seen, "epoch_end");
+        assert!((1..5).contains(&ends), "a resumed run trains only the epochs left ({ends})");
+        assert!(runs.join("run.resumed/best.ckpt").is_file());
     }
 
     #[test]

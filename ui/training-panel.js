@@ -54,6 +54,7 @@ import {
     MODEL_TYPE_OPTIONS, MODEL_TYPE_HINT, DEFAULT_MODEL_TYPE, getConfigSlots, getSlotLabel, slotToHeadType, headLabel,
     profilesForHead, defaultProfile, detectHeadType, hyperparamsFromConfig, applyPanelSettings, finalizeConfig,
     anchorChoices, ROTATION_OPTIONS, MAX_EPOCHS_HINT, BATCH_SIZE_HINT, ROTATION_HINT, SCALE_HINT, ANCHOR_HINT,
+    detectTrainingMode, applyTrainingMode, checkpointProblem, pickCheckpointFile,
 } from './training-args.js';
 import { BASELINE_PROFILES } from '../lib/sleap-app-profiles/profiles.js';
 import { trainingGroups, groupModelLabel, trainingRunName, DEFAULT_GROUP_MODE } from '../pose/training-groups.js';
@@ -73,6 +74,7 @@ import { POST_TRAINING_TARGETS, POST_TRAINING_DEFAULTS, POST_TRAINING_TARGET_HIN
     skeletonChangeProblem } from '../pose/training-handoff.js';
 import { runTrainedModels, showInferencePanel } from './inference-panel.js';
 import { openTrainingConfigDialog, trainingConfigDialog } from './training-config-dialog.js';
+import { openTrainingMetricsDialog } from './training-metrics-dialog.js';
 
 export const TRAINING_TAB_ID = 'tabTraining';
 
@@ -92,7 +94,8 @@ let fsApi = null;                // window.lucidDesktop.fs
 const backend = { remote: null };
 const env = { checked: false, sleapNn: null, gpu: null, error: null };
 // Local: the runs folder (a read-only model grant this app run), each (session, view)'s video on disk.
-const local = { runsRoot: null, existingRuns: 0, videos: new Map(), videoKey: '', resolving: false, token: null };
+const local = { runsRoot: null, existingRuns: 0, videos: new Map(), videoKey: '', resolving: false, token: null,
+    trained: [], scanning: false, rescan: false };   // trained: the runs folder's trained runs, newest first (`scanTrainedRuns`)
 const dry = { status: 'idle', rows: [], log: [], key: '', error: null };
 
 const cfg = {
@@ -286,13 +289,22 @@ async function ensureYaml() {
     return YAML;
 }
 
-/** Load a config into a slot, from a preset or a file the user picked. */
-function setSlotConfig(slot, text, name, filename, preset) {
+/**
+ * Load a config into a slot, from a preset, a file the user picked or a trained run (`extra`: `{trainedPath,
+ * checkpoint}`, the run folder and its checkpoint). The training mode is read from the config (sleap-app: a
+ * config naming a checkpoint is a Resume / Fine-tune of it); a trained run's own checkpoint is the one offered.
+ */
+function setSlotConfig(slot, text, name, filename, preset, extra) {
     let doc;
     try { doc = YAML.parse(text); } catch (e) { run.note = 'Could not read ' + (filename || 'the config') + ': ' + e.message; refresh(); return false; }
     if (!doc || typeof doc !== 'object') { run.note = (filename || 'The config') + ' is not a training config.'; refresh(); return false; }
     // `text`: what Reset to profile defaults goes back to (the preset, or the file as it was read).
-    cfg.slots[slot] = { name: name, filename: filename, preset: !!preset, doc: doc, head: detectHeadType(doc), text: text };
+    const tm = detectTrainingMode(doc);
+    const ex = extra || {};
+    cfg.slots[slot] = { name: name, filename: filename, preset: !!preset, doc: doc, head: detectHeadType(doc), text: text,
+        extra: extra || null, trainedPath: ex.trainedPath || null, mode: tm.mode, checkpoint: ex.checkpoint || tm.checkpoint, checkpointNote: null,
+        // 'local' (a folder on this computer), 'worker' (typed for a worker) or 'config' (named by the config itself).
+        checkpointWhere: ex.checkpoint ? 'local' : 'config' };
     cfg.hp[slot] = hyperparamsFromConfig(doc);
     if ((slot === 'centered_instance' || slot === 'config') && cfg.hp[slot].anchorPart != null && cfg.anchorPart == null) cfg.anchorPart = cfg.hp[slot].anchorPart;
     run.note = null;
@@ -326,8 +338,11 @@ function setModelType(t) {
 function slotOptions(slot) {
     const head = slotToHeadType(cfg.modelType, slot);
     const opts = profilesForHead(head).map(function (p) { return ['preset:' + p.filename, p.label]; });
+    // sleap-app: every trained run of this head in the runs folder, newest first (this computer's runs: local only).
+    if (!isRemoteRun()) trainedRunsFor(head).forEach(function (r) { opts.push(['trained:' + r.path, '[Trained] ' + (r.runName || r.name) + ' (training_config.yaml)']); });
     const cur = cfg.slots[slot];
-    if (cur && !cur.preset) opts.push(['file:' + cur.filename, cur.filename]);
+    const listed = !!cur && !!cur.trainedPath && !isRemoteRun() && trainedRunsFor(cur.head).some(function (r) { return r.path === cur.trainedPath; });
+    if (cur && !cur.preset && !listed) opts.push(['file:' + cur.filename, cur.trainedPath ? cur.name : cur.filename]);
     opts.push(['__browse__', 'Browse for config file...']);
     return opts;
 }
@@ -335,7 +350,66 @@ function slotOptions(slot) {
 function slotValue(slot) {
     const cur = cfg.slots[slot];
     if (!cur) return '';
+    if (cur.trainedPath && !isRemoteRun() && trainedRunsFor(cur.head).some(function (r) { return r.path === cur.trainedPath; })) return 'trained:' + cur.trainedPath;
     return cur.preset ? 'preset:' + cur.filename : 'file:' + cur.filename;
+}
+
+/** The runs folder's trained runs of one head. */
+function trainedRunsFor(head) { return local.trained.filter(function (r) { return r.head === head; }); }
+
+/**
+ * sleap-app `findTrainedModels` on the local runs folder (one level deep): folders with a
+ * `training_config.yaml` and a checkpoint, newest first. Read-only: the runs folder is a model grant.
+ */
+async function scanTrainedRuns() {
+    if (!fsApi || !local.runsRoot || !YAML) return;
+    // One scan at a time; a call during one (another folder, a run that just ended) scans again after it.
+    if (local.scanning) { local.rescan = true; return; }
+    local.scanning = true;
+    local.rescan = false;
+    const root = local.runsRoot;
+    const out = [];
+    try {
+        const dirs = (await fsApi.listDir(root)).filter(function (e) { return e.kind === 'directory'; }).slice(0, 500);
+        for (const d of dirs) {
+            const path = joinRunDir(root, d.name);
+            let entries;
+            try { entries = await fsApi.listDir(path); } catch (e) { continue; }
+            const names = entries.filter(function (e) { return e.kind === 'file'; }).map(function (e) { return e.name; });
+            const ckpt = pickCheckpointFile(names, 'resume');
+            if (names.indexOf('training_config.yaml') === -1 || !ckpt) continue;
+            let doc;
+            try { doc = YAML.parse(new TextDecoder().decode(await fsApi.readFile(joinRunDir(path, 'training_config.yaml')))); } catch (e) { continue; }
+            const head = detectHeadType(doc);
+            if (!head) continue;
+            const t = doc && doc.trainer_config;
+            out.push({ path: path, name: d.name, head: head, runName: t && typeof t.run_name === 'string' ? t.run_name : null,
+                checkpoint: joinRunDir(path, ckpt), mtimeMs: Number(d.mtimeMs) || 0 });
+        }
+    } catch (e) {
+        /* an unreadable runs folder lists nothing */
+    } finally {
+        local.scanning = false;
+    }
+    if (local.runsRoot === root) {
+        out.sort(function (a, b) { return b.mtimeMs - a.mtimeMs; });
+        local.trained = out;
+        refresh();
+    }
+    if (local.rescan || local.runsRoot !== root) scanTrainedRuns();
+}
+
+/** Load a trained run's config into a slot, offering its checkpoint for Fine-tune / Resume (sleap-app `handleSelectRun`). */
+async function selectTrainedRun(slot, path) {
+    const r = local.trained.find(function (x) { return x.path === path; });
+    if (!r) return;
+    try {
+        const text = new TextDecoder().decode(await fsApi.readFile(joinRunDir(r.path, 'training_config.yaml')));
+        setSlotConfig(slot, text, '[Trained] ' + (r.runName || r.name), 'training_config.yaml', false, { trainedPath: r.path, checkpoint: r.checkpoint });
+    } catch (e) {
+        run.note = 'Could not read ' + r.name + '/training_config.yaml: ' + ((e && e.message) || e);
+    }
+    refresh();
 }
 
 function browseConfig(slot) {
@@ -365,7 +439,62 @@ function effectiveHp(slot) {
 
 /** The finished YAML of a slot for one group's run. */
 function configText(slot, runName) {
-    return YAML.stringify(finalizeConfig(applyPanelSettings(cfg.slots[slot].doc, effectiveHp(slot)), { runName: runName }));
+    return YAML.stringify(sentConfig(slot, runName));
+}
+
+/** The config a worker gets (and Save writes): the panel's fields, LUC3D's finishing, the training mode. */
+function sentConfig(slot, runName) {
+    const c = cfg.slots[slot];
+    return applyTrainingMode(finalizeConfig(applyPanelSettings(c.doc, effectiveHp(slot)), runName ? { runName: runName } : {}), c.mode, c.checkpoint);
+}
+
+/**
+ * `checkpointProblem`, plus where the checkpoint is: a folder picked on this computer cannot go to a worker, and a
+ * path typed for a worker means nothing here (Rust would refuse it anyway).
+ */
+function slotCheckpointProblem(c) {
+    if (c.mode === 'scratch') return null;
+    const p = checkpointProblem(c.mode, c.checkpoint);
+    if (p) return p;
+    if (isRemoteRun() && c.checkpointWhere === 'local') return 'that checkpoint is on this computer: type its path on the worker';
+    if (!isRemoteRun() && c.checkpointWhere === 'worker') return 'that checkpoint path is on the worker: Choose… the model folder on this computer';
+    return null;
+}
+
+/** A local model's start (Rust checks the checkpoint is inside a model grant and writes the keys). */
+function initOf(slot) {
+    const c = cfg.slots[slot];
+    return c && c.mode !== 'scratch' && c.checkpoint ? { mode: c.mode, checkpoint: c.checkpoint } : undefined;
+}
+
+function baseName(p) { return String(p).split(/[\\/]/).pop(); }
+
+/**
+ * Fine-tune / Resume locally: the user picks a trained model's FOLDER (a read-only model grant, like an
+ * inference model), and its checkpoint is taken from it (sleap-app `pickCheckpointFile`). A head that does
+ * not match the slot's is said (sleap-app warns, it does not block).
+ */
+async function chooseCheckpoint(slot) {
+    const c = cfg.slots[slot];
+    if (!c || !sn) return;
+    let dir;
+    try { dir = await sn.pickModelDirectory('Select the trained model to start from'); } catch (e) { c.checkpointNote = plainError(e); refresh(); return; }
+    if (!dir) return;
+    try {
+        const names = (await fsApi.listDir(dir)).filter(function (e) { return e.kind === 'file'; }).map(function (e) { return e.name; });
+        const f = pickCheckpointFile(names, c.mode);
+        if (!f) { c.checkpointNote = 'No ' + (c.mode === 'finetune' ? '.ckpt or .h5' : '.ckpt') + ' file in ' + dir + '.'; refresh(); return; }
+        c.checkpoint = joinRunDir(dir, f);
+        c.checkpointWhere = 'local';
+        c.checkpointNote = null;
+        if (names.indexOf('training_config.yaml') !== -1) {
+            const head = detectHeadType(YAML.parse(new TextDecoder().decode(await fsApi.readFile(joinRunDir(dir, 'training_config.yaml')))));
+            if (head && head !== c.head) c.checkpointNote = 'Possible checkpoint head mismatch: it was trained for "' + head + '" and may not be compatible with this ' + c.head + ' head.';
+        }
+    } catch (e) {
+        c.checkpointNote = plainError(e);
+    }
+    refresh();
 }
 
 /**
@@ -386,10 +515,17 @@ function openFullConfig(initialTab) {
             refresh();
         },
         reset: function (which) {
-            (which || slots).forEach(function (s) { const c = cfg.slots[s]; if (c && c.text) setSlotConfig(s, c.text, c.name, c.filename, c.preset); });
+            (which || slots).forEach(function (s) { const c = cfg.slots[s]; if (c && c.text) setSlotConfig(s, c.text, c.name, c.filename, c.preset, c.extra); });
             refresh();
         },
-        yamlOf: function (s) { return YAML.stringify(finalizeConfig(applyPanelSettings(cfg.slots[s].doc, effectiveHp(s)), {})); },
+        yamlOf: function (s) { return YAML.stringify(sentConfig(s, null)); },
+        mode: function (s) {
+            const c = cfg.slots[s];
+            return c ? { mode: c.mode, checkpoint: c.checkpoint, note: c.checkpointNote, problem: slotCheckpointProblem(c), local: !isRemoteRun() } : null;
+        },
+        setMode: function (s, m) { const c = cfg.slots[s]; if (c) { c.mode = m; c.checkpointNote = null; } refresh(); },
+        setCheckpoint: function (s, p) { const c = cfg.slots[s]; if (c) { c.checkpoint = p || null; c.checkpointWhere = 'worker'; c.checkpointNote = null; } refresh(); },
+        chooseCheckpoint: function (s) { return chooseCheckpoint(s); },
         fileNameOf: function (s) { return (cfg.slots[s].head || s) + '.yaml'; },
         isBusy: function () { return isRunning() || dry.status === 'running'; },
         initialTab: initialTab,
@@ -442,6 +578,11 @@ function whyNotStart() {
     if (pipelineProblem()) return 'Fix the problem under Model Type to start';
     if (!hasAllConfigs()) return 'Upload config file(s) to begin';
     if (totalLabelledFrames() === 0) return 'Label at least one frame before training';
+    for (const sl of getConfigSlots(cfg.modelType)) {
+        const c = cfg.slots[sl];
+        const cp = c && slotCheckpointProblem(c);
+        if (cp) return getSlotLabel(sl).replace(' Config', '') + ': ' + cp + ' (Full Configuration).';
+    }
     if (isRemoteRun()) {
         const w = remote ? remote.whyNot() : 'Select a worker';
         if (w) return w;
@@ -516,6 +657,8 @@ async function chooseRunsFolder() {
             local.existingRuns = r.existingRuns || 0;
             try { localStorage.setItem('trainingRunsFolder', r.path); } catch (e) { /* best effort */ }
             run.note = null;
+            local.trained = [];
+            scanTrainedRuns();
         }
     } catch (e) {
         run.note = String((e && e.message) || e).replace(/^TRAINING_NOT_ALLOWED: /, '');
@@ -608,7 +751,7 @@ async function planLocal(stamp, dryRun) {
             group: g, stats: built.stats, split: built.split,
             args: {
                 runsRoot: local.runsRoot,
-                models: slots.map(function (s, i) { return { config: configObject(s, runNames[i]), runName: runNames[i] }; }),
+                models: slots.map(function (s, i) { return { config: configObject(s, runNames[i]), runName: runNames[i], init: initOf(s) }; }),
                 trainSlp: bytesToBase64(train),
                 valSlp: val ? bytesToBase64(val) : null,
                 videoPaths: sels.map(function (s) { return localVideo(s.sessionIndex, s.cameraName); }),
@@ -653,6 +796,7 @@ async function startLocalTraining() {
     const stamp = formatRunTimestamp();
     run.status = 'running'; run.error = null; run.log = []; run.errorTail = []; run.modelDirs = [];
     run.groups = groups(); run.trainedNodes = currentNodeNames(); postRun.status = null; postRun.message = null; postSeq++;
+    run.remote = isRemoteRun();
     dry.status = 'idle'; dry.rows = []; dry.log = []; dry.error = null;   // sleap-app: a Start clears the dry run's result
     run.cancelled = false; run.stopRequested = false; run.startedAt = Date.now(); run.endedAt = null; run.note = null;
     refresh();
@@ -730,7 +874,10 @@ async function startLocalTraining() {
     }
     stopElapsed();
     refresh();
-    if (run.status === 'completed') await postTrainingInference(false);
+    if (run.status === 'completed') {
+        scanTrainedRuns();   // the new runs become [Trained] entries
+        await postTrainingInference(false);
+    }
 }
 
 function joinRunDir(root, name) {
@@ -800,6 +947,7 @@ async function startRemoteTraining() {
     const stamp = formatRunTimestamp();
     run.status = 'running'; run.error = null; run.log = []; run.errorTail = []; run.modelDirs = [];
     run.groups = groups(); run.trainedNodes = currentNodeNames(); postRun.status = null; postRun.message = null; postSeq++;
+    run.remote = isRemoteRun();
     dry.status = 'idle'; dry.rows = []; dry.log = []; dry.error = null;   // sleap-app: a Start clears the dry run's result
     run.cancelled = false; run.stopRequested = false; run.startedAt = Date.now(); run.endedAt = null; run.note = null;
     // Plan every group first (data + configs), so nothing is sent if one of them cannot be built.
@@ -961,6 +1109,25 @@ async function postTrainingInference(remoteRun) {
         appendLog('\u2014 Post-training inference failed: ' + (r.error || 'Inference failed.'));
     }
     refresh();
+}
+
+/**
+ * View Metrics (`ui/training-metrics-dialog.js`): this run's models, then (locally) every trained run in the
+ * runs folder. Files are read where the run went: the desktop's runs folder, or the worker over Connect.
+ */
+function openMetrics() {
+    const rem = !!run.remote;
+    const dirs = run.modelDirs.slice();
+    if (!rem) local.trained.forEach(function (r) { if (dirs.indexOf(r.path) === -1) dirs.push(r.path); });
+    const io = rem ? { exists: remote.workerFiles.exists, readText: remote.workerFiles.readText, parseYaml: function (t) { return YAML.parse(t); } } : {
+        exists: function (p) { return fsApi.stat(p).then(function (st) { return !!(st && st.exists && st.isFile); }, function () { return false; }); },
+        readText: async function (p) { return new TextDecoder().decode(await fsApi.readFile(p)); },
+        parseYaml: function (t) { return YAML.parse(t); },
+    };
+    openTrainingMetricsDialog({
+        runDirs: dirs, io: io,
+        addModels: rem || !sn ? null : async function () { const d = await sn.pickModelDirectory('Add Trained Model(s)'); return d ? [d] : []; },
+    });
 }
 
 /** A row starts: its clocks start (the monitor's runtime lines). */
@@ -1134,7 +1301,8 @@ function buildModelSection(top) {
     let slotsKey = '';
     form.onRefresh(function () {
         const slots = getConfigSlots(cfg.modelType);
-        const key = slots.join(',') + '|' + slots.map(slotValue).join(',') + '|' + isRunning();
+        const key = slots.join(',') + '|' + slots.map(slotValue).join(',') + '|' + isRunning() + '|' + isRemoteRun() + '|' + local.trained.map(function (r) { return r.path; }).join(',') + '|' +
+            slots.map(function (s) { const c = cfg.slots[s]; return c ? c.mode + ':' + (c.checkpoint || '') : ''; }).join(',');
         if (key === slotsKey) return;
         slotsKey = key;
         slotsBox.textContent = '';
@@ -1161,10 +1329,13 @@ function buildModelSection(top) {
                     const p = BASELINE_PROFILES.find(function (x) { return 'preset:' + x.filename === v; });
                     if (p) setSlotConfig(slot, p.content, p.label, p.filename, true);
                 }
+                if (v.indexOf('trained:') === 0) { selectTrainedRun(slot, v.slice(8)); return; }
                 refresh();
             });
             box.appendChild(sel);
-            const meta = el('div', 'trn-slot-meta', cfg.slots[slot] ? 'head: ' + cfg.slots[slot].head : 'or drop a YAML config here');
+            const c = cfg.slots[slot];
+            const meta = el('div', 'trn-slot-meta', c ? 'head: ' + c.head + (c.mode === 'finetune' ? ' \u00b7 fine-tune from ' + baseName(c.checkpoint || '?')
+                : c.mode === 'resume' ? ' \u00b7 resume ' + baseName(c.checkpoint || '?') : '') : 'or drop a YAML config here');
             box.appendChild(meta);
             box.addEventListener('dragover', function (e) { e.preventDefault(); box.classList.add('trn-slot-drag'); });
             box.addEventListener('dragleave', function () { box.classList.remove('trn-slot-drag'); });
@@ -1502,6 +1673,11 @@ function buildRunBlock(top) {
         for (const d of run.modelDirs) models.appendChild(el('div', 'trn-path-ok', d));
     });
     buildPostInferenceBox(top);
+    // sleap-app: View Metrics once a run completed (the models' evaluation on their validation frames).
+    const metrics = button('View Metrics', 'btn btn-sm inf-btn-outline trn-metrics-btn', 'chart-line');
+    metrics.id = 'trnViewMetrics';
+    metrics.addEventListener('click', openMetrics);
+    top.appendChild(form.shownIf(metrics, function () { return run.status === 'completed' && run.modelDirs.length > 0; }));
     const again = button('Train Again', 'btn btn-primary inf-run');
     again.id = 'trnTrainAgain';
     again.addEventListener('click', function () { resetRun(true); });
@@ -1830,10 +2006,13 @@ export function showTrainingPanel() { return showPanelTab(TRAINING_TAB_ID); }
 /** For tests: open Full Configuration (as its button does). */
 export function _openTrainingConfig(tab) { openFullConfig(tab); }
 
+/** For tests: rescan the runs folder's trained runs now. */
+export function _scanTrainedRuns() { return scanTrainedRuns(); }
+
 /** For tests: the live config and run state (read-only use). */
 export function _trainingState() {
     return { cfg: cfg, run: run, analysis: analysis, groups: groups(), selections: includedSelections(), remote: remote && remote._state(), monitorIndex: monitorIndex,
-        local: { runsRoot: local.runsRoot, videos: Object.fromEntries(local.videos), token: local.token }, dry: dry, backendRemote: isRemoteRun(),
+        local: { runsRoot: local.runsRoot, videos: Object.fromEntries(local.videos), token: local.token, trained: local.trained }, dry: dry, backendRemote: isRemoteRun(),
         post: cfg.post, postRun: postRun };
 }
 /** For tests: recompute the label analysis now. */
