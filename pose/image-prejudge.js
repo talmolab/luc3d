@@ -23,32 +23,21 @@
  * 'unsure' between; 'sparse' when a side has fewer than `minCrops` crops of an
  * animal; 'unknown' when fewer than `minPairs` samples show both animals.
  *
- * Calibration (2026-11-09, runs/2026-11-09_hard-swaps/gate_sweep on cup): 1,633
- * review rows of Mae's 395 intact two-mouse videos, a fine-tuned dinov2-small
- * package (held-out fold), crops every 2nd s. Answer key: the proofread files
- * with the five stretches the proofreader confirmed as her mistakes corrected
- * (2026-11-16, runs/2026-11-16_gtfix): 95 swaps. Score alone: AUC 0.996 (0.960
- * against the uncorrected files). Gate cos < 0.7 + margin 0.1 (the defaults):
- * a verdict on 81% of rows (1,319 of 1,633), 65 of 95 swaps called, 0 false
- * alarms, 1 miss. Without the gate: 25 false alarms, 5 misses
- * (above cos 0.85 the AUC falls to ~0.8). Window lengths 1.5–8 s, gaps and
- * medians did not beat ±3 s. Other fine-tuned packages use the same numbers,
- * unmeasured.
+ * Calibration: 1,633 review rows of 395 proofread two-mouse top-camera videos,
+ * with a fine-tuned dinov2-small package that never saw the video's animal,
+ * crops every 2nd second; the answer key is the proofread files, with five
+ * confirmed label errors corrected. Gate cos < 0.7 + margin 0.1 (the defaults):
+ * a verdict on 81% of the rows, 65 of 95 swaps called, 0 false alarms, 1 miss;
+ * without the gate, 25 false alarms. These were chosen on the same rows they
+ * are scored on. On 439 other videos of the same rig (not used to choose them),
+ * a package trained without those animals called 49 of 89 swaps with 1 false
+ * alarm. Window lengths 1.5–8 s did not beat ±3 s.
  *
- * The built-in model (frozen DINOv3 ViT-S/16 at 192 px, same 1,633 rows) gets
- * its own settings, `PREJUDGE_BUILTIN`: to it every pair looks alike (median
- * separation 0.92 vs the package's 0.16; none below 0.7), its separation does
- * not predict where its score holds (AUC 0.92–0.96 at every level), and its
- * scores are ~6x smaller (AUC 0.945). No gate, margin 0.2: 17 of 95 swaps
- * called, 0 false alarms, 2 misses (margin 0.1: 50 called, 15 false alarms).
- *
- * The app itself on the same 395 videos (2026-11-10, runs/2026-11-10_prejudge-app
- * on cup: Load SLP, Track All, image check with each model, headless Chrome on
- * the CPU) found 1,632 of the 1,633 rows (95 swaps) and agreed with the study (package
- * separation r 0.985, scores r 0.975). Package: 67 swaps called, 1 false
- * alarm, 1 miss (AUC 0.997). Built-in, margin 0.2: 14 called, 2 false alarms,
- * 1 miss, ~3 in 4 unsure (its crops are the app's, the study's the training
- * script's; margin 0.25: 7 / 1, 0.3: 4 / 0). The About text quotes these.
+ * The built-in model (frozen DINOv3 ViT-S/16 at 192 px) gets its own settings,
+ * `PREJUDGE_BUILTIN`: to it every pair looks alike (no pair below 0.7) and its
+ * scores are ~6x smaller, so no gate and margin 0.2. In the app on the same
+ * rows: 14 of 95 swaps called, 2 false alarms, about 3 rows in 4 unsure. The
+ * About text quotes these.
  *
  * Pure — no DOM, no app state, no imports.
  */

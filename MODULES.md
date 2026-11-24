@@ -1933,6 +1933,8 @@ identity propagation.
 **One camera: SLEAP's tracker.** A session with a single camera (a plain SLEAP
 predictions file opened with Load SLP) has nothing to match across views and no
 3D, so `runTrackingPass` hands Track All to `runSingleCameraTrackAll`, which
+first asks before replacing tracks a person made (`retrackLosses` ->
+`confirmRetrack`, `ui/retrack-warning.js`; cancelling changes nothing), then
 runs sleap-nn's tracker (`pose/sleap-tracker.js`, via
 `pose/single-camera-tracking.js`) with the animal count as its track cap (the
 session's `numAnimals`, asked once and shown in the toolbar's Animals field, as for the
@@ -2178,7 +2180,9 @@ tracked and never fails the run; the status line and summary box say what it did
 
 **Imports from project modules.**
 - `./single-camera-tracking.js` — `singleCameraName`, `singleCameraTrackerConfig`,
-  `trackSingleCamera`, `SINGLE_CAMERA_LAZY_REASON` (the one-camera Track All).
+  `trackSingleCamera`, `reviewResult`, `retrackLosses`, `SINGLE_CAMERA_LAZY_REASON` (the
+  one-camera Track All).
+- `../ui/retrack-warning.js` — `confirmRetrack` (asks before replacing tracks a person made).
 - `./tail-mark.js` — `resolveTailMarks`; `../ui/tail-mark-reader.js` —
   `createTailMarkReader` (see "Tail marks").
 - `./detection-filter-stats.js` — `passesDetectionFilter` (the detection-pool
@@ -2659,389 +2663,116 @@ sleap-nn.
 
 ### pose/single-camera-tracking.js
 
-**Purpose.** Track All and the ID-switch checks on a session with ONE camera — a
-plain SLEAP predictions file opened with File ▸ Load SLP, which gets one
-placeholder `Camera` and every detection unlinked. With one view there is no
-cross-view matching and no 3D, so Track All runs SLEAP's tracker
-(`pose/sleap-tracker.js`) instead, in sleap-nn's recommended known-count setup:
-`local_queues`, `max_tracks` = `tracking_target_instance_count` = the animal
-count, connect single breaks.
+**Purpose.** Track All and the ID-switch checks on a session with ONE camera (a
+SLEAP predictions file opened with File ▸ Load SLP gets one placeholder `Camera`,
+every detection unlinked). With no cross-view matching and no 3D, Track All runs
+SLEAP's tracker (`pose/sleap-tracker.js`) in sleap-nn's known-count setup
+(`local_queues`, `max_tracks` = the animal count, connect single breaks). DOM-free.
 
-**It writes the TRACKS**, as `sleap-nn track` does — unlike multi-camera Track
-All, which writes identities only and leaves Propagate IDs → Tracks to the
-user. On one camera a track IS an animal's identity, and tracks are what a
-saved `.slp` hands back to SLEAP. `session.tracks` becomes `track_0…`, every
-instance's `trackIdx` is rewritten, and identity `id_k` (id k) is tied to track
-k through `frameIdentityMap` — keyed by track, so identity follows the track
-from then on. A detection the tracker drops (over the animal count, too few
-points) becomes trackless, as do predictions on a frame that has user instances.
-Occluded nodes are fed to the tracker as missing: SLEAP's invisible points read
-as NaN in sleap-nn.
+**It writes the TRACKS**, as `sleap-nn track` does (multi-camera Track All writes
+identities only): `session.tracks` becomes `track_0…`, every `trackIdx` is
+rewritten, and identity `id_k` is tied to track k through `frameIdentityMap`
+(keyed by track, so identity follows the track). A detection the tracker drops
+becomes trackless, as do predictions on a frame with user instances. Occluded
+nodes reach the tracker as missing (SLEAP's invisible points are NaN in sleap-nn).
 
-**The default OKS tolerance is 0.1, not sleap-nn's 0.025** (Tracking Wizard
-`scOksStddev`). On 35 proofread 10-min SLAP camera videos (3–4 mice, different
-coat colours; each track paired 1:1 with a proofread animal): sleap-nn's
-known-count defaults 85.8% correct, 156 lasting swaps; at 0.1, 93.6% and 102;
-0.15 93.1%; 0.2 and above worse again (0.5: 75.1%). The mechanism is general —
-at 0.025 every pose more than ~1.5 body lengths from a track scores exactly 0,
-so after a fast move or a gap the assignment is decided by tie-breaking.
-Window 10 was about the same as 5 (88.4% at 0.025), 30 much worse.
+**Two departures from `sleap-nn track`, both on by default.**
+- **OKS tolerance 0.1, not 0.025** (Wizard `scOksStddev`). At 0.025 every pose more
+  than ~1.5 body lengths from a track scores exactly 0, so after a fast move or a
+  gap the assignment comes down to tie-breaking. On 35 proofread 10-min SLAP videos
+  85.8% -> 93.6% correct (tuned and scored on the same videos; 0.15 93.1%, 0.5 75.1%).
+- **The lone-animal rule** (`loneAnimalPhase`, Wizard `scLoneAnimal`). Until two
+  animals are in view together (`LONE_DEFAULTS`: two tracked detections of at least
+  0.4 x the median score, more than 0.15 body lengths apart, on half the frames of
+  1 s, so huddled animals count and a duplicate does not), the one animal is followed
+  by position and keeps one track; other detections lose theirs. The phase ends
+  where the arrival's cluster starts (the first two-animal frame in the 5 s before
+  it), and the review list gets an 'arrival' row there. It rewrites the tracker's
+  output in `trackSingleCamera` (`opts.lone`) before anything is written. On 725
+  proofread two-mouse videos where the subject starts alone: 99.877% -> 99.925% after
+  review, 28% fewer rows; SLAP unchanged. It can cost a few detections where the
+  follower takes the copy of a resting animal.
 
-**Duplicate removal, opt-in** (Tracking Wizard `scRemoveDuplicates`, default
-off; `scDuplicateIou` 0.5, `scDuplicateOks` 0.6 → `trackSingleCamera`'s
-`opts.duplicates`). SLEAP sometimes puts a second instance on an animal it
-already detected, often partial and scoring 0.4–0.9. With the animal count as
-the track cap that copy takes a track, and a lone animal can hop onto it. On a
-SLEAP user's proofread two-mouse dataset (6 top-camera sessions, 40 fps) the subject, alone before its partner entered, hopped tracks at
-its own duplicates in 2 of 6 sessions, and the partner then entered on its old
-track (96.95% correct). sleap-nn's pre-cull cannot help: it acts only on a
-frame with MORE detections than the animal count. `duplicateDetections(dets, o)`
-leaves out, per frame and before the tracker (the port is untouched), every
-detection that duplicates a stronger one (higher score; a user instance is never
-removed and is kept first): box IoU (`boxIou`, +1 px as sleap-nn counts it) at
-least `iou` AND OKS at least `oks`. Box overlap alone would also take two
-touching animals, and keypoints alone two look-alike poses side by side. The OKS
-(`duplicateOks`) reads the WEAKER detection's nodes, since a copy is often
-partial, against the stronger one, scaled by the stronger one's box (sleap-nn's
-`compute_oks` cocoeval normalisation, stddev 0.1; fewer than 3 nodes is never a
-duplicate). Removed detections keep no track or identity and stay in the
-session; Track All reports how many (`duplicates`, kept apart from `untracked`).
-Measured 2026-10-12, offline through this function and then in the app:
-- That dataset: every IoU 0.3–0.7 × OKS 0.5–0.8 removes both hops (99.98%,
-  no swaps). At the defaults it removes 91 detections, none a real animal.
-- 87 proofread SLAP top/mid views (2–4 mice, 3.78M detections): about neutral,
-  88.52% -> 88.73% correct and swaps 276 -> 257, with 8 views better and 8
-  worse. It removes 1,231 detections, 74 of them a real second animal.
-- The swings are the tracker re-routing when junk is removed, not mistakes of
-  the rule: removing only the detections the proofreader also deleted swings
-  the same way. Hence off by default.
-- Rules tried and not adopted: true IoU is stricter than sleap-nn's own
-  "overlap / the weaker box" (used by `pre_cull_iou_threshold`), but scored
-  better on SLAP at the same OKS. A keypoint-distance-only rule (median < 10 px)
-  removed more, including more real animals: 88.03%, 16 views worse.
+**Opt-in duplicate removal** (Wizard `scRemoveDuplicates`, off; `duplicateDetections`).
+SLEAP sometimes puts a second, often partial, instance on an animal; with the
+animal count as the track cap the copy takes a track and a lone animal can hop
+onto it. Before the tracker, a detection is left out when box IoU (`boxIou`, +1 px
+as sleap-nn) is at least 0.5 AND OKS (`duplicateOks`: the weaker detection's nodes
+against the stronger one's box) at least 0.6 against a stronger one; a user
+instance is never removed. About neutral on SLAP (88.52% -> 88.73%, 8 views better,
+8 worse), hence off.
 
-**The Tracking Wizard's detection filters apply here too** (`opts.filter`:
-`{minVisibleNodes, minInstanceScore, minMeanNodeScore}`, which Track All reads
-from `filterMinVisibleNodes` / `filterMinInstanceScore` /
-`filterMinMeanNodeScore` exactly as the multi-camera pass does). Per frame and
-FIRST — before duplicate removal, which then looks for duplicates among the
-detections the filters kept, and before the port, which is untouched — every
-detection failing `passesDetectionFilter` (`pose/detection-filter-stats.js`, the
-multi-camera tracker's own rule) is left out. So the Wizard's readout counts
-exactly what is left out here. Like a duplicate, a filtered detection keeps no
-track or identity, stays in the session, and is counted (`filtered`, apart from
-`untracked` and `duplicates`). A frame left with no detection is skipped, as a
-frame that never had one is; `frames` still counts it (every frame with a
-detection before anything was left out). All three minimums default to 0 (off),
-which leaves the tracking as it was. Keep them off by default unless measured: on
-the offline harness (2026-10-27, `filter_strays.mjs`) dropping detections with
-fewer than 2/3/5 visible nodes before Track All helped Track All slightly but
-was worse after review — it drops real, partly visible animals (SLAP held-out
-after review 99.75% -> 99.05% at >= 3 nodes; 0.4–2% of real detections lost).
+**The Wizard's detection filters apply first** (`opts.filter`, the three "Min …"
+settings through `passesDetectionFilter`, before duplicate removal and the port),
+so the Wizard's readout counts exactly what is left out. Filtered detections, like
+duplicates, stay in the session with no track and are counted (`filtered`,
+`duplicates`, apart from `untracked`). All default to 0 (off): dropping detections
+with < 3 visible nodes cost 99.75% -> 99.05% after review on held-out SLAP.
 
-**The summary box's gallery reads the same stand-in with a pixel camera**
-(`singleCameraCheckSession(session, {pixelCamera: true})`): its one camera's
-`project` maps (x, y, 0) back to (x, y) and claims no size, which is what
-`ui/identity-gallery.js` needs to cut samples and draw paths.
-
-**The ID-switch checks read a stand-in** (`singleCameraCheckSession`): one
+**The checks read a 2D stand-in** (`singleCameraCheckSession`): one
 InstanceGroup-shaped object per identified detection, its 2D as `points3d`
-(x, y, 0), the detection under `instances` (what the image check crops), and
-the session's `imageModel` (the image check's package choice). The
-checks are relative to the median body size and standardise their features, so
-pixels instead of millimetres cost nothing; but a 2D bone length also changes
-with posture and distance from the camera, so body size is a weaker cue on one
-camera. It is OPTIONAL there: single-camera Track All does not run it (the
-user's choice, 2026-10-12) and the menu runs it.
-- **Measured offline 2026-10-12** (`checkSizeSwitches` on the stand-in after the
-  same Track All, its -1 default; label-free since #310):
-  - **87 proofread SLAP top/mid views:** per-contact AUC 0.912, 32 rows (22
-    real, 2 naming the wrong pair, 8 false), 27 of 276 swaps found. Fixing the
-    rows that help on their own: 88.52% -> 90.23%; fixing every row: 87.58%.
-  - **The six sessions' back views (12):** AUC 0.984, 3 rows, none false.
-  - **The 5-mouse topC:** 4 rows, all false, and both swaps missed (four
-    similar-sized mice).
-  - **A user's two-mouse dataset:** 1 row, a real error.
-  - **Thresholds:** -1.5 halves the false rows but finds 17 swaps instead of 27.
-- **History:** the classifier it replaced was why the check was first left off
-  on one camera. On 35 SLAP videos (59 real swaps after Track All) it caught 2
-  at -50 (encounter AUC 0.55, 6 false rows); the image check —
-with talmolab/luc3d#286's episode scoring, which was unmerged at the time —
-caught 19 at its -200 default for 15 false rows (0.4 per 10 min), 32 s per
-10-min, 3-mouse video. Most of the swaps it misses are not at an encounter it
-scores (multi-animal contacts, or one animal's detection missing for seconds
-while its track takes another animal).
+(x, y, 0), the detection under `instances`, and the session's `imageModel`. With
+`{pixelCamera: true}` its camera projects (x, y, 0) back to (x, y) for the summary
+box's gallery. The checks standardise their features, so pixels cost nothing, but a
+2D bone length also changes with posture, so the body-size check is optional on one
+camera (per-contact AUC 0.91 on 87 SLAP views) and Track All does not run it.
 
-**A fix swaps the tracks** (`swapSingleCameraIdentities`), so the saved file
-carries it, when each of the two identities is one track over the range (always
-true after single-camera Track All); otherwise — identities hand-edited apart
-from their tracks — it swaps the identity layer alone, like a multi-camera fix.
-It is its own inverse, which is how Undo works.
+**A Fix swaps the tracks** (`swapSingleCameraIdentities`), so the saved file
+carries it, when each identity is one track over the range (always true after
+Track All). Otherwise (an identity edited apart from its track) it swaps the
+identity layer alone and returns `tracks: false`; a file opened in SLEAP does not
+carry that fix, so the Fix dialog asks `singleCameraFixSwapsTracks` first and says
+"(their identities only)", and the status after it is a warning. Its own inverse
+(Undo).
 
-**Where to look: candidate moments.** Most of the switches the checks miss are
-not at an encounter they score: they happen in contacts of three animals, or
-while one animal's detection is missing for seconds and its track takes another
-animal. So Track All also returns `moments` (`candidateMoments`), read from the
-tracking itself at no cost: 'ambiguity' — two tracks whose EXCHANGED assignment
-would have cost the tracker less than `ambiguityMargin` (0.1, OKS units) more
-than the chosen one (through `SleapTracker`'s read-only observer); and
-'tracklet' — a tracklet of the INPUT file (SLEAP's own tracking, captured before
-it is rewritten) that passes from one identity to another within 5 frames. Per
-pair, candidates within 3 s are one moment at the run's last frame. They are
-kept on the session as `session._idSwitchCandidates` (NOT saved: the input
-tracklets they come from are gone once the project is saved) and tested by the
-checks (`pose/id-switch-check.js` `opts.moments`). On the 35 proofread videos
-they put a moment within 3 s of 44 of 59 switches (ambiguity alone 17,
-tracklets alone 42), about 10 moments per 10 min. Ambiguity is observed before
-connect-single-breaks renumbers tracks, so its ids are read through the final
-output, never from the observer.
+**Track All asks before replacing what a person made** (`retrackLosses`, shown by
+`ui/retrack-warning.js` from `pose/tracker.js`): tracks named anything but
+`track_<n>`, hand-labelled instances on a track, and the ID Switches tab's fixes
+and ticked rows. Raw predictions never ask; tracks proofread in SLEAP that kept
+`track_<n>` names on predicted instances are not detected.
 
-**The review list: where to look, as rows of their own.** Track All also returns
-`review` — the candidate moments plus HANDOVERS and the returns while the other
-animal was out of sight too, clustered the same way (`candidateMoments(..., extra)`
-with `handoverCandidates(frames, out, fps)` and `reviewReturnCandidates(frames, out,
-fps)`, below) — and
-`pose/tracker.js` puts it in the ID Switches tab as unscored rows
-(`reviewResult(moments, session, fps)` -> a result with `cue: 'review'`, one
-'onset' row per moment, `score` 0, `look` = its cues, no far edge). A handover is
-a LONE detection (none other within one body length) whose nearest detection in
-the last `lookSeconds` (1) lay within `nearBody` (0.5) body lengths and wore
-another track (`HANDOVER_DEFAULTS`; body length = median detection extent): the
-lone animal hopping onto a stray detection's track, or onto a track another animal
-left — the switches no contact sees. 1 s rather than 0.5 because a mouse often
-drops out of detection for over half a second and comes back on the other track
-(sham_gdx R289: 0.6 s, a switch the 0.5 s list missed entirely); 2 s added places
-without catching more. The checks test `moments`: the candidate moments plus
-RETURNS, not the handovers (see below).
+**Where a switch is likely: candidate moments** (`candidateMoments`, at no cost):
+'ambiguity', two tracks whose exchanged assignment would have cost the tracker
+less than `ambiguityMargin` (0.1) more (through `SleapTracker`'s read-only
+observer, read through the final ids since connect-single-breaks renumbers), and
+'tracklet', an input tracklet (SLEAP's own tracking, captured before it is
+rewritten) passing between identities within 5 frames. Per pair, candidates within
+3 s are one moment. Plus **returns** (`returnMoments`): a track back after more than
+1 s unseen, paired with each other track, `startFrame` where it was last seen.
+`trackSingleCamera`'s `moments` = candidates + returns, kept as
+`session._idSwitchCandidates` (not saved) for the coat-brightness check. On 35 SLAP
+videos the candidates alone came within 3 s of 44 of 59 switches.
 
-**The lone-animal rule (`loneAnimalPhase`, Wizard `scLoneAnimal`, on by default).**
-Until two animals are in view TOGETHER there is one animal, so it keeps one track.
-"Together": two tracked detections, both at least `score` (0.4) x the median
-detection score, centroids more than `apart` (0.15) body lengths apart, on frames
-filling at least `fill` (0.5) of `holdSeconds` (1) — huddled animals count, a
-duplicate does not (`LONE_DEFAULTS`). The lone phase ends where that arrival's
-CLUSTER starts (the first two-animal frame in the `clusterSeconds` (5) before it);
-from there the tracker's tracks stand, through the arrival. Before then the lone
-animal is followed by position and keeps the track its last pick before the
-cluster wore; other detections lose their track. It runs on the tracker's output in
-`trackSingleCamera` (`opts.lone`) before anything is written, so the counts,
-moments and rows read the result, and the review list gets an 'arrival' row from
-the cluster's start to the arrival (the place a person sees which one was already
-there). Why: on two-mouse recordings where the subject starts alone, the lone
-mouse moves between the two tracks (carried by hand, back at the edge after a gap,
-a stray detection on its holder taking its track) where no row looks, and the
-reviewer then meets it on whichever track it holds. Measured 2026-11-07 offline
-(the harness's simulated reviewer): Mae's intact set (725 videos, held out)
-99.877% -> 99.9245%, videos >= 99.9% 600 -> 614, review rows 6,113 -> 4,416;
-sham_gdx 99.975% -> 99.981%; SLAP (83 views) and SLAP-2M (163) unchanged to within
-1 detection on 2 views. Ending the lone phase at the arrival itself (the first
-version) gave 99.905%: while the newcomer is put down the lone animal is often
-undetected for a frame, the follower jumped to the newcomer and the whole lone
-phase took its track (10 videos, 2,478 detections; 154251_L 240523 f251L cdf_home
-100% -> 88.9%, now 98.8%). Without the arrival row intact fell to 99.31% (the
-reviewer met the mice later, sometimes swapped); at 0.5 body lengths huddled SLAP
-mice read as one animal. Left: one-frame blips where the follower takes the copy
-of a resting animal the proofreader deleted (138 intact videos, a median of 2
-detections each); nothing in the detections tells the copies apart.
-Measured 2026-10-21/27 offline through this code (the harness rebuilt in
-`~/luc3d-eval`, `measure_review.mjs` / `measure_fix.mjs`), a switch counting as on
-the list when one of its ends is within 2 s of a row:
-- **All of SLAP-2M (2026-10-28), the 195 multi-animal back/mid/top views whose raw
-  SLEAP tracks are not already the proofreading (1,632 min, 777 switches):** 1.52 rows
-  a minute, 96% of the switches on the list, 15.3% of the video within 2 s of a row;
-  2 mice 1.57 / 97% / 16.8%, 3–4 mice 1.37 / 91% / 10.9%; back pair 97%, mid 95%, top
-  94%. The 57 views whose raw tracks equal the proofreading: 0.12 a minute, 20 of 20.
-  (The 2022-10-19 recordings are 60 fps, the other dates 30; measured at 30 throughout
-  these were 1.45 / 95% of 817 / 13.9%. `~/luc3d-eval/lib.mjs` `slapFps`.)
-- **Mouse-Dyad-10M (2026-10-28; 2 mice, 150 fps; 244 of its 250 views, six left out
-  because their proofread file has 4–12 tracks):** its files hold only the proofread
-  detections (no SLEAP tracks, no videos), so Track All ran on them untracked: 90.24%
-  right, 172 switches. 2.09 rows a minute, 79% of the switches on the list, 16.1% of
-  the video; 84% with sleap-nn's default tracker standing in for the input's tracks. The
-  simulated reviewer takes every view to >= 99.93% (Spock `code/dyad-eval/`).
-  Those 57 had flattered the earlier 87-view figures below (25 of them were in it):
-  there the input-tracklet cue is the answer.
-- **87 proofread SLAP top/mid views:** 2 mice (held-out 16) 1.06 rows a minute,
-  97% of 232 switches on the list, 10.2% of the video within 2 s of a row; 3–4
-  mice (original six) 1.04 a minute, 86% of 44, 7.9%. (With the earlier 0.5 s
-  look-back: 0.97 a minute and 96% on 2 mice, 1.02 and 86% on 3–4.)
-- **207 sham_gdx conditions (2 mice, mostly a lone subject before its partner
-  enters):** 1.13 rows a minute, 94% of 139, 9.3% (0.5 s: 1.05, 91%, 8.6%). A
-  reviewer simulated on all 207 (it plays each row to the next place, keeping who is
-  who, and fixes where a mouse wears another label for most of half a second) takes
-  the 108 videos with errors from 88.1% to 99.96% correct on average, 101 of them to
-  >= 99.9%. In the app, after the image rows (2026-10-29, 193 videos, by minutes):
-  94.03% -> 96.30% -> 99.97% (the list alone 99.98%); on 62 hard SLAP-2M views
-  69.82% -> 80.54% -> 98.86% (alone 98.97%; 142111's two views left out, its nested
-  skeleton reads with the wrong node names on main; with them 70.79% -> 81.38% ->
-  98.91%, alone 99.01%). Since every row that stands for a place
-  offers the place's own fix, every video ends exactly at the simulated reviewer's
-  plan, with no place it could not fix (before: 98.61% on SLAP, 17 places blocked).
-  What is left is that plan itself: started from the labels the image rows leave, it
-  ends lower on 5 videos (one SLAP view, 161055/backL, 93.91% vs 98.17% alone, is
-  nearly all of the 0.11 points). An image row's Fix is accepted when it is right on
-  the stretch it changes, by each mouse's first-seen label: the whole-video score
-  drops for a right Fix while most of the video is swapped.
-- **The simulated reviewer** (`~/luc3d-eval/oracle_lib.mjs` `playReviewN`, majority
-  rule since 2026-10-28): a wrong label must hold for most of a 0.5 s stretch (one-frame
-  flickers had made it swap and swap back), and a mouse not seen before the first place
-  is met in that place's clip. Both change the measurement only.
-- **Every close encounter instead** would be 0.5–1.8 rows a minute but long ones
-  (median 3–16 s, p90 up to minutes), covering 34–80% of the video, which is why
-  encounters are not on the list (the checks flag the ones worth a look).
-- **Where a row lands:** the true switch is within the row's 2 s window in about
-  70–80% of switches found (median 0–0.7 s off), so a Fix from the frame the
-  reviewer stops on takes the right boundary; fixing from the row's own frame did
-  about as well as from the exact switch frame in the simulation.
-- **Its pair:** on 3–4 mice the row's pair was the swapped one in only a third to
-  two thirds of the switches it found, so the Fix dialog lets the reviewer pick the
-  two tracks (`ui/id-switch-modal.js`).
+**The review list** (`review` -> `reviewResult`, unscored 'review' rows in the ID
+Switches tab): the candidate moments plus **handovers** (`handoverCandidates`: a
+lone detection whose nearest detection in the last 1 s lay within 0.5 body lengths
+and wore another track) and **returns while the other animal was out of sight too**
+(`reviewReturnCandidates`: also unseen for 0.5 s of the absence; with the other
+tracked throughout, the one coming back can only take the track that is left),
+clustered as above; then a check row where every animal is first in view
+(`videoStartRow`, unless a row's clip, 2 s before to 5 s after, shows it) and one
+at the last tracked frame (`videoEndRow`, unless a row ends within 5 s of it).
+`pairEncounters` lists two identities' close encounters (centroids under 1.5 body
+lengths) for the tab's **◂ Earlier encounter**, to start a Fix where a swap began.
+Close encounters are not rows: they cover 34–80% of the video. Every return as a
+row would double the list on SLAP for a small gain. Evidence: about 1–1.5 rows a
+minute, within 2 s of 96% of the switches on proofread SLAP-2M (91% on 3–4 mice);
+with a simulated reviewer that knows which mouse is which (an upper bound), every
+set ends at 99.55–99.98% correct.
 
-**Returns: an animal back from out of sight, for the coat-brightness check.**
-`returnMoments(frames, out, fps, opts)` -> one moment `{frame, startFrame, identityA,
-identityB, cues: ['return']}` per return of a track (its first detection after more
-than `RETURN_DEFAULTS.gapSeconds` (1) unseen) and each other track, `startFrame` the
-frame it was last seen, so `testMoments` reads the labels before the animal went out
-of sight against the labels after it came back. `trackSingleCamera`'s `moments` =
-candidate moments + returns (sorted); the review list takes only the returns while
-the other animal was out of sight too (below: a place per return would add 1–2.5
-places a minute). Their rows note "an animal comes back
-after being out of sight". They cost no decoding: the check reads its 4 Hz samples
-anyway. Measured 2026-10-27 offline with the check's own code on precomputed coat
-vectors (`~/luc3d-eval/extract_bright.mjs`, `eval_bright.mjs`), the simulated reviewer
-working through the review list plus the check's rows:
-- **SLAP original six (3–4 mice of different coats, 23 views):** 1,450 returns tested
-  -> 13 rows, 11 at a real switch (2026-10-28: repeated returns after one swap share a
-  row, and a near-tie and a return at one place are one row, `momentChangePoints`); the
-  check's rows 13 (9 real) -> 21 (15 real); after review 99.75% -> 99.96% (150448/midL: two mice swapped from the start, put right
-  while out of view, which the list had no place for: 96.0% -> 99.98%). In the app on
-  that view: one return row, whose own Fix swaps 0:00.0–0:50.0 — 96.04% -> 99.86%.
-  On 190807/top (brown, brown, white; Track All 66.5%) the app raised 5 return rows;
-  accepting the 3 whose Fix made the labels right, as proposed, gave 85.0% (the other
-  two: one changed nothing, one — renamed by an earlier Fix — would have hurt).
-- **SLAP held-out (2 mice, 64 views):** 11 rows, 8 real; after review unchanged (99.90%).
-- **sham_gdx (2 light-coated mice, 193 videos):** 2,464 returns -> 1 row, false;
-  unchanged (99.97%). Coat brightness cannot tell look-alikes apart.
-- **All of SLAP-2M (2026-10-28):** every multi-animal back/mid/top view (and its L
-  twin) with proofread labels — 252 views, 42 sessions. 57 (all 2 mice) were set apart
-  because SLEAP's own tracks in the raw file already equal the proofreading (the
-  input-tracklet cue is then the answer): Track All 98.7%, the list takes them to 100%,
-  no return rows. On the other 195 (1,632 min), after review with the list plus the
-  check's rows: all 99.63% -> 99.77%; back pair 99.28% -> 99.55%, mid 99.77% -> 99.89%,
-  top 99.87% (same); 2 mice 99.68% -> 99.82%, 3–4 mice 99.56% -> 99.67%; 50 return rows, 35 real, Fix as
-  proposed helping 36 / hurting 13; 2 views better (10302022030623/backL 66.1% -> 100%,
-  150448/midL 96.0% -> 99.98%), none worse.
-- **Not adopted: search-zone stitching** after PrecisionTrack (Coulombe et al., 2025,
-  "PrecisionTrack: A Platform for Automated Long-Term Social Behavior Analysis in
-  Naturalized Environments", https://github.com/VincentCoulombe/precision_track): with
-  the animal count known, a lost track's search zone grows ahead of where it was going
-  and a returning detection takes the identity whose zone it comes back in. Reimplemented
-  offline after Track All (`~/luc3d-eval/stitch.mjs`) and swept over its tuning ranges, it
-  was neutral to worse (sham_gdx 94.08% -> 94.04%, 24 videos worse and 13 better; only
-  SLAP six gained, at beta 1.5): mice come back far from where they left (handled, hidden),
-  so where they were heading says little.
-
-**Returns on the review list: only while the other animal was out of sight too.**
-`reviewReturnCandidates(frames, out, fps, opts)` -> `[{f, a, b, cue: 'return'}]` for
-`candidateMoments`' `extra` (beside the handovers): a track back after more than
-`REVIEW_RETURN_DEFAULTS.gapSeconds` (1) unseen, paired with each other track that was
-ALSO unseen for at least `otherAwaySeconds` (0.5) of that absence. With the other
-animal tracked the whole time, the one coming back can only take the track that is
-left; with both out of sight (both in the bedding, both lifted out) the first one back
-can take either. Measured 2026-11-07 offline (Spock `runs/2026-11-07_lone/<set>/ret.mjs`,
-`oracle_win.mjs`), on the app's Track All + lone-animal rule, with two simulated
-reviewers. The one every figure above uses watches from a row up to the NEXT row, so
-it sees every return anyway. A stricter one watches only 2 s before to 5 s after each
-row, and does worse on the list without returns: intact 99.925 vs 99.825%, sham_gdx
-99.981 vs 99.939, SLAP 99.838 vs 99.423, SLAP-2M 99.595 vs 98.885.
-- **These returns:** +0.00–0.05 rows a minute; with the 5 s reviewer intact 99.840%
-  (2750m 220711 cdm_home 92.9 -> 100%), sham_gdx 99.942, SLAP 99.620, SLAP-2M
-  unchanged; with the other reviewer only SLAP moves (99.838 -> 99.919%, 150448/midL).
-  No video worse with either.
-- **Not adopted: every return as a row:** +0.2–0.3 rows a minute on Mae's sets, +0.8–1.4
-  on SLAP (doubling it); 5 s reviewer intact 99.867, SLAP 99.841, SLAP-2M 99.302, but
-  one SLAP-2M view 98.95 -> 73.93% (10192022183808/mid). Returns after 3 s unseen fall
-  in between.
-
-**A check row at the end, and stepping back through the pair's encounters.**
-`videoEndRow(frames, out, review, fps, opts)` adds a review row at the last tracked
-frame (cue `videoEnd`, "the end of the tracking: check who is who") unless a row
-already ends within `VIDEO_END_DEFAULTS.clearSeconds` (5) of it; its pair is the two
-tracks seen most in the last `pairSeconds` (2). `pairEncounters(session, idA, idB,
-from, to, opts)` lists the close encounters of two identities on a single-camera
-session as they are labelled now (centroids under `PAIR_ENCOUNTER_DEFAULTS.closeBody`
-(1.5) body lengths, runs joined across `gapSeconds` (0.25)), for the ID Switches
-tab's **◂ Earlier encounter** (`ui/id-switch-modal.js`). Why: measured 2026-11-09
-offline (Spock `runs/2026-11-07_lone/<set>/miss*.mjs`, `oracle_back*.mjs`), the
-5 s reviewer's loss comes from ~29 of 1,178 videos where two mice swap tracks in a
-close encounter with NO place near it (0.2–0.6 body lengths apart). The reviewer
-reaches it at the next place with the labels already swapped and fixes from there,
-or never when no place follows (SLAP 151549-top at 8:24, intact 111696_3328 at
-4:09). With the 5 s reviewer (intact / sham_gdx / SLAP / SLAP-2M):
-- the list: 99.840 / 99.942 / 99.620 / 98.885%;
-- the end row alone: 99.841 / 99.942 / 99.623 / 98.887 (a swap found there still needs finding where it began);
-- end row + stepping back through the pair's encounters (1.5 bodies; to the place
-  before, no cap) to where the label is still right, fixing from where it goes
-  wrong: **99.927 / 99.980 / 99.923 / 99.550**, against 99.925 / 99.981 / 99.919 /
-  99.595 for the reviewer who watches to the next place. +0.08–0.16 rows a minute;
-  a step-back on 32 of 725 intact videos, 7 of 207 sham_gdx, ~30 SLAP views, 46 of
-  163 SLAP-2M views, 0.8–1.9 steps each (max 7–20); no intact or sham_gdx video
-  worse, 0–2 SLAP / SLAP-2M views slightly worse against 9–12 better. A 5-step cap
-  cost SLAP-2M 99.55 -> 99.31% (not adopted). 1 body length instead of 1.5: the same
-  within 0.01 points but SLAP 99.916.
-- Not adopted: starting the Fix automatically at the pair's last encounter (no
-  help; SLAP 99.478%, the last encounter often is not the one), and a check row
-  every 60 s without one (99.902 / 99.942 / 99.698 / 99.608 for +0.6 rows a minute).
-
-**A check row where every animal is first in view.** `videoStartRow(frames, out,
-review, fps, opts)` adds a review row (cue `videoStart`, "every animal first in view:
-note who is who") at the first frame where every track is in view together, unless a
-row's clip already shows that frame (from `VIDEO_START_DEFAULTS.clipBeforeSeconds` (2)
-before its start to `clipAfterSeconds` (5) after its place; where one animal starts
-alone, the arrival row usually does). Its pair is the two lowest tracks in that frame
-(with more, the Fix dialog picks the pair); null with fewer than two tracks or when
-they are never all in view together. `trackSingleCamera` adds it after the end row and
-re-sorts the list by frame. The image pre-judge leaves it out (a look at who is who,
-not a suspected swap). Why: measured 2026-11-16 offline (Spock `runs/2026-11-16_jumps`,
-`start.mjs`, `summary_start.py`) with the 5 s reviewer on the list at 24fd6d4d1 (end
-row and Earlier encounter included), intact scored on the answer key with Mae's five
-confirmed proofreading errors corrected: SLAP-2M (163 views) 99.551 -> 99.834%, 3 views
-better, none worse, +0.13 rows a minute; intact (725) 99.928%, sham_gdx (207) 99.980%
-and SLAP (83) 99.923% unchanged, at +0.002, +0.002 and +0.08 rows a minute. The gain is
-close-encounter swaps with no row: the simulated reviewer catches one at a later place
-only once it has seen the animals the right way round, and it learns who is who only
-from rows. A person who looks at the start of the video anyway gets this without the
-row.
+**The coat-brightness check's options on one camera** (`singleCameraCheckOptions`):
+`skipEmpty`, encounters scoring exactly 0 had no samples on either side and say
+nothing about the labels (counted as "reads right", they started swapped stretches
+too late); `clearestEndLeads`, among 'end' rows within 5 s the clearest leads. The
+image and size checks score each contact label-free and take neither.
 
 **Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
-`SINGLE_CAMERA_LAZY_REASON` rather than tracked from its resident window. Track
-Frame and Track Frame Range are refused on one camera (the tracker is temporal,
-and a range would need its new tracks mapped onto the old ones).
+`SINGLE_CAMERA_LAZY_REASON`; Track Frame and Track Frame Range are refused on one
+camera (the tracker is temporal).
 
-**The image and size checks take none of the single-camera options (since #309 /
-#310).** They score each contact label-free, before vs after (`scoreContacts`), and
-have no runs of encounters, so this branch's single-camera image rule — a run
-ending only above +|threshold| (`singleCameraImageContinueBelow`, removed in the
-#309 merge) — went, and the options below apply to the coat-brightness check
-only. That rule was measured on the image check's previous scoring (SLAP top/mid
-false rows 71 -> 51; topC 93.8% -> 99.9% after both Fixes). Neither tests candidate
-moments. The new image check on one camera is measured under `pose/id-switch-check.js`
-("On one camera"): on the top and mid views of the 22 proofread SLAP sessions 91 rows,
-2 false, 82 of 276 swaps found; on topC 5 rows, 3 false, both swaps found.
-
-**Empty encounters are no evidence.** The coat-brightness check on one
-camera runs with `skipEmpty` (`singleCameraCheckOptions`): runs ignore encounters scoring exactly
-0, which had no samples on either side — 44.5% of the image check's encounters
-on the 35 SLAP videos (2 samples a second; one camera's animals are seldom alone
-for long), 24.4% of brightness's. Counted as "reads right", they started a
-swapped stretch at the first encounter WITH evidence: a Fix from 0:04.2 for a
-swap from 0:00, or from 0:25.9 when the pair's six encounters before it were all
-empty. Skipping them: image rows 78 -> 68 (false 51 -> 42), 18 of 59 swaps caught
-either way, rows whose Fix has a wrong far edge 4 -> 2, rows fully undone (with
-the boundary set by the user) 9 -> 11; brightness rows 21 -> 18 (false 7 -> 4),
-14 caught either way. The two far edges left are chained swaps — a pair's stretch starting
-where ANOTHER pair swapped, or a three-animal rotation — which one pair's rows
-cannot see.
+**Not adopted** (measured): sleap-nn's Kalman tracker; search-zone stitching after
+PrecisionTrack (Coulombe et al., 2025; mice come back far from where they left);
+starting a Fix automatically at the pair's last encounter; a check row every 60 s.
 
 **Key exports.** `singleCameraName(session)` (the camera, or null);
 `singleCameraTrackerConfig(numAnimals, {windowSize, oksStddev, connectBreaks})`;
@@ -3065,7 +2796,9 @@ opts)` -> the check row where every animal is first in view or null; `VIDEO_STAR
 to, opts)` -> `[{start, end}]` ascending; `PAIR_ENCOUNTER_DEFAULTS` (`closeBody` 1.5, `gapSeconds` 0.25);
 `reviewResult(moments, session, fps)` -> the review list's result; `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
--> `{frames, tracks: boolean}` | null; `singleCameraCheckOptions(cue)` -> the options
+-> `{frames, tracks: boolean}` | null; `singleCameraFixSwapsTracks(session, from, to,
+idA, idB)` -> boolean | null (whether that Fix would swap tracks; changes nothing);
+`retrackLosses(session)` -> `{names, namedDetections, user, fixes, reviewed, any}` | null; `singleCameraCheckOptions(cue)` -> the options
 the coat-brightness check runs with on one camera (`{skipEmpty: true,
 clearestEndLeads: true}`); `DUPLICATE_DEFAULTS` (`iou` 0.5, `oks` 0.6, `oksStddev`
 0.1, `minNodes` 3); `duplicateDetections(dets, o)` -> the indices of one frame's
@@ -3081,29 +2814,13 @@ stddev, minNodes)`; `SINGLE_CAMERA_LAZY_REASON`. In `trackSingleCamera`,
 **Imported by.** `pose/tracker.js` (Track All), `ui/id-switch-modal.js` (the
 checks, the fix, and Earlier encounter's `pairEncounters`).
 
-**Coverage.** `tests/test-single-camera-tracking.mjs` (one track per animal
-across 18 input tracklet breaks, the spurious detection and the user frame, the
-candidate moments, the stand-in and a planted swap found by the real size check,
-the track swap and its fallback, the refusals, §6/§7 `skipEmpty` and
-`clearestEndLeads` on the classifier's change points, and §9 the review list:
-handovers, its rows, their Fix plan and the saved checklist, and §11 the
-detection filters: each minimum leaves its failing detections without a track,
-counted as `filtered` — the Wizard's own count — all 0 changes nothing, and
-duplicates are looked for after the filters) and
-`tests/e2e/single-camera-track-all.mjs` (the real buttons, the refusals, a planted
-swap found, fixed and undone through the ID Switches tab, a swap away from every
-contact found by the coat-brightness check at a candidate moment, a "Both" row of
-size and brightness, §6 which checks take the single-camera options, §7b a Wizard
-filter counted in the Wizard, then left without a track by Track All and counted
-in the status and the summary box, §7c the Instances tab's mean node score, and §8 the
-review list after Track All: counted in the status and the summary box, listed in
-the tab, and a review row's Fix between two picked tracks, from here to the end,
-then Fix again from past its own window: only the stretch between stays swapped;
-then a check row on the same place: both Fixes offered, the check's taken, then the
-place's Fix again; then an image row shown with a coat-brightness return, not on the
-list: once its Fix is taken, Fix again is the return's, from here to the end).
-`tests/e2e/_real-single-camera.mjs` runs the whole thing on a real SLEAP file
-through File ▸ Load SLP.
+**Coverage.** `tests/test-single-camera-tracking.mjs` (tracks and identities,
+candidate moments, the stand-in, the Fix and its fallback, `retrackLosses`,
+refusals, duplicate removal, the detection filters, the lone-animal rule, returns,
+the start and end rows, `pairEncounters`); `tests/e2e/single-camera-track-all.mjs`
+(the real buttons end to end: Track All and its warning, a planted swap found,
+fixed and undone, the review list and its Fixes, the image pre-judge);
+`tests/e2e/_real-single-camera.mjs` runs it on a real SLEAP file.
 
 ---
 
@@ -4749,22 +4466,15 @@ nearby 'end' rows sharing an animal, the clearest leads).
   the same pair with nothing reading right in between adds no row (same stretch);
   two moments of the same pair and side within 3 s (a near-tie and a return at one
   contact) are one row with both cues and the clearer score.
-  Measured 2026-10-27 by accepting each row's Fix as the dialog proposes it, alone,
-  on Track All's labels (with returns): SLAP six 34 rows, Fixes +45.0 / -8.5 points
-  summed -> 22 rows, +54.2 / -11.3; SLAP held-out 63 -> 58 rows, +488 / -4.6 ->
-  +542 / -9.8; sham_gdx 13 -> 10 rows, +42 / -19.8 -> +61 / -21.1.
-- **Calibrated on the 35 proofread single-camera SLAP videos (59 switches):**
-  moment rows caught 14 with no false rows (the image check's moment rows under
-  its old scoring: 13, 12 shared); encounter rows were noise at every threshold,
-  hence `threshold` -800. Not calibrated on multi-camera data.
+- **Calibrated on 35 proofread single-camera SLAP videos (59 switches), whose mice
+  have different coats:** moment rows caught 14 with no false rows; encounter rows
+  were noise at every threshold, hence `threshold` -800. Not measured where both
+  mice share a coat (on 193 light-coated two-mouse videos it raised 1 row, a false
+  one), nor on multi-camera data.
 
-**On one camera (2026-10-12), images**, at -0.8, top and mid views of all 22
-proofread SLAP sessions (87 views) and topC: original six 16 rows (14 real, 2
-naming the wrong pair), 14 of 44 swaps found; held-out 75 rows (59 real, 14
-wrong pair, 2 false), 68 of 232; topC both swaps, 3 false rows; no row at all on
-the 39 views Track All gets >= 99.9% right. 113 of the 276 swaps are one track
-changing animal alone, which no contact check can see. Harness:
-`tests/e2e/_real-single-camera.mjs` (`IMAGE=1`), scored in a session scratchpad.
+**On one camera, images** (at -0.8, top and mid views of the 22 proofread SLAP
+sessions): 91 rows, 2 false, 82 of 276 swaps found. 113 of the 276 swaps are one
+track changing animal alone, which no contact check can see.
 
 **Recalibrated for the 168-px model input (2026-10-22; `INPUT` was 224, the crop
 stays 160 — `ui/image-embedder.js`).** Same contacts and tracking (Track All
@@ -4819,7 +4529,7 @@ Same tracking, sampling and views; caught / rows / false of 65 change points:
 for DINOv2-small at -1.) DINOv3's real swaps sit further below the threshold
 (183527 8:28 -1.06 -> -1.66, five white mice 20:42 -1.16 -> -1.34). Separation of
 10 s means: all 0.959 -> 0.967, same coat 0.884 -> 0.903, five white mice ~0.74 ->
-~0.77. Held out: Mae's 193 single-camera sham_gdx recordings (light coats, 240
+~0.77. Held out: 193 proofread single-camera two-mouse recordings (light coats, 240
 truth changes, CPU fp32): at -1.2 DINOv3 catches 31 with 0 false (most with 0
 false: 33 at -1, vs 30 for DINOv2-small and 21 for DINOv2-base); single-crop
 separation 0.905 -> 0.947. The fp16 file through the app vs DINOv3 fp32 on 233,206
@@ -4887,59 +4597,33 @@ few crops on a side), `'unknown'` (fewer than 10 samples with both);
 (each pair separated once); `prejudgeFor(prejudge, row)` (by frame and pair, either
 order); `unitVector(v)`.
 
-**Calibration (2026-11-09).** The study's code (`runs/2026-11-09_hard-swaps/audit.py`
-on cup) on 1,633 review rows of Mae's 395 intact two-mouse videos (100 proofread
-swaps; fine-tuned dinov2-small, held-out fold; crops every 2nd s), gate chosen in
-`gate_sweep/` there. Score alone: AUC 0.960 against the proofread files, 0.996 with
-the 7 rows the images show to be proofreading errors set aside (94 swaps). With
-that clean truth:
+**Calibration.** On 1,633 review rows of 395 proofread two-mouse top-camera
+videos (a fine-tuned dinov2-small package that never saw the video's animal;
+crops every 2nd s). The answer key is the proofread files with five confirmed
+label errors corrected (95 swaps); the score alone has AUC 0.996 (0.960 against
+the uncorrected files). The gate and margin were chosen on these rows and are
+scored on them:
 
 | gate (cos <) | rows with a verdict | swaps called | false alarms | misses |
 |---|---|---|---|---|
-| 0.5 | 981 (60%) | 29 | 0 | 1 |
-| 0.7 | 1,318 (81%) | 66 | 2 | 2 |
-| **0.7 + margin 0.1** | **1,312 (81%)** | **64** | **0** | **1** |
-| 0.8 + margin 0.2 | 1,440 (89%) | 76 | 1 | 1 |
-| none | 1,626 | 94 | 25 | 5 |
+| 0.5 | 60% | 30 | 0 | 1 |
+| **0.7, margin 0.1** (shipped) | **81%** | **65** | **0** | **1** |
+| 0.8, margin 0.2 | 89% | 77 | 1 | 1 |
+| none | 100% | 95 | 25 | 5 |
 
-Above cos 0.85 the AUC falls to ~0.8. Window lengths 1.5–8 s, gaps and medians did
-not beat ±3 s. Other packages use the same numbers, unmeasured.
+Out of sample, on 439 other videos of the same rig with a package that never saw
+their animals, the shipped settings called 49 of 89 swaps with 1 false alarm.
+Window lengths 1.5–8 s did not beat ±3 s. Other packages use the same numbers,
+unmeasured.
 
-**The built-in model (2026-11-10, `gate_sweep/builtin*.py`).** The frozen DINOv3
-ViT-S/16 at 192 px on the same rows: every pair looks alike to it (median
-separation 0.92, 10–90% 0.85–0.95, vs 0.16 for the package; none below 0.7, so
-the package's gate gave no verdict anywhere), the separation does not predict
-where its score holds (AUC 0.92–0.96 at every level), and its scores are ~6x
-smaller (median −0.10 swap, +0.13 kept; AUC 0.913, 0.945 clean). Hence
-`PREJUDGE_BUILTIN`, no gate:
-
-| margin | "look swapped": swaps / false | "look right": kept / swaps | unsure |
-|---|---|---|---|
-| 0.1 | 49 / 15 | 934 / 4 | 624 |
-| 0.15 | 31 / 4 | 644 / 3 | 944 |
-| **0.2** | **17 / 0** | **448 / 2** | **1,159** |
-| 0.25 | 9 / 0 | 303 / 1 | 1,313 |
-
-(gate 0.95 + margin 0.2: 13 / 0, 260 "can't tell"; no better.) The tab prompts
-to train a model for the rig.
-
-**The app on the same videos (2026-11-10, `runs/2026-11-10_prejudge-app` on cup).**
-Load SLP, Track All and the image check with each model, headless Chrome on the CPU,
-all 395 videos: the review list holds 1,632 of the 1,633 rows, and the scores follow
-the study's (package separation r 0.985, row score r 0.975; built-in score r 0.88,
-its crops being the app's, not the training script's). Answer key: the proofread
-files with the five stretches the proofreader confirmed as her mistakes corrected
-(2026-11-16, `runs/2026-11-16_gtfix`; 7 places change answer; 1,632 rows, 95 swaps),
-shipped settings:
-
-| model | swaps called | false alarms | misses | unsure / no verdict |
-|---|---|---|---|---|
-| package (gate 0.7, margin 0.1) | 67 | 1 | 1 | 5 unsure, 289 alike, 35 sparse |
-| built-in (margin 0.2) | 14 | 2 | 1 | 1,201 unsure, 37 sparse |
-
-Built-in at margin 0.25: 7 / 1; 0.3: 4 / 0. About 1,230 further rows (mostly
-arrivals and tracklet changes) have too few crops: their rows show no image note, and the summary line counts them. The tab's About text quotes
-these app numbers.
+**The built-in model** (frozen DINOv3 ViT-S/16 at 192 px) finds every pair alike
+(median separation 0.92 vs 0.16 for the package), its separation does not predict
+where its score holds, and its scores are ~6x smaller; hence `PREJUDGE_BUILTIN`:
+no gate, margin 0.2. In the app on the same rows it called 14 of 95 swaps with 2
+false alarms, about 3 rows in 4 unsure, and the tab prompts to train a model for
+the rig. About 4 rows in 10 (mostly arrivals and tracklet changes) have too few
+crops for any verdict: they show no image note and the summary line counts them.
+The tab's About text quotes these numbers.
 
 **Imports from project modules.** None.
 
@@ -5007,9 +4691,15 @@ required, `last_hidden_state` with CLS at token 0), `onnx/model_fp16.onnx`
 **Key exports.** `parseModelManifest(raw, crop)` -> `{ok, manifest}` | `{ok: false,
 error}` (a sentence for the user): `format: "lucid-image-model"`, `version: 1`,
 `name`, `input` (112–512 px, a multiple of 14 or 16: `validModelInput`), `crop`
-(must equal the app's `CROP`), `threshold` (−4..0), `fp16`, `sha256` (path -> hex),
-free-form `training` / `validation`. `modelKeyMaterial(manifest, fileHashes)`: the
-text a package's key hashes (input, crop, fp16, weight hashes; not the name).
+(must equal the app's `CROP`), `cropRule` (a whole number, absent = 1), `threshold`
+(−4..0), `fp16`, `sha256` (path -> hex), free-form `training` / `validation`.
+`modelKeyMaterial(manifest, fileHashes)`: the text a package's key hashes (input,
+crop, fp16, weight hashes; not the name, nor `cropRule`, so adding it to an old
+manifest keeps the key). `CROP_RULE` (2): how this app cuts crops, numbered — 1
+left only tail… nodes out, 2 also t0, t1… (`isTailNode`); bump it with
+`scripts/train_image_model.py`'s whenever `cutCrop` changes what lands in a crop.
+`cropRuleDiffers(rule, nodeNames)`: whether a package of that rule sees other crops
+on this skeleton (only rule 1 on one naming t0, t1…).
 `modelChoiceOf(pkg)` / `ingestModelChoice(raw)`: what a session saves
 (`metadata.lucid.imageModel`: key, name, input, threshold, url or folder) and its
 tolerant read (malformed -> null = built-in). `packageBaseUrl(input)`: a Hugging
@@ -5021,7 +4711,7 @@ Face repo id or an https folder URL (http only on localhost) -> the base URL;
 **Imported by.** `ui/image-model-package.js`, `ui/image-model-dialog.js`,
 `import-export/visibility-metadata.js`.
 
-**Coverage.** `tests/test-image-model-package.mjs`; the saved choice in
+**Coverage.** `tests/test-image-model-package.mjs` (also `cropRule`, `cropRuleDiffers`); the saved choice in
 `tests/test-visibility-metadata.js`.
 
 ---
@@ -10144,12 +9834,8 @@ such as an animal coming back after being out of sight — `look`, so on one cam
 every coat-brightness row at a candidate moment or a return). Unfixed, a check's
 row shows the place's fix as **Fix from here…** beside its own **Fix switch…**;
 once fixed, as **Fix again…** (both carry `data-place`, and the dialog then
-explains the place's fix), and the row stays selected. Before 2026-10-29 only a
-review-list row offered it before the check's Fix, and a fixed check row with a
-return behind it offered only Undo: the walkthrough's reviewer could not make 13
-place fixes on the 64 hard SLAP-2M views (0.38 points) and 4 on sham_gdx; with it,
-none (SLAP 98.61% -> 98.91%, sham_gdx 99.95% -> 99.97%). A check's fix starting a
-second too early once cost a sham_gdx video 90.2% instead of 99.9%. With more than two tracks it lets the reviewer
+explains the place's fix), and the row stays selected. Without it a simulated
+reviewer could not make 13 place fixes on 64 hard SLAP-2M views. With more than two tracks it lets the reviewer
 pick the two tracks (`pairSelect`, `#idSwitchFixA` / `#idSwitchFixB`, defaulting to
 the row's pair): on 3–4 mice the row's own pair was the swapped one in only a third
 to two thirds of the switches found. The dialog keeps Esc / Cancel.
@@ -10162,9 +9848,8 @@ From then on that place's own Fix may start anywhere back to the place before
 (the dialog says "before this place (you went back to an earlier encounter)");
 without it a frame before the place still falls back to just after it. The
 state (`st.stepBack`: key, bound, last encounter, count) is in memory only, never
-saved. Measured with the check row at the end (`pose/single-camera-tracking.js`,
-2026-11-09): a reviewer watching 5 s past each place and stepping back this way
-matched one who watches every frame between places.
+saved. With the check row at the end, a simulated reviewer watching 5 s past each
+place and stepping back this way matched one who watches every frame between places.
 
 **The coat-brightness check** (`brightness: true`, `runBrightness`) runs
 `checkBrightnessSwitches` with `ui/brightness-sampler.js`'s vectors under the same
@@ -10195,7 +9880,11 @@ the coat-brightness check also tests Track All's candidate moments
 (`session._idSwitchCandidates`) with `skipEmpty` / `clearestEndLeads`. A moment's
 row reads "at …" instead of "close …" and says why it was looked at. A Fix swaps
 the two TRACKS (`swapSingleCameraIdentities`, also the undo) and renames them in
-the stored candidates; its dialog says "(their tracks)".
+the stored candidates; its dialog says "(their tracks)", or, when an identity was
+edited apart from its track (`singleCameraFixSwapsTracks` false, re-asked when the
+pair is picked), "(their identities only)" with a warning that SLEAP will not see
+the fix, and the status after it is a warning too. Frame numbers go through
+`formatFrameNumber` (`ui/frame-readout.js`).
 
 **The image check.** Needs the session's videos (else it says why), and the
 network the first time, to download the model. An error the embedder marks
@@ -10345,7 +10034,8 @@ scores here and its `onProgress: yieldToPaint` lets the page paint between the t
 halves. On the 8-camera, 108,000-frame project no task of the check passes ~50 ms),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `pose/single-camera-tracking.js` (`singleCameraName`, `singleCameraCheckSession`,
-`swapSingleCameraIdentities`, `singleCameraCheckOptions`),
+`swapSingleCameraIdentities`, `singleCameraFixSwapsTracks`, `singleCameraCheckOptions`),
+`ui/frame-readout.js` (`formatFrameNumber`),
 `pose/size-check-pool.js` (`scoreSizeGridOffThread`),
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
@@ -11157,6 +10847,27 @@ replaced).
 
 ---
 
+### ui/retrack-warning.js
+
+**Purpose.** Asks before a single-camera Track All replaces tracks a person made.
+`confirmRetrack(losses)` -> Promise<boolean> shows what `retrackLosses`
+(`pose/single-camera-tracking.js`) counted: tracks named anything but `track_<n>`
+(with their detections; names in the file's track order, built with
+`textContent` since they come from the file), hand-labelled instances on a track,
+and the ID Switches tab's fixes and ticked rows, with no undo. Title + one
+sentence + counts. Cancel is focused; Esc or a backdrop click cancels; every key
+stops at the dialog (capture phase), Enter presses the focused button.
+
+**Imports from project modules.** None.
+
+**Imported by.** `pose/tracker.js` (`runSingleCameraTrackAll`).
+
+**Coverage.** `tests/e2e/single-camera-track-all.mjs` §8 (named tracks ask; Esc
+keeps every track; Replace tracks goes on); the counts in
+`tests/test-single-camera-tracking.mjs` §3b.
+
+---
+
 ### ui/image-model-dialog.js
 
 **Purpose.** Which model the image ID-switch check uses for a session
@@ -11165,8 +10876,8 @@ shows the model with a **Change…** button (`imageModelLineHtml`,
 `wireImageModelLine`); the dialog (`showImageModelDialog(session, {pickFiles?})`)
 lists the built-in model and every package loaded on the page, loads one from a
 folder (`<input webkitdirectory>`) or a URL / Hugging Face repo, shows its details
-(base, license, input, threshold, precision, source, training and validation
-notes), and on **Use this model** sets `session.imageModel = modelChoiceOf(pkg)`
+(base, license, input, threshold, precision, crop rule, source, training and
+validation notes), and on **Use this model** sets `session.imageModel = modelChoiceOf(pkg)`
 (null for the built-in one) and marks the project dirty when it changed. Esc,
 Cancel and a backdrop click change nothing. Its **Train a model for this rig**
 fold (`trainingHelpHtml(open)`) gives the three steps — save tracked recordings,
@@ -11183,8 +10894,11 @@ FOLDER choice not loaded throws an Error whose message is the check's skip reaso
 (never a silent fall-back to another model).
 
 **Imports from project modules.** `ui/image-embedder.js` (`BUILTIN_IMAGE_MODEL`),
-`ui/image-model-package.js`, `pose/image-model-manifest.js` (`modelChoiceOf`),
-`import-export/save-load.js` (`markDirty`).
+`ui/image-model-package.js`, `pose/image-model-manifest.js` (`modelChoiceOf`,
+`cropRuleDiffers`, `CROP_RULE`), `import-export/save-load.js` (`markDirty`).
+
+The model line adds "(trained on older crops: retrain it)" when the loaded
+package's `cropRule` cuts this session's skeleton differently (`cropRuleDiffers`).
 
 **Imported by.** `ui/id-switch-modal.js`.
 
@@ -12414,7 +12128,7 @@ either ID-switch check is run.
   samples stay 40% of a slot apart even in a crowded cage. Only frames where the
   animal has at least half its keypoints count (`keypointShare`): a stray
   detection — one keypoint wearing the identity for a frame between its real
-  stretches — made an empty "no keypoints" picture (seen on a real sham_gdx
+  stretches — made an empty "no keypoints" picture (seen on a real two-mouse
   video). A slot with none in its middle takes the usable frame nearest that
   middle, on either side; only an identity with no usable frame at all falls back
   to whatever is tracked. A gap wider than a slot would send several slots to one

@@ -25,7 +25,7 @@ import { BUILTIN_IMAGE_MODEL } from './image-embedder.js';
 import {
     loadModelPackageFromFiles, loadModelPackageFromUrl, registeredModelPackage, registeredModelPackages,
 } from './image-model-package.js';
-import { modelChoiceOf } from '../pose/image-model-manifest.js';
+import { modelChoiceOf, cropRuleDiffers, CROP_RULE } from '../pose/image-model-manifest.js';
 import { markDirty } from '../import-export/save-load.js';
 
 function escapeHtml(s) {
@@ -65,10 +65,17 @@ export async function resolveSessionImageModel(session) {
 export function imageModelLineHtml(session) {
     const choice = session && session.imageModel;
     const name = choice ? choice.name : BUILTIN_IMAGE_MODEL.name;
-    const missing = choice && !registeredModelPackage(choice.key) && !choice.url;
+    const pkg = choice ? registeredModelPackage(choice.key) : null;
+    const missing = choice && !pkg && !choice.url;
+    // A package trained on crops cut by an older rule than this app's, on a skeleton where the two differ.
+    const nodeNames = ((session && session.skeleton && session.skeleton.nodes) || []).map(function (n) { return typeof n === 'string' ? n : n && n.name; });
+    const oldCrops = pkg && cropRuleDiffers(pkg.cropRule, nodeNames);
     return '<div class="image-model-line">Image model: <b>' + escapeHtml(name) + '</b>' +
         (choice ? ' · flags below ' + escapeHtml(minus(choice.threshold)) : '') +
         (missing ? ' <span class="image-model-missing">(not loaded)</span>' : '') +
+        (oldCrops ? ' <span class="image-model-missing image-model-old-crops" title="It was trained when tail segments named t0, t1… still ' +
+            'counted as body, so its crops reached down the tail; this LUCID leaves them out. Its scores may be off: retrain it with ' +
+            'the current scripts/train_image_model.py.">(trained on older crops: retrain it)</span>' : '') +
         ' <button class="panel-btn image-model-change" type="button">Change…</button></div>';
 }
 
@@ -98,6 +105,8 @@ function describe(pkg) {
     const rows = [['Trained from', pkg.base || '—'], ['License', pkg.license || '—'], ['Input', pkg.input + ' px'],
         ['Flag threshold', minus(pkg.threshold) + ' (the package\'s; the Wizard\'s applies to the built-in model)'],
         ['Precision', pkg.fp16 ? 'fp16 on GPUs that support it, else fp32' : 'fp32'],
+        ['Crops', 'rule ' + pkg.cropRule + (pkg.cropRule === CROP_RULE ? ' (this LUCID\'s)'
+            : ' (older than this LUCID\'s rule ' + CROP_RULE + ': on a skeleton that names tail segments t0, t1…, retrain it)')],
         ['Source', pkg.source.kind === 'url' ? pkg.source.url : 'folder ' + (pkg.source.folder || '') + ' (pick it again after a reload)'],
         ['Key', pkg.key.slice(0, 16) + '…']];
     const flat = function (o) {

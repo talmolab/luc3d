@@ -32,6 +32,7 @@ import sys
 
 MANIFEST = 'lucid-model.json'
 CROP = 160          # the crop side LUCID cuts (ui/image-embedder.js CROP)
+CROP_RULE = 2       # how LUCID cuts it (pose/image-model-manifest.js CROP_RULE; train_image_model.py passes its own)
 
 
 def sha256(path):
@@ -59,6 +60,8 @@ def main(argv=None):
     p.add_argument('--license', required=True, help="the base model's license, e.g. Apache-2.0 or 'DINOv3 License'")
     p.add_argument('--input', type=int, required=True, help='model input side in px (dinov2: 168; DINOv3: 192)')
     p.add_argument('--threshold', type=float, required=True, help='recommended flag threshold, -4..0')
+    p.add_argument('--crop-rule', type=int, default=CROP_RULE,
+                   help=f'the crop rule the model was trained with (default {CROP_RULE}, this LUCID\'s; see pose/image-model-manifest.js)')
     p.add_argument('--fp16', action='store_true', help='onnx/model_fp16.onnx was checked against fp32 on WebGPU')
     p.add_argument('--training', help='JSON (or a .json file) describing the training, shown in LUCID')
     p.add_argument('--validation', help='JSON (or a .json file) with validation results, shown in LUCID')
@@ -70,6 +73,8 @@ def main(argv=None):
             sys.exit('missing ' + os.path.join(folder, need))
     if not (112 <= a.input <= 512 and (a.input % 14 == 0 or a.input % 16 == 0)):
         sys.exit('--input must be 112..512 and a multiple of 14 or 16')
+    if a.crop_rule < 1:
+        sys.exit('--crop-rule must be 1 or more')
     if not (-4 <= a.threshold <= 0):
         sys.exit('--threshold must be between -4 and 0')
     fp16_path = os.path.join(folder, 'onnx', 'model_fp16.onnx')
@@ -82,7 +87,7 @@ def main(argv=None):
     manifest = {
         'format': 'lucid-image-model', 'version': 1,
         'name': a.name, 'base': a.base, 'license': a.license,
-        'input': a.input, 'crop': CROP, 'threshold': a.threshold, 'fp16': bool(a.fp16),
+        'input': a.input, 'crop': CROP, 'cropRule': a.crop_rule, 'threshold': a.threshold, 'fp16': bool(a.fp16),
         'sha256': hashes,
     }
     training, validation = load_json_arg(a.training), load_json_arg(a.validation)

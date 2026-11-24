@@ -9181,3 +9181,7 @@ div.track-summary-steps { padding-left: 0; }
   background: var(--surface-hover, rgba(127, 127, 127, 0.12)); border-radius: 3px; user-select: text; }
 .image-model-modal.is-busy { cursor: progress; }
 .image-model-modal.is-busy button { pointer-events: none; opacity: 0.6; }
+
+/* Single-camera Track All: ask before replacing tracks a person made (ui/retrack-warning.js) */
+.retrack-warning-modal .retrack-warning-list { margin: 0 0 12px; padding-left: 18px; font-size: 13px; color: var(--text-primary); line-height: 1.5; }
+.retrack-warning-modal .retrack-warning-tip { margin-bottom: 0; font-size: 12px; }
