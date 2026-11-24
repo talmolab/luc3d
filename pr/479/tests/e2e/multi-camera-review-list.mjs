@@ -146,6 +146,8 @@ try {
     console.log('\n3. The image check pre-judges the list on several cameras');
     const runImageCheck = (on) => page.evaluate(async (on) => {
         const Set_ = await import('/ui/settings.js');
+        const def = Set_.getTrackingThresholdDefs().find(d => d.id === 'imageCheckPrejudgeMultiCamera');
+        const untouched = Set_.getTrackingThreshold('imageCheckPrejudgeMultiCamera');
         Set_.setTrackingThresholds(Object.assign(Set_.getTrackingThresholds(), { imageCheckPrejudgeMultiCamera: on ? 1 : 0 }));
         const S = window.__lucid.state.session, st = S._idSwitch, R = await import('/ui/id-switch-review.js'), M = await import('/ui/id-switch-modal.js');
         const id = n => S.identities.find(i => i.name === n).id;
@@ -158,9 +160,9 @@ try {
         R.linkIdSwitchResults(st.results); M.refreshIdSwitchPanel(S);
         // a stand-in embedder on three cameras: each animal (known by its side) has a look per camera; from 0:40 the two
         // looks trade places, so the images say the labels change hands there
-        let seed = 7; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+        let seed = 7, embedded = 0; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
         const proto = ['c0', 'c1', 'c2'].map((c, ci) => [0, 1].map(a => Float32Array.from({ length: 16 }, (_, i) => Math.sin(3 * a + ci + i))));
-        const createEmbedder = async () => ({ views: ['c0', 'c1', 'c2'], inFlight: 2, getEmbeddings: async (frame, items) => items.map(it => ['c0', 'c1', 'c2'].map((cam, ci) => {
+        const createEmbedder = async () => ({ views: ['c0', 'c1', 'c2'], inFlight: 2, getEmbeddings: async (frame, items) => (embedded++, items).map(it => ['c0', 'c1', 'c2'].map((cam, ci) => {
             const inst = it.group.instances.get('c0'), a = inst ? inst.trackIdx : 0, look = frame >= 1200 ? 1 - a : a;
             return { camera: cam, vector: Float32Array.from(proto[ci][look], v => v + 0.3 * (r() - 0.5)) };
         })) });
@@ -169,14 +171,21 @@ try {
         const text = f => { const el = rows.find(x => Number(x.dataset.frame) === f); return el ? el.querySelector('.id-switch-line2').textContent : ''; };
         return { ok: !!(res && res.ok), reason: res && res.reason, verdicts: res && res.prejudge ? res.prejudge.rows.map(p => p.verdict) : null,
                  at600: text(605), at1200: text(1205), atStart: text(0), atEnd: text(2249),
-                 about: (document.querySelector('#idSwitchPanel .id-switch-about') || {}).textContent || '' };
+                 about: (document.querySelector('#idSwitchPanel .id-switch-about') || {}).textContent || '',
+                 embedded, def: def && def.default, untouched };
     }, on);
     const off = await runImageCheck(false);
+    check(off.def === 0 && off.untouched === 0, `the switch is off by default (default ${off.def}, before this test set it: ${off.untouched})`);
     check(off.ok && off.verdicts === null && !/images:/.test(off.at600 + off.at1200),
-        `off by default: the image check runs without a pre-judge (${off.reason || 'ok'}, ${JSON.stringify(off.verdicts)})`);
+        `off by default: the image check gets no review rows and runs without a pre-judge (${off.reason || 'ok'}, ${JSON.stringify(off.verdicts)})`);
     check(/optional on several cameras/.test(off.about) && /pre-judge the review list on several cameras/.test(off.about),
         '…and About these flags says how to turn it on');
     const pj = await runImageCheck(true);
+    // review rows are the only thing that makes checkImageSwitches embed every sample (backgroundHz = Infinity), and
+    // its `prejudge` is non-null exactly when it got some; so null above means the background sampling was left alone.
+    // (Here encounters every 10 s already put every sample in a scored window, so both runs embed the same frames.)
+    check(off.embedded > 0 && off.embedded === pj.embedded,
+        `…and so its sampling is unchanged: ${off.embedded} frames embedded, as with the pre-judge on this fully covered video`);
     check(pj.ok, `the image check ran (${pj.reason || 'ok'})`);
     check(JSON.stringify(pj.verdicts) === '["kept","swapped"]',
         `verdicts from the three cameras' pooled views: 0:20 looks right, 0:40 looks swapped (${JSON.stringify(pj.verdicts)})`);

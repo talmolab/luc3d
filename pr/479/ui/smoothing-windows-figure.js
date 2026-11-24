@@ -67,9 +67,9 @@
 // (`ataSmoothSeriesInto`, `ATA_DEFAULT_K`, `ATA_DEFAULT_HMAX`),
 // ui/figure-try-controls.js. Colours come from `styles.css` (`.smooth-fig`).
 
-import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from '../pose/temporal-smoothing.js?v=2d3d0e744de2';
-import { ataSmoothSeriesInto, ATA_DEFAULT_K, ATA_DEFAULT_HMAX } from '../pose/adaptive-temporal-averaging.js?v=2d3d0e744de2';
-import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js?v=2d3d0e744de2';
+import { smoothSignalInto, normalizeWindow, sigmaForWindow, buildSegments } from '../pose/temporal-smoothing.js?v=c023de85ffab';
+import { ataSmoothSeriesInto, ATA_DEFAULT_K, ATA_DEFAULT_HMAX } from '../pose/adaptive-temporal-averaging.js?v=c023de85ffab';
+import { tryStrip, tryControl, wireTryControl, settingRow, wireSettingRow } from './figure-try-controls.js?v=c023de85ffab';
 
 var N = 40;                              // frames in the trace
 var SPIKES = [[8, 28]];                 // [frame, mm] one-frame spikes

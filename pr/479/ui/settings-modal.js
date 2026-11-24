@@ -47,18 +47,18 @@ import {
     setTrackingThresholds,
     getSmoothingParamDefs,
     setSmoothingParams,
-} from './settings.js?v=2d3d0e744de2';
-import { getActiveSession, state, timeline } from './app-state.js?v=2d3d0e744de2';
-import { drawAllOverlays } from './rendering.js?v=2d3d0e744de2';
-import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=2d3d0e744de2';
-import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=2d3d0e744de2';
-import { buildThresholdExamples } from './threshold-examples-panel.js?v=2d3d0e744de2';
-import { installModalGeometry } from './modal-geometry.js?v=2d3d0e744de2';
-import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=2d3d0e744de2';
-import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=2d3d0e744de2';
-import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=2d3d0e744de2';
-import { getSkeletonCheckSettings, setSkeletonCheckSettings, sessionSkeletonChains } from '../pose/skeleton-check-run.js?v=2d3d0e744de2';
-import { buildSkeletonChainEditor } from './skeleton-chain-editor.js?v=2d3d0e744de2';
+} from './settings.js?v=c023de85ffab';
+import { getActiveSession, state, timeline } from './app-state.js?v=c023de85ffab';
+import { drawAllOverlays } from './rendering.js?v=c023de85ffab';
+import { buildTriangulationMethodsFigure } from './triangulation-methods-figure.js?v=c023de85ffab';
+import { buildSmoothingWindowsFigure } from './smoothing-windows-figure.js?v=c023de85ffab';
+import { buildThresholdExamples } from './threshold-examples-panel.js?v=c023de85ffab';
+import { installModalGeometry } from './modal-geometry.js?v=c023de85ffab';
+import { refreshIdSwitchHighlight } from './id-switch-highlight.js?v=c023de85ffab';
+import { buildDetectionFilterPreview } from './detection-filter-preview.js?v=c023de85ffab';
+import { NODE_WEIGHT_TIP } from './track-setup-modal.js?v=c023de85ffab';
+import { getSkeletonCheckSettings, setSkeletonCheckSettings, sessionSkeletonChains } from '../pose/skeleton-check-run.js?v=c023de85ffab';
+import { buildSkeletonChainEditor } from './skeleton-chain-editor.js?v=c023de85ffab';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).

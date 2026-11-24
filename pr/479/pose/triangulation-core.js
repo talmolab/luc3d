@@ -16,9 +16,9 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=2d3d0e744de2';
-import { jacobiEigen } from './plane-fit.js?v=2d3d0e744de2';
-import { checkChains, SKELETON_CHECK_DEFAULTS } from './skeleton-check.js?v=2d3d0e744de2';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=c023de85ffab';
+import { jacobiEigen } from './plane-fit.js?v=c023de85ffab';
+import { checkChains, SKELETON_CHECK_DEFAULTS } from './skeleton-check.js?v=c023de85ffab';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means

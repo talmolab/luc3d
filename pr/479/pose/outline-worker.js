@@ -20,7 +20,7 @@
 //
 // Depends on: pose/outline-core.js
 
-import { rgbaToGray, medianImage, maskedMedian, poseMask, segmentBlobs, areaModel, singlePoseBlobs, poseAreaModel, mirrorEvidence, reflectingSurfaces, computeOutlines } from './outline-core.js?v=2d3d0e744de2';
+import { rgbaToGray, medianImage, maskedMedian, poseMask, segmentBlobs, areaModel, singlePoseBlobs, poseAreaModel, mirrorEvidence, reflectingSurfaces, computeOutlines } from './outline-core.js?v=c023de85ffab';
 
 /**
  * Grey pixels of `src` (an ImageBitmap/VideoFrame/canvas, or already grey
