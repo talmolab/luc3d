@@ -2689,9 +2689,10 @@ nodes reach the tracker as missing (SLEAP's invisible points are NaN in sleap-nn
   where the arrival's cluster starts (the first two-animal frame in the 5 s before
   it), and the review list gets an 'arrival' row there. It rewrites the tracker's
   output in `trackSingleCamera` (`opts.lone`) before anything is written. On 725
-  proofread two-mouse videos where the subject starts alone: 99.877% -> 99.925% after
-  review, 28% fewer rows; SLAP unchanged. It can cost a few detections where the
-  follower takes the copy of a resting animal.
+  proofread two-mouse videos where the subject starts alone: 28% fewer rows, 99.877% ->
+  99.925% after a simulated review (an upper bound); better on 222 videos, worse on
+  147 (911 detections, mostly where the follower takes the copy of a resting
+  animal); SLAP unchanged.
 
 **Opt-in duplicate removal** (Wizard `scRemoveDuplicates`, off; `duplicateDetections`).
 SLEAP sometimes puts a second, often partial, instance on an animal; with the
