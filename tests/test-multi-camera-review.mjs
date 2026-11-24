@@ -7,6 +7,8 @@
  *  - flat (3N) and boxed points3d read alike; groups without an identity or without 3D are left out;
  *  - pairEncounters3d: the pair's close encounters by 3D centroid distance (1.5 body lengths, the body = the
  *    median largest node-to-node distance), read from the current labels;
+ *  - the previous sighting's limit is in seconds (~5 frames at 30 fps, ~25 at 150 fps);
+ *  - the body length follows a re-triangulation that keeps the frame count;
  *  - fewer than two identities: no list.
  *
  * Run:  node tests/test-multi-camera-review.mjs
@@ -63,6 +65,18 @@ group('a crossing gets a row; animals apart get none');
     ok(near.length > 0 && near.every(c => Math.abs(c.f - 450) <= 2), `near-ties only at the crossing itself (${near.map(c => c.f)})`);
     eq(MR.MULTI_CAMERA_REVIEW_DEFAULTS.margin, 0.01, 'default margin 0.01');
     eq(MR.MULTI_CAMERA_REVIEW_DEFAULTS.clusterSeconds, 3, 'clusters of 3 s');
+}
+
+group('the previous sighting is limited in seconds, not frames');
+{
+    // seen every 10th frame only (8 per 5 frames each): 10 frames is 0.33 s at 30 fps (past the ~0.17 s limit),
+    // 0.067 s at 150 fps (within it)
+    const fr = [];
+    for (let f = 0; f < 900; f++) { const d = (f - 450) * 1.6; fr.push(f % 10 ? [] : [[0, 1000 - d, 0], [1, 1000 + d, 0]]); }
+    const t = MR.identityTrack(session(fr));
+    eq(MR.crossingCandidates(t, { fps: 30 }).length, 0, 'sightings 10 frames apart at 30 fps: too far back, no candidate');
+    ok(MR.crossingCandidates(t, { fps: 150 }).length > 0, 'the same at 150 fps: within the limit, a candidate');
+    eq(MR.MULTI_CAMERA_REVIEW_DEFAULTS.gapSeconds * 30, 5, 'the limit is 5 frames at 30 fps');
 }
 
 group('near-ties within 3 s are one row; further apart, two');
@@ -126,6 +140,9 @@ group('pairEncounters3d');
     const enc2 = MR.pairEncounters3d(s, 0, 1, 0, 899, { fps: 30 });
     ok(enc2.length === 1 && enc2[0].start === 432 && enc2[0].end === 468, 'a swap of both labels changes nothing (same pair)');
     eq(MR.pairEncounters3d({ instanceGroups: new Map() }, 0, 1, 0, 10).length, 0, 'no groups: none');
+    // a re-triangulation that keeps the frame count: the body length follows it (no stale cache)
+    s.instanceGroups.forEach(gs => gs.forEach(g => { for (let i = 0; i < g.points3d.length; i++) g.points3d[i] *= 2; }));
+    eq(MR.sessionBodyLength3d(s), 400, 'after the 3D doubles, the body length doubles (400)');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

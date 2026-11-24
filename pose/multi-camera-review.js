@@ -7,7 +7,7 @@
  * (`session.instanceGroups`, never evicted on a lazy project):
  *  - **'crossing'** — two identities whose 3D paths nearly cross: at a frame where
  *    both have a group, pairing each with the other's previous sighting (at most
- *    `gapFrames` back) costs almost what the kept pairing does, by centroid
+ *    `gapSeconds` back, ~5 frames at 30 fps) costs almost what the kept pairing does, by centroid
  *    distance: (swapped − kept) / (swapped + kept) < `margin`. One row per pair
  *    per run of them no more than `clusterSeconds` apart (`candidateMoments`).
  *  - **'videoStart'** — where every identity is first in view together, unless a
@@ -17,20 +17,18 @@
  * And `pairEncounters3d`, what the tab's "◂ Earlier encounter" steps back through
  * on a multi-camera session: the pair's close encounters by 3D centroid distance.
  *
- * Why these (measured 2026-11-16, MODULES.md): the app's own Track All on the 22
- * proofread SLAP sessions (8 cameras), the list played by the single-camera study's
- * simulated reviewer (2 s before to 5 s after each row, stepping back through the
- * pair's encounters): mean accuracy 88.21% -> 99.69%, 0.88 rows a minute, 11
- * sessions better, none worse. Close encounters themselves cover 45–97% of those
- * videos, so they are not rows.
+ * Why these: on 22 proofread 8-camera recordings at 30 fps, a simulated reviewer with perfect identification
+ * and frame-exact Fixes (an upper bound) took the mean from 88.2% to 99.7% at about one row a minute. Close
+ * encounters themselves cover 45–97% of those videos, so they are not rows. Untested at other frame rates and on
+ * other rigs.
  *
  * Pure — no DOM, no app state.
  */
 
 import { candidateMoments, videoStartRow, videoEndRow, PAIR_ENCOUNTER_DEFAULTS } from './single-camera-tracking.js';
 
-/** The near-cross rows' settings: margin (scale-free), previous sighting at most `gapFrames` back, clusters. */
-export const MULTI_CAMERA_REVIEW_DEFAULTS = Object.freeze({ margin: 0.01, gapFrames: 5, clusterSeconds: 3 });
+/** The near-cross rows' settings: margin (scale-free), previous sighting at most `gapSeconds` back, clusters. */
+export const MULTI_CAMERA_REVIEW_DEFAULTS = Object.freeze({ margin: 0.01, gapSeconds: 1 / 6, clusterSeconds: 3 });
 
 /** Mean of a group's finite 3D nodes, or null. Reads flat (3N) or boxed points3d. */
 function groupCentroid(g) {
@@ -48,7 +46,7 @@ function groupCentroid(g) {
     return n ? [x / n, y / n, z / n] : null;
 }
 
-/** The largest distance between two finite nodes of a group, or 0. */
+/** The largest distance between two finite nodes of a group, or 0. All pairs: fine at skeleton sizes (~15 nodes). */
 function groupExtent(g) {
     var P = g && g.points3d, pts = [];
     if (!P) return 0;
@@ -85,16 +83,20 @@ export function identityTrack(session) {
     return { frames: frames, out: out, cen: cen };
 }
 
-/** Near-crossings of two identities' 3D paths (see the module doc): [{f, a, b, cue: 'crossing'}], ids as stored. */
+/**
+ * Near-crossings of two identities' 3D paths (see the module doc): [{f, a, b, cue: 'crossing'}], ids as stored.
+ * `opts.fps` (default 30) turns `gapSeconds` into frames, at least one.
+ */
 export function crossingCandidates(track, opts) {
     var o = Object.assign({}, MULTI_CAMERA_REVIEW_DEFAULTS, opts || {});
+    var gapFrames = Math.max(1, Math.round(o.gapSeconds * (o.fps || 30)));
     var last = new Map(), res = [];
     var d3 = function (p, q) { return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]); };
     for (var p = 0; p < track.frames.length; p++) {
         var f = track.frames[p].frameIdx, ids = track.out[p], cs = track.cen[p];
         for (var i = 0; i < ids.length; i++) for (var j = i + 1; j < ids.length; j++) {
             var A = ids[i], B = ids[j], la = last.get(A), lb = last.get(B);
-            if (!cs[i] || !cs[j] || !la || !lb || f - la.f > o.gapFrames || f - lb.f > o.gapFrames) continue;
+            if (!cs[i] || !cs[j] || !la || !lb || f - la.f > gapFrames || f - lb.f > gapFrames) continue;
             var kept = d3(cs[i], la.c) + d3(cs[j], lb.c), swapped = d3(cs[i], lb.c) + d3(cs[j], la.c);
             if ((swapped - kept) / (swapped + kept + 1e-9) < o.margin) res.push({ f: f, a: Math.min(A, B), b: Math.max(A, B), cue: 'crossing' });
         }
@@ -114,7 +116,7 @@ export function multiCameraReview(session, fps, opts) {
     if (!track.frames.length) return [];
     var noInput = track.out.map(function () { return []; });
     var review = candidateMoments(track.frames, track.out, noInput, [], { trackletGapFrames: 0, clusterSeconds: o.clusterSeconds },
-        rate, crossingCandidates(track, o));
+        rate, crossingCandidates(track, Object.assign({}, o, { fps: rate })));
     var endRow = videoEndRow(track.frames, track.out, review, rate);
     if (endRow) review.push(endRow);
     var startRow = videoStartRow(track.frames, track.out, review, rate);
@@ -122,19 +124,23 @@ export function multiCameraReview(session, fps, opts) {
     return review.sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
 }
 
-var _bodyCache = new WeakMap();
-/** A multi-camera session's 3D body length: the median of `groupExtent` over ~5,000 groups sampled evenly. */
+/**
+ * A multi-camera session's 3D body length: the median of `groupExtent` over ~5,000 groups sampled evenly. Not
+ * cached: a re-triangulation changes the 3D without changing the frame count, and this runs once per press.
+ */
 export function sessionBodyLength3d(session) {
-    var c = _bodyCache.get(session), n = session && session.instanceGroups ? session.instanceGroups.size : 0;
-    if (c && c.n === n) return c.body;
-    var all = [];
-    if (n) session.instanceGroups.forEach(function (gs) { (gs || []).forEach(function (g) { if (g.points3d) all.push(g); }); });
-    var every = Math.max(1, Math.floor(all.length / 5000)), ext = [];
-    for (var i = 0; i < all.length; i += every) { var e = groupExtent(all[i]); if (e > 0) ext.push(e); }
+    if (!session || !session.instanceGroups || !session.instanceGroups.size) return 0;
+    var total = 0;
+    session.instanceGroups.forEach(function (gs) { (gs || []).forEach(function (g) { if (g.points3d) total++; }); });
+    var every = Math.max(1, Math.floor(total / 5000)), ext = [], i = 0;
+    session.instanceGroups.forEach(function (gs) {
+        (gs || []).forEach(function (g) {
+            if (!g.points3d) return;
+            if (i++ % every === 0) { var e = groupExtent(g); if (e > 0) ext.push(e); }
+        });
+    });
     ext.sort(function (x, y) { return x - y; });
-    var body = ext.length ? ext[ext.length >> 1] : 0;
-    _bodyCache.set(session, { n: n, body: body });
-    return body;
+    return ext.length ? ext[ext.length >> 1] : 0;
 }
 
 /**

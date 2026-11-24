@@ -552,9 +552,10 @@ export async function runIdSwitchChecks(opts) {
     // (pose/single-camera-tracking.js `candidateMoments`); the coat-brightness check scores those too (the
     // size and image checks score every contact without the tracker's labels, so they take no moments).
     var moments = single && session._idSwitchCandidates ? session._idSwitchCandidates : null;
-    // ...and the review list (single- or multi-camera Track All), which the image check pre-judges
-    // (pose/image-prejudge.js): the rows' frames and pairs.
-    var reviewRows = reviewRowsOf(session);
+    // ...and the review list, which the image check pre-judges (pose/image-prejudge.js): the rows' frames and pairs.
+    // Always on one camera; on several only when the Tracking Wizard's imageCheckPrejudgeMultiCamera is on, since it
+    // makes the check embed every sample and so changes what the check itself learns from.
+    var reviewRows = single || getTrackingThreshold('imageCheckPrejudgeMultiCamera') ? reviewRowsOf(session) : null;
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
         var res, t0 = performance.now();
@@ -742,9 +743,10 @@ function aboutHtml(st, ran) {
     var reviewAbout = rv ? (multi
         ? '<p><b>The review list</b> is where a switch is most likely across the cameras — where two animals\' 3D paths nearly ' +
           'cross, so the tracker could have paired them either way — plus a check of who is who where every animal is first in view ' +
-          'and at the end. About one place a minute. On 22 proofread 8-camera recordings, a reviewer who watched 2 s before to 5 s ' +
-          'after each place, and stepped back through earlier encounters where the labels were already swapped, took accuracy from ' +
-          '88.2% to 99.7%. Rows have no score: look at each, and Fix the ones where the labels swap.</p>'
+          'and at the end. About one place a minute. On 22 proofread 8-camera recordings, a simulated reviewer who always knew which ' +
+          'animal was which, watching 2 s before to 5 s after each place and stepping back through earlier encounters, took accuracy ' +
+          'from 88.2% to 99.7%: an upper bound, since a person cannot always tell look-alike animals apart. Rows have no score: look at ' +
+          'each, and Fix the ones where the labels swap.</p>'
         : '<p><b>The review list</b> is where a switch is most likely on one camera — where the tracker nearly ' +
         'chose the other assignment, where the input file\'s own tracks disagree with Track All, or where a lone animal\'s track ' +
         'changes, plus a check of who is who where every animal is first in view and at the end. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
@@ -762,9 +764,13 @@ function aboutHtml(st, ran) {
             (multi ? 'On several cameras each animal\'s views at a moment are averaged first. Run in this app on 186 places in 22 ' +
                 'proofread 8-camera recordings, ' + (st.results.image.imageModel
                     ? 'with a model trained on that rig\'s other recordings, it gave a verdict at 2 places in 3 and called 8 of 16 swaps, ' +
-                      'with no false alarm. '
-                    : 'it called 4 of 16 swaps, with no false alarm. ') : '') +
-            'Still watch each place: a verdict is a lead, not the answer.</p>' : '') : '';
+                      'with no false alarm (few swaps to go on). '
+                    : 'it called 4 of 16 swaps, with no false alarm (few swaps to go on). ') : '') +
+            'Still watch each place: a verdict is a lead, not the answer.</p>'
+        // several cameras, no pre-judge: it is opt-in there (imageCheckPrejudgeMultiCamera)
+        : multi ? '<p><b>Image pre-judge</b> (optional on several cameras): the image check can also say at each place whether ' +
+            'the two animals look swapped. Turn on "Image check: pre-judge the review list on several cameras" in Settings ▸ ' +
+            'Tracking Wizard ▸ ID Switches; the check then takes longer.</p>' : '') : '';
     if (!checks.length) return reviewAbout;
     return reviewAbout + aboutChecksHtml(st, checks);
 }
@@ -1005,8 +1011,8 @@ function swapForFix(session, from, to, idA, idB) {
 // further back than the place before
 // (whose stretch it is); and from then on this place's own fix may start anywhere back to there. On proofread data
 // a reviewer doing this (with a check row at the end of the tracking) matched one who watches every frame between
-// places (MODULES.md, 2026-11-09; on 22 proofread 8-camera recordings, without it the review lost 0.3–0.4 points,
-// 2026-11-16). Kept in memory only (`st.stepBack`), never saved.
+// places (MODULES.md; on 8-camera recordings, without it the review lost 0.3–0.4 points). Kept in memory only
+// (`st.stepBack`), never saved.
 var EARLIER_LEAD_SECONDS = 1;
 
 /** The step-back state of the place `f` stands for, or null. */

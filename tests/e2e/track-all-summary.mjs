@@ -9,10 +9,12 @@
  *     frames tracked, frames with both animals, how long tracking took (with its
  *     fps and real-time multiplier), a row per
  *     identity, the body-size check "No close encounters to check" with its own
- *     time, the image check "Not run" (no time), the review list's 2 places (its check rows where both
- *     animals are first in view and at the end, pose/multi-camera-review.js), and a Next step to review
- *     them, then triangulate, that says size cannot separate similar animals — with Review the list as
- *     the focused primary button and "Check by images…" and Triangulation Wizard… beside it.
+ *     time, the image check "Not run" (no time), the review list's 2 places (only its check rows where
+ *     both animals are first in view and at the end, pose/multi-camera-review.js: no crossing), and a Next
+ *     step that offers them, then triangulates, and says size cannot separate similar animals — with
+ *     Triangulation Wizard… as the focused primary button and "Check by images…" and "Review the list"
+ *     beside it (Review the list is the primary only when the list has a crossing,
+ *     multi-camera-review-list.mjs).
  *  2. While it is open the app's shortcuts do not act under it (`p` leaves
  *     Predicted alone); Esc closes it, and the shortcut works again after.
  *  2b. Closed, it can be reopened: the ID Switches tab has "Show Track All
@@ -27,9 +29,9 @@
  *     "Check by images…" cancelled with Esc reopens it reading "Cancelled" and
  *     still offering the check; run again, it reopens with the image row filled
  *     in and "Neither check flagged an ID switch." The tab is never opened.
- *  3. Enter presses the focused primary: the box closes and the ID Switches tab lands on the
- *     review list's first place. Reopened, its Triangulation Wizard… opens Settings on Default
- *     Triangulation, and nothing is triangulated. The panel's Triangulate All is
+ *  3. Its "Review the list" closes the box and the ID Switches tab lands on the review list's first
+ *     place. Reopened, Enter presses the focused primary, Triangulation Wizard…, which opens Settings
+ *     on Default Triangulation, and nothing is triangulated. The panel's Triangulate All is
  *     on that panel only; with an edit pending it reads "Apply & Triangulate All"
  *     and stores the edit before running; it closes Settings and runs Triangulate All.
  *     A re-run keeps existing 3D only while the threshold and cameras it was solved
@@ -178,11 +180,11 @@ try {
         `body-size check row says it ran and found nothing: "${size && size.text}"`);
     check(size && /^(<0\.1|\d+(\.\d)?) s$/.test(size.time), `body-size check row shows how long it took: "${size && size.time}"`);
     check(image && image.text === 'Not run' && image.time === '', `image check row, with no time: "${image && image.text}"`);
-    check(s.headline === 'Review the 2 places most likely to hold a switch.', `next-step headline: the review list ("${s.headline}")`);
+    check(s.headline === 'No ID switches were flagged.', `next-step headline: nothing flagged ("${s.headline}")`);
     check(/similar size/.test(s.caveat), `says body size cannot separate similar animals: "${s.caveat}"`);
     check(/review list/.test(s.steps[0]) && s.steps.some(t => /Triangulation Wizard/.test(t) && /Triangulate All/.test(t)),
-        `next steps: review the list, then choose and triangulate: ${JSON.stringify(s.steps)}`);
-    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Triangulation Wizard…', 'Close', 'Review the list']),
+        `next steps: optionally the list, then choose and triangulate: ${JSON.stringify(s.steps)}`);
+    check(JSON.stringify(s.buttons) === JSON.stringify(['Check by images…', 'Review the list', 'Close', 'Triangulation Wizard…']),
         `buttons: ${JSON.stringify(s.buttons)}`);
     check(s.focused === 'trackSummaryPrimary', `the recommended step is focused (${s.focused})`);
     check(/^Assigned 2 identities/.test(await statusText()), 'the status line still carries the pass\'s message');
@@ -317,17 +319,18 @@ try {
         (await import('/ui/id-switch-modal.js')).refreshIdSwitchPanel(); });
     check(!(await tab()).button, 'a session without a Track All has no button');
 
-    // ---- 3. Enter presses the primary (Review the list); Triangulation Wizard… opens Settings, nothing runs ----
+    // ---- 3. Review the list lands on its first place; Enter (Triangulation Wizard…) opens Settings, nothing runs ----
     await page.evaluate(async () => { await window.__buildTrackable('A2'); await (await import('/pose/tracker.js')).trackAll(); });
-    check((await summary()).focused === 'trackSummaryPrimary', 'precondition: summary open with its primary focused');
-    await page.keyboard.press('Enter');
+    check((await summary()).count === 1, 'precondition: summary open');
+    await page.click('#trackSummaryOverlay [data-action="review"]');
     const rev3 = await page.evaluate(() => ({ tab: !!document.querySelector('#tabIdSwitches.active'),
         current: (document.querySelector('#idSwitchPanel .id-switch-row.is-current') || {}).className || '' }));
     check((await summary()).count === 0 && rev3.tab && /cue-review/.test(rev3.current),
-        `Enter: the box closes and the ID Switches tab lands on the review list's first place (${JSON.stringify(rev3)})`);
+        `Review the list: the box closes and the ID Switches tab lands on the review list's first place (${JSON.stringify(rev3)})`);
     await page.click('#idSwitchTrackSummary');
+    check((await summary()).focused === 'trackSummaryPrimary', 'reopened, its primary (Triangulation Wizard…) is focused');
     const st3Before = await statusText();
-    await page.click('#trackSummaryOverlay [data-action="triangulationSettings"]');
+    await page.keyboard.press('Enter');
     const shown3 = await page.evaluate(() => {
         const o = document.querySelector('.settings-overlay');
         const panel = o && [...o.querySelectorAll('[data-panel]')].find(p => p.classList.contains('settings-panel') && p.offsetParent !== null);

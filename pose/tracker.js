@@ -1855,10 +1855,11 @@ async function runTrackingPass(range) {
         // 3D paths nearly cross, plus a check of who is who where every animal is first in view and at the end.
         // Track All only (a range is a targeted re-run), after the tail-mark pass, which may swap labels.
         var reviewFps = state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 30);
-        var nReview = 0;
+        var nReview = 0, nCrossings = 0;
         if (!isRange && lres.numIdentities > 1) {
             var review = multiCameraReview(session, reviewFps);
             nReview = review.length;
+            nCrossings = review.filter(function (r) { return r.cues.indexOf('crossing') >= 0; }).length;
             if (nReview) setReviewList(session, reviewResult(review, session, reviewFps));
         }
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
@@ -1898,6 +1899,7 @@ async function runTrackingPass(range) {
                     fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
                     tailMarks: tailMarks ? describeTailMarks(tailMarks) : null,
                     reviewPlaces: nReview,
+                    reviewCrossings: nCrossings,
                 };
                 var summaryChecks = {
                     size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),

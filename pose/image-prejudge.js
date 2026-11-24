@@ -41,13 +41,9 @@
  *
  * On several cameras (multi-camera Track All's review list, pose/multi-camera-review.js) each identity's
  * views at an image sample are pooled into one vector first (`poolViews`), then the rows are pre-judged once.
- * Measured 2026-11-17 on the 22 proofread SLAP sessions (8 cameras; runs/2026-11-16_multicam-prejudge on cup:
- * the app's own Track All and image check, the image check's default 3 largest views per animal, each session
- * scored with the package trained on the other fold's sessions). On the 186 crossing rows with a known answer:
- * package 8 of 16 swaps called, 0 false alarms, a verdict at 129 rows (the rest too few crops); built-in 4 of 16,
- * 0 false alarms. On every 3D close encounter (1,311 rows): package 11 of 14, 0 false alarms. Judging each
- * camera on its own and averaging (the first version) left most rows without enough crops on any one camera:
- * package 1 of 16 called, 2 false alarms. Every view instead of the 3 largest: no better, ~2x the time.
+ * On 22 proofread 8-camera recordings (186 places, 16 of them swaps): a package trained on the rig's other
+ * recordings called 8 swaps, the built-in model 4, neither a false alarm. Judging each camera on its own left
+ * most places with too few crops on any one camera.
  *
  * Pure — no DOM, no app state, no imports.
  */

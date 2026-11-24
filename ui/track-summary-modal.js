@@ -285,7 +285,9 @@ export function reopenTrackSummary(session, latest) {
     var counted = summarySession(session);
     if (!counted) return null;
     // ...and the review list as it is now (Clear removes it, and then it is no longer the next step)
-    var rv = results.review, opts = Object.assign({}, saved.opts, { reviewPlaces: rv && rv.ok ? rv.flags.length : 0 });
+    var rv = results.review && results.review.ok ? results.review : null;
+    var opts = Object.assign({}, saved.opts, { reviewPlaces: rv ? rv.flags.length : 0,
+        reviewCrossings: rv ? rv.flags.filter(function (f) { return (f.look || []).indexOf('crossing') >= 0; }).length : 0 });
     return showTrackSummaryModal(summarizeTrackedIdentities(counted, opts), checks, { session: counted });
 }
 

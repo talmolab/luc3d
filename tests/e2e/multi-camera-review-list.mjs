@@ -9,9 +9,11 @@
  *  2. On a place, "◂ Earlier encounter" (multi-camera too) goes to 1 s before the pair's close encounters by 3D
  *     distance (pairEncounters3d), latest first, then says there is none; after it the place's Fix may start before
  *     the place, and swaps the two identities from there to the end in EVERY view (and in the 3D groups).
- *  3. The image check pre-judges the list on several cameras (each animal's views at a sample averaged first): with a
- *     stand-in embedder whose two looks trade places from 0:40, the place at 0:20 "looks right" and the one at 0:40
- *     "looks swapped"; the check rows get no note; "About these flags" says how several cameras are combined.
+ *  3. On several cameras the pre-judge is opt-in (imageCheckPrejudgeMultiCamera, off by default): off, the image check
+ *     runs without one and "About these flags" says how to turn it on. On, it pre-judges the list (each animal's
+ *     views at a sample averaged first): with a stand-in embedder whose two looks trade places from 0:40, the place
+ *     at 0:20 "looks right" and the one at 0:40 "looks swapped"; the check rows get no note; "About these flags"
+ *     says how several cameras are combined.
  *
  * Run: node tests/e2e/multi-camera-review-list.mjs
  */
@@ -142,7 +144,9 @@ try {
     check(bad === 0 && moved > 0 && gBad === 0, `it swaps the pair from there to the end in all three views and the 3D groups (${moved} detections moved, ${bad} + ${gBad} wrong)`);
 
     console.log('\n3. The image check pre-judges the list on several cameras');
-    const pj = await page.evaluate(async () => {
+    const runImageCheck = (on) => page.evaluate(async (on) => {
+        const Set_ = await import('/ui/settings.js');
+        Set_.setTrackingThresholds(Object.assign(Set_.getTrackingThresholds(), { imageCheckPrejudgeMultiCamera: on ? 1 : 0 }));
         const S = window.__lucid.state.session, st = S._idSwitch, R = await import('/ui/id-switch-review.js'), M = await import('/ui/id-switch-modal.js');
         const id = n => S.identities.find(i => i.name === n).id;
         // labels by place for this part: id_0 is the animal on the left, id_1 the one on the right
@@ -166,7 +170,13 @@ try {
         return { ok: !!(res && res.ok), reason: res && res.reason, verdicts: res && res.prejudge ? res.prejudge.rows.map(p => p.verdict) : null,
                  at600: text(605), at1200: text(1205), atStart: text(0), atEnd: text(2249),
                  about: (document.querySelector('#idSwitchPanel .id-switch-about') || {}).textContent || '' };
-    });
+    }, on);
+    const off = await runImageCheck(false);
+    check(off.ok && off.verdicts === null && !/images:/.test(off.at600 + off.at1200),
+        `off by default: the image check runs without a pre-judge (${off.reason || 'ok'}, ${JSON.stringify(off.verdicts)})`);
+    check(/optional on several cameras/.test(off.about) && /pre-judge the review list on several cameras/.test(off.about),
+        '…and About these flags says how to turn it on');
+    const pj = await runImageCheck(true);
     check(pj.ok, `the image check ran (${pj.reason || 'ok'})`);
     check(JSON.stringify(pj.verdicts) === '["kept","swapped"]',
         `verdicts from the three cameras' pooled views: 0:20 looks right, 0:40 looks swapped (${JSON.stringify(pj.verdicts)})`);
