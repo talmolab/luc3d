@@ -59,13 +59,15 @@ const RULE2_ONLY_TAIL = /^t\d+$/i;
 
 /**
  * Would a package of crop rule `rule` see different crops than this app cuts,
- * on a skeleton with these node names? Only rule 1 on a skeleton naming tail
- * segments t0, t1… does; anywhere else the two rules cut the same crop.
+ * on a skeleton with these node names? Rule 1 does on a skeleton naming tail
+ * segments t0, t1…, and cuts the same crop anywhere else. A newer rule than this
+ * app's is one it cannot judge, so it is taken to differ on every skeleton.
  * @param {number} rule  a manifest's `cropRule` (parseModelManifest: absent = 1)
  * @param {string[]} nodeNames
  */
 export function cropRuleDiffers(rule, nodeNames) {
     if (rule === CROP_RULE) return false;
+    if (rule > CROP_RULE) return true;
     return (nodeNames || []).some(function (n) { return RULE2_ONLY_TAIL.test(String(n)); });
 }
 

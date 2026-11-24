@@ -139,7 +139,7 @@ import {
     isPoints3dSmoothed,
     unsmoothedPoints3d,
     clearPoints3dSmoothed,
-} from './pose-data.js?v=25b9e152ca16';
+} from './pose-data.js?v=b37e376d771e';
 import {
     ATA_DEFAULT_K,
     ATA_DEFAULT_HMAX,
@@ -147,9 +147,9 @@ import {
     ataSmoothSeriesInto,
     dltPointCovarianceInto,
     secondDifferenceSigma,
-} from './adaptive-temporal-averaging.js?v=25b9e152ca16';
-import { cameraIncludedInSolves, solveReprojErrorThreshold } from './triangulation-core.js?v=25b9e152ca16';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js?v=25b9e152ca16';
+} from './adaptive-temporal-averaging.js?v=b37e376d771e';
+import { cameraIncludedInSolves, solveReprojErrorThreshold } from './triangulation-core.js?v=b37e376d771e';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from './lazy-residency.js?v=b37e376d771e';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;

@@ -21,12 +21,12 @@
  * ui/image-embedder.js (BUILTIN_IMAGE_MODEL), import-export/save-load.js (markDirty).
  */
 
-import { BUILTIN_IMAGE_MODEL } from './image-embedder.js?v=25b9e152ca16';
+import { BUILTIN_IMAGE_MODEL } from './image-embedder.js?v=b37e376d771e';
 import {
     loadModelPackageFromFiles, loadModelPackageFromUrl, registeredModelPackage, registeredModelPackages,
-} from './image-model-package.js?v=25b9e152ca16';
-import { modelChoiceOf, cropRuleDiffers, CROP_RULE } from '../pose/image-model-manifest.js?v=25b9e152ca16';
-import { markDirty } from '../import-export/save-load.js?v=25b9e152ca16';
+} from './image-model-package.js?v=b37e376d771e';
+import { modelChoiceOf, cropRuleDiffers, CROP_RULE } from '../pose/image-model-manifest.js?v=b37e376d771e';
+import { markDirty } from '../import-export/save-load.js?v=b37e376d771e';
 
 function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
@@ -67,15 +67,19 @@ export function imageModelLineHtml(session) {
     const name = choice ? choice.name : BUILTIN_IMAGE_MODEL.name;
     const pkg = choice ? registeredModelPackage(choice.key) : null;
     const missing = choice && !pkg && !choice.url;
-    // A package trained on crops cut by an older rule than this app's, on a skeleton where the two differ.
+    // A package trained on crops cut by another rule than this app's, on a skeleton where the two differ.
     const nodeNames = ((session && session.skeleton && session.skeleton.nodes) || []).map(function (n) { return typeof n === 'string' ? n : n && n.name; });
-    const oldCrops = pkg && cropRuleDiffers(pkg.cropRule, nodeNames);
+    const otherCrops = pkg && cropRuleDiffers(pkg.cropRule, nodeNames);
+    const newer = otherCrops && pkg.cropRule > CROP_RULE;
     return '<div class="image-model-line">Image model: <b>' + escapeHtml(name) + '</b>' +
         (choice ? ' · flags below ' + escapeHtml(minus(choice.threshold)) : '') +
         (missing ? ' <span class="image-model-missing">(not loaded)</span>' : '') +
-        (oldCrops ? ' <span class="image-model-missing image-model-old-crops" title="It was trained when tail segments named t0, t1… still ' +
-            'counted as body, so its crops reached down the tail; this LUCID leaves them out. Its scores may be off: retrain it with ' +
-            'the current scripts/train_image_model.py.">(trained on older crops: retrain it)</span>' : '') +
+        (otherCrops ? ' <span class="image-model-missing image-model-old-crops" title="' + (newer
+            ? 'It was trained by a newer LUCID, which cuts crops by another rule; this LUCID cuts them differently on this ' +
+              'skeleton, so its scores may be off. Update LUCID to use it.">(trained on other crops: update LUCID)'
+            : 'It was trained when tail segments named t0, t1… still counted as body, so its crops reached down the tail; this ' +
+              'LUCID leaves them out. Its scores may be off: retrain it with the current scripts/train_image_model.py.">' +
+              '(trained on older crops: retrain it)') + '</span>' : '') +
         ' <button class="panel-btn image-model-change" type="button">Change…</button></div>';
 }
 
@@ -106,6 +110,7 @@ function describe(pkg) {
         ['Flag threshold', minus(pkg.threshold) + ' (the package\'s; the Wizard\'s applies to the built-in model)'],
         ['Precision', pkg.fp16 ? 'fp16 on GPUs that support it, else fp32' : 'fp32'],
         ['Crops', 'rule ' + pkg.cropRule + (pkg.cropRule === CROP_RULE ? ' (this LUCID\'s)'
+            : pkg.cropRule > CROP_RULE ? ' (newer than this LUCID\'s rule ' + CROP_RULE + ': update LUCID to use it as trained)'
             : ' (older than this LUCID\'s rule ' + CROP_RULE + ': on a skeleton that names tail segments t0, t1…, retrain it)')],
         ['Source', pkg.source.kind === 'url' ? pkg.source.url : 'folder ' + (pkg.source.folder || '') + ' (pick it again after a reload)'],
         ['Key', pkg.key.slice(0, 16) + '…']];
