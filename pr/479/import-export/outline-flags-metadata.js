@@ -14,8 +14,8 @@
 //
 // Depends on: pose/outline-flags.js, pose/outline-edits.js
 
-import { serializeOutlineFlags, ingestOutlineFlags } from '../pose/outline-flags.js?v=81287881f060';
-import { serializeOutlineEdits, ingestOutlineEdits } from '../pose/outline-edits.js?v=81287881f060';
+import { serializeOutlineFlags, ingestOutlineFlags } from '../pose/outline-flags.js?v=2d3d0e744de2';
+import { serializeOutlineEdits, ingestOutlineEdits } from '../pose/outline-edits.js?v=2d3d0e744de2';
 
 /** Every `metadata.lucid` key this module may write. */
 export const OUTLINE_FLAGS_METADATA_KEYS = ['outlineFlags', 'outlineEdits'];

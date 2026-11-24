@@ -25,7 +25,7 @@
  * Pure — no DOM, no app state.
  */
 
-import { candidateMoments, videoStartRow, videoEndRow, PAIR_ENCOUNTER_DEFAULTS } from './single-camera-tracking.js?v=81287881f060';
+import { candidateMoments, videoStartRow, videoEndRow, PAIR_ENCOUNTER_DEFAULTS } from './single-camera-tracking.js?v=2d3d0e744de2';
 
 /** The near-cross rows' settings: margin (scale-free), previous sighting at most `gapSeconds` back, clusters. */
 export const MULTI_CAMERA_REVIEW_DEFAULTS = Object.freeze({ margin: 0.01, gapSeconds: 1 / 6, clusterSeconds: 3 });
