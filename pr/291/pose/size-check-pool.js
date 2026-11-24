@@ -19,7 +19,7 @@
  * page instead (`scoreSizeGrid`), so a worker never costs a check. An abort
  * (`o.signal`) stops the worker and rejects with an AbortError.
  */
-import { scoreSizeGrid, sizeGridMessage, sizeScoreOptions } from './id-switch-check.js?v=5c6d61de792c';
+import { scoreSizeGrid, sizeGridMessage, sizeScoreOptions } from './id-switch-check.js?v=29f895d644eb';
 
 /** How long a new worker has to load before the page scores instead. */
 export const SIZE_WORKER_READY_MS = 10000;
@@ -71,7 +71,7 @@ export function scoreSizeGridOffThread(grid, o) {
         };
         if (o.signal) o.signal.addEventListener('abort', onAbort);
         try {
-            worker = new Worker(new URL('pose/size-check-worker.js?v=5c6d61de792c', document.baseURI), { type: 'module' });
+            worker = new Worker(new URL('pose/size-check-worker.js?v=29f895d644eb', document.baseURI), { type: 'module' });
         } catch (e) {
             inPage('the worker could not start (' + ((e && e.message) || e) + ')');
             return;

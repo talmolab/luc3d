@@ -46,8 +46,8 @@
  * Depends on: pose-data.js (readPoint3d), image-prejudge.js (the review list's pre-judge). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=5c6d61de792c';
-import { prejudgeReviewRows, unitVector } from './image-prejudge.js?v=5c6d61de792c';
+import { readPoint3d } from './pose-data.js?v=29f895d644eb';
+import { prejudgeReviewRows, unitVector } from './image-prejudge.js?v=29f895d644eb';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
