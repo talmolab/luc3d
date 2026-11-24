@@ -138,6 +138,16 @@ ok(p.next.steps.some(t => /Triangulation Wizard/.test(t)), 'switches found: tria
 eq(p.checks[0].text, '3 possible switches in 40 close encounters', 'check row: found');
 eq(p.checks[1].text, 'Not run', 'check row: image check off');
 eq(p.secondary.length, 0, 'switches found: no alternative checks offered');
+
+// a multi-camera review list: its primary only with a near-crossing on it; its two check rows alone are offered
+const withList = (crossings) => Object.assign({}, two, { reviewPlaces: crossings + 2, reviewCrossings: crossings });
+p = plan(withList(3), C('clear', { encounters: 10 }), C('off'));
+eq(p.primary.action + '|' + p.primary.label, 'review|Review the list', 'review list with crossings: Review the list is the primary');
+ok(p.secondary.some(b => b.action === 'triangulationSettings'), '…with Triangulation Wizard… beside it');
+p = plan(withList(0), C('clear', { encounters: 10 }), C('off'));
+eq(p.primary.action, 'triangulationSettings', 'review list of only its check rows: Triangulation Wizard… stays the primary');
+ok(p.secondary.some(b => b.action === 'review' && b.label === 'Review the list'), '…and Review the list is offered beside it');
+ok(/2 places on the review list/.test(p.next.steps[0]), `…and named as an optional step (${p.next.steps[0]})`);
 p = plan(two, C('clear', { switches: 0, encounters: 40 }), C('found', { switches: 1, encounters: 40 }));
 eq(p.primary.action, 'review', 'found by images alone still means review');
 

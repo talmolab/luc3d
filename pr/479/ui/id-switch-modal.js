@@ -30,29 +30,30 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=34600b38020d';
-import { state, getActiveSession } from './app-state.js?v=34600b38020d';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=34600b38020d';
-import { showPanelTab } from './panel-rail.js?v=34600b38020d';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=34600b38020d';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=34600b38020d';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=34600b38020d';
-import { getTrackingThreshold } from './settings.js?v=34600b38020d';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=34600b38020d';
-import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=34600b38020d';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=34600b38020d';
-import { pairEncounters3d } from '../pose/multi-camera-review.js?v=34600b38020d';
+import { noteProgress } from './progress-delta.js?v=cc2138a6b2f2';
+import { state, getActiveSession } from './app-state.js?v=cc2138a6b2f2';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=cc2138a6b2f2';
+import { showPanelTab } from './panel-rail.js?v=cc2138a6b2f2';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=cc2138a6b2f2';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=cc2138a6b2f2';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=cc2138a6b2f2';
+import { getTrackingThreshold } from './settings.js?v=cc2138a6b2f2';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=cc2138a6b2f2';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=cc2138a6b2f2';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraFixSwapsTracks, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=cc2138a6b2f2';
+import { pairEncounters3d } from '../pose/multi-camera-review.js?v=cc2138a6b2f2';
+import { formatFrameNumber } from './frame-readout.js?v=cc2138a6b2f2';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=34600b38020d';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=34600b38020d';
-import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=34600b38020d';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=34600b38020d';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=34600b38020d';
-import { createBrightnessSampler } from './brightness-sampler.js?v=34600b38020d';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=cc2138a6b2f2';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=cc2138a6b2f2';
+import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=cc2138a6b2f2';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=cc2138a6b2f2';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=cc2138a6b2f2';
+import { createBrightnessSampler } from './brightness-sampler.js?v=cc2138a6b2f2';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=34600b38020d';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=cc2138a6b2f2';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -551,9 +552,10 @@ export async function runIdSwitchChecks(opts) {
     // (pose/single-camera-tracking.js `candidateMoments`); the coat-brightness check scores those too (the
     // size and image checks score every contact without the tracker's labels, so they take no moments).
     var moments = single && session._idSwitchCandidates ? session._idSwitchCandidates : null;
-    // ...and the review list (single- or multi-camera Track All), which the image check pre-judges
-    // (pose/image-prejudge.js): the rows' frames and pairs.
-    var reviewRows = reviewRowsOf(session);
+    // ...and the review list, which the image check pre-judges (pose/image-prejudge.js): the rows' frames and pairs.
+    // Always on one camera; on several only when the Tracking Wizard's imageCheckPrejudgeMultiCamera is on, since it
+    // makes the check embed every sample and so changes what the check itself learns from.
+    var reviewRows = single || getTrackingThreshold('imageCheckPrejudgeMultiCamera') ? reviewRowsOf(session) : null;
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
         var res, t0 = performance.now();
@@ -741,9 +743,10 @@ function aboutHtml(st, ran) {
     var reviewAbout = rv ? (multi
         ? '<p><b>The review list</b> is where a switch is most likely across the cameras — where two animals\' 3D paths nearly ' +
           'cross, so the tracker could have paired them either way — plus a check of who is who where every animal is first in view ' +
-          'and at the end. About one place a minute. On 22 proofread 8-camera recordings, a reviewer who watched 2 s before to 5 s ' +
-          'after each place, and stepped back through earlier encounters where the labels were already swapped, took accuracy from ' +
-          '88.2% to 99.7%. Rows have no score: look at each, and Fix the ones where the labels swap.</p>'
+          'and at the end. About one place a minute. On 22 proofread 8-camera recordings, a simulated reviewer who always knew which ' +
+          'animal was which, watching 2 s before to 5 s after each place and stepping back through earlier encounters, took accuracy ' +
+          'from 88.2% to 99.7%: an upper bound, since a person cannot always tell look-alike animals apart. Rows have no score: look at ' +
+          'each, and Fix the ones where the labels swap.</p>'
         : '<p><b>The review list</b> is where a switch is most likely on one camera — where the tracker nearly ' +
         'chose the other assignment, where the input file\'s own tracks disagree with Track All, or where a lone animal\'s track ' +
         'changes, plus a check of who is who where every animal is first in view and at the end. About one place a minute; on proofread videos about 9 of every 10 switches were within 2 s of one. Rows have ' +
@@ -761,9 +764,13 @@ function aboutHtml(st, ran) {
             (multi ? 'On several cameras each animal\'s views at a moment are averaged first. Run in this app on 186 places in 22 ' +
                 'proofread 8-camera recordings, ' + (st.results.image.imageModel
                     ? 'with a model trained on that rig\'s other recordings, it gave a verdict at 2 places in 3 and called 8 of 16 swaps, ' +
-                      'with no false alarm. '
-                    : 'it called 4 of 16 swaps, with no false alarm. ') : '') +
-            'Still watch each place: a verdict is a lead, not the answer.</p>' : '') : '';
+                      'with no false alarm (few swaps to go on). '
+                    : 'it called 4 of 16 swaps, with no false alarm (few swaps to go on). ') : '') +
+            'Still watch each place: a verdict is a lead, not the answer.</p>'
+        // several cameras, no pre-judge: it is opt-in there (imageCheckPrejudgeMultiCamera)
+        : multi ? '<p><b>Image pre-judge</b> (optional on several cameras): the image check can also say at each place whether ' +
+            'the two animals look swapped. Turn on "Image check: pre-judge the review list on several cameras" in Settings ▸ ' +
+            'Tracking Wizard ▸ ID Switches; the check then takes longer.</p>' : '') : '';
     if (!checks.length) return reviewAbout;
     return reviewAbout + aboutChecksHtml(st, checks);
 }
@@ -923,14 +930,19 @@ function openFixDialog(session, st, f, asPlace) {
         endWhy = plan.edge == null ? 'the end of the video'
             : 'the end of their next encounter (' + fmtTenths(plan.edge) + '), after which the labels look right again';
     }
+    var single = !!singleCameraName(session);
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-fix-modal" role="dialog" aria-labelledby="idSwitchFixTitle">' +
         '<h3 id="idSwitchFixTitle">Fix ID switch</h3>' +
         '<p>Swap ' + (pickPair ? pairSelect(session, 'idSwitchFixA', plan.nameA) + ' ↔ ' + pairSelect(session, 'idSwitchFixB', plan.nameB)
             : idName(session, plan.nameA) + ' ↔ ' + idName(session, plan.nameB)) + ' on <b>frames ' +
-        (plan.from + 1).toLocaleString() + '–' + (plan.to + 1).toLocaleString() + '</b> (' + fmtTenths(plan.from) + '–' +
-        fmtTenths(plan.to) + ')' + (singleCameraName(session) ? ' (their tracks)' : ', in every camera view') + '.</p>' +
+        formatFrameNumber(plan.from + 1) + '–' + formatFrameNumber(plan.to + 1) + '</b> (' + fmtTenths(plan.from) + '–' +
+        fmtTenths(plan.to) + ')' + (single ? ' <span id="idSwitchFixWhere">(their tracks)</span>' : ', in every camera view') + '.</p>' +
+        // One camera, an identity edited apart from its track: the Fix can swap identities only (swapSingleCameraIdentities).
+        (single ? '<p class="id-switch-fix-warn" id="idSwitchFixIdsOnly" style="display:none">These two do not each keep one ' +
+            'track over these frames (an identity was edited apart from its track), so this swaps their identities only: ' +
+            'a file opened in SLEAP will not carry the fix.</p>' : '') +
         '<ul class="id-switch-fix-why"><li>Starts at ' + fr(plan.from) + ': ' + startWhy + '.</li>' +
         '<li>Ends at ' + fr(plan.to) + ': ' + endWhy + '.</li></ul>' +
         (f.followOf != null ? '<p class="id-switch-fix-warn">This flag follows the switch at ' + fmtTime(f.followOf) +
@@ -951,6 +963,20 @@ function openFixDialog(session, st, f, asPlace) {
     document.addEventListener('keydown', onKey, true);
     overlay.querySelector('#idSwitchFixCancel').addEventListener('click', close);
     overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(); });
+    // One camera: say whether this pair's Fix swaps their tracks or (identities edited apart) only the identities.
+    var showWhere = function () {
+        if (!single) return;
+        var a = idA, b = idB;
+        if (pickPair) {
+            a = identityIdByName(session, overlay.querySelector('#idSwitchFixA').value);
+            b = identityIdByName(session, overlay.querySelector('#idSwitchFixB').value);
+        }
+        var idsOnly = a != null && b != null && a !== b && singleCameraFixSwapsTracks(session, plan.from, plan.to, a, b) === false;
+        overlay.querySelector('#idSwitchFixWhere').textContent = idsOnly ? '(their identities only)' : '(their tracks)';
+        overlay.querySelector('#idSwitchFixIdsOnly').style.display = idsOnly ? '' : 'none';
+    };
+    showWhere();
+    if (pickPair) ['#idSwitchFixA', '#idSwitchFixB'].forEach(function (sel) { overlay.querySelector(sel).addEventListener('change', showWhere); });
     overlay.querySelector('#idSwitchFixOk').addEventListener('click', function () {
         if (pickPair) {
             var a = overlay.querySelector('#idSwitchFixA').value, b = overlay.querySelector('#idSwitchFixB').value;
@@ -985,8 +1011,8 @@ function swapForFix(session, from, to, idA, idB) {
 // further back than the place before
 // (whose stretch it is); and from then on this place's own fix may start anywhere back to there. On proofread data
 // a reviewer doing this (with a check row at the end of the tracking) matched one who watches every frame between
-// places (MODULES.md, 2026-11-09; on 22 proofread 8-camera recordings, without it the review lost 0.3–0.4 points,
-// 2026-11-16). Kept in memory only (`st.stepBack`), never saved.
+// places (MODULES.md; on 8-camera recordings, without it the review lost 0.3–0.4 points). Kept in memory only
+// (`st.stepBack`), never saved.
 var EARLIER_LEAD_SECONDS = 1;
 
 /** The step-back state of the place `f` stands for, or null. */
@@ -1036,8 +1062,15 @@ function applyFix(session, st, f, plan, idA, idB) {
     if (nav) nav(idSwitchLeadInFrame(f, state.fps, idSwitchLeadSeconds(session)));   // back to the lead-in: play to see the fixed labels
     afterIdentityChange(session);
     updateIdSwitchProgress(state.currentFrame);
-    setStatus('Fixed: swapped ' + plan.nameA + ' ↔ ' + plan.nameB + ' on frames ' + (plan.from + 1).toLocaleString() + '–' +
-        (plan.to + 1).toLocaleString() + ' (' + r.frames.toLocaleString() + ' tracked frames changed) — press play to check it', 'success');
+    var span = ' on frames ' + formatFrameNumber(plan.from + 1) + '–' + formatFrameNumber(plan.to + 1) +
+        ' (' + formatFrameNumber(r.frames || 0) + ' tracked frames changed)';
+    if (r && r.tracks === false) {
+        // One camera, but an identity was edited apart from its track: only the identity layer moved.
+        setStatus('Fixed the identities only: swapped ' + plan.nameA + ' ↔ ' + plan.nameB + span + '. Their tracks are as they ' +
+            'were (an identity had been edited apart from its track), so a file opened in SLEAP will not carry this fix — press play to check it', 'warning');
+    } else {
+        setStatus('Fixed: swapped ' + plan.nameA + ' ↔ ' + plan.nameB + span + ' — press play to check it', 'success');
+    }
 }
 
 /** Swap the latest fix's frames back (the swap is its own inverse) and forget it. */

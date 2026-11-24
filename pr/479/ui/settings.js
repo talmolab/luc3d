@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=34600b38020d';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=cc2138a6b2f2';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -96,6 +96,9 @@ const ACTION_CATALOG = [
     { id: 'togglePredicted', label: 'Toggle Predictions', category: 'View', binding: 'p', editable: true, dispatched: true },
     { id: 'toggleReproj', label: 'Toggle Reprojections', category: 'View', binding: 'r', editable: true, dispatched: true },
     { id: 'toggleErrors', label: 'Toggle Errors', category: 'View', binding: 'e', editable: true, dispatched: true },
+    { id: 'toggleOutlines', label: 'Toggle Animal Outlines', category: 'View', binding: 'o', editable: true, dispatched: true },
+    { id: 'flagOutline', label: 'Flag the Outline Under the Pointer', category: 'View', binding: 'Shift+o', editable: true, dispatched: true },
+    { id: 'outlineBrush', label: 'Outline Brush (hold left to draw, right to erase)', category: 'View', binding: 'b', editable: true, dispatched: true },
     { id: 'definePlanes', label: 'Toggle Defining Plane Mode', category: 'View', binding: 'Mod+Shift+P', editable: true, dispatched: true },
 
     // --- Help ---
@@ -453,6 +456,14 @@ const TRACKING_THRESHOLDS = [
         desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
     },
     {
+        // Off by default (talmolab/luc3d#479 review): pre-judging embeds every crops-per-second sample, not the
+        // background rate, and the check learns its identity metric from those, so on several cameras it is
+        // slower and its own flags may move; neither is measured on a large project yet. One camera always pre-judges.
+        id: 'imageCheckPrejudgeMultiCamera', label: 'Image check: pre-judge the review list on several cameras', default: 0,
+        min: 0, max: 1, step: 1, kind: 'toggle',
+        desc: 'After a multi-camera Track All, also have the image check say at each place on the review list whether the two animals look swapped (as it always does on one camera). It then embeds every sample at the crops-per-second rate instead of the rate away from contacts, so it is slower, and its own flags can differ slightly. On 22 proofread 8-camera recordings it called 8 of 16 swaps with a rig\'s own model and 4 with the built-in one, with no false alarm.',
+    },
+    {
         // A whole percentage (1-100). New ids, as each time the scale changed (the unreleased
         // imageCheckMaxGpu/Cpu were 10-100, then imageCheckGpuTime/CpuCores 0.10-1.00), so a value saved on
         // an earlier scale is never read on this one — a stored 0.5 would otherwise become 1%.
@@ -511,7 +522,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'stale', 'matchGate', 'maxPenalty', 'matchReproj',
     'scWindowSize', 'scOksStddev', 'scConnectBreaks', 'scLoneAnimal', 'scRemoveDuplicates', 'scDuplicateIou', 'scDuplicateOks',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews',
-    'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
+    'imageCheckPrejudgeMultiCamera', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
     'autoBrightnessSwitchCheck', 'brightnessCheckThreshold', 'brightnessCheckHz',
     'reprojErrorThreshold',
 ]);
@@ -524,7 +535,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
  */
 export const ID_SWITCH_SETTING_IDS = [
     'autoSwitchCheck', 'autoImageSwitchCheck', 'autoBrightnessSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz',
-    'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
+    'imageCheckMaxViews', 'imageCheckPrejudgeMultiCamera', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
     'brightnessCheckThreshold', 'brightnessCheckHz',
 ];
 

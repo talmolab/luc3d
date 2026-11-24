@@ -47,7 +47,7 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 
 const EXPECTED = [
     ['tabInstances', 'Instances'], ['tabVisibility', 'Visibility'], ['tabIdSwitches', 'ID Switches'],
-    ['tabVideos', 'Videos'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
+    ['tabOutlines', 'Outlines'], ['tabVideos', 'Videos'], ['tabCameras', 'Cameras'], ['tabSkeleton', 'Skeleton'], ['tabSession', 'Session'],
     ['tabMemory', 'Memory'],
 ];
 // First path of the Lucide glyph each panel must show. Instances/Visibility/
@@ -57,6 +57,7 @@ const FIRST_PATH = {
     tabInstances: 'M16 21v-2a4 4 0 0 0-4-4H6',
     tabVisibility: 'M2.062 12.348',
     tabIdSwitches: 'M8 3 4 7l4 4',
+    tabOutlines: 'M3.704 14.467', // lasso
     tabVideos: null, // rect first
     tabCameras: 'M13.997 4a2 2 0 0 1',
     tabSkeleton: 'M17 10c.7-.7 1.69 0 2.5 0',
