@@ -37,7 +37,9 @@
  *   - post-training inference hands the trained models to the Inference panel (`runTrainedModels`),
  *     which runs them on the current session's views each was trained for, with its usual progress,
  *     Cancel and (worker) Fetch & Load; targets and defaults in `pose/training-handoff.js` (Random
- *     sample, not sleap-app's Suggested frames). Full Configuration comes in a later update.
+ *     sample, not sleap-app's Suggested frames);
+ *   - Full Configuration... (`ui/training-config-dialog.js`, fields `ui/training-config-fields.js`) edits the
+ *     configs themselves: the panel's fields are written into them on open and re-read after each edit.
  *
  * Loaded on every build: `pose/initialization.js` imports it after the Inference panel. It talks
  * to native code only through `window.lucidDesktop`, inside `setupTrainingPanel`.
@@ -70,6 +72,7 @@ import { rowWithLocalProgress } from '../pose/training-local-progress.js';
 import { POST_TRAINING_TARGETS, POST_TRAINING_DEFAULTS, POST_TRAINING_TARGET_HINT, inferencePipelineFor, trainedModels,
     skeletonChangeProblem } from '../pose/training-handoff.js';
 import { runTrainedModels, showInferencePanel } from './inference-panel.js';
+import { openTrainingConfigDialog, trainingConfigDialog } from './training-config-dialog.js';
 
 export const TRAINING_TAB_ID = 'tabTraining';
 
@@ -123,6 +126,8 @@ function refresh() {
     if (form) form.runRefreshers();
     const mon = trainingMonitor();
     if (mon && monitorIndex != null) mon.update();
+    const dlg = trainingConfigDialog();
+    if (dlg) dlg.update();
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +291,8 @@ function setSlotConfig(slot, text, name, filename, preset) {
     let doc;
     try { doc = YAML.parse(text); } catch (e) { run.note = 'Could not read ' + (filename || 'the config') + ': ' + e.message; refresh(); return false; }
     if (!doc || typeof doc !== 'object') { run.note = (filename || 'The config') + ' is not a training config.'; refresh(); return false; }
-    cfg.slots[slot] = { name: name, filename: filename, preset: !!preset, doc: doc, head: detectHeadType(doc) };
+    // `text`: what Reset to profile defaults goes back to (the preset, or the file as it was read).
+    cfg.slots[slot] = { name: name, filename: filename, preset: !!preset, doc: doc, head: detectHeadType(doc), text: text };
     cfg.hp[slot] = hyperparamsFromConfig(doc);
     if ((slot === 'centered_instance' || slot === 'config') && cfg.hp[slot].anchorPart != null && cfg.anchorPart == null) cfg.anchorPart = cfg.hp[slot].anchorPart;
     run.note = null;
@@ -350,13 +356,44 @@ function readConfigFile(slot, file) {
     }, function (e) { run.note = 'Could not read ' + file.name + ': ' + e.message; refresh(); });
 }
 
-/** The finished YAML of a slot for one group's run. */
-function configText(slot, runName) {
-    const s = cfg.slots[slot];
+/** A slot's panel fields as `applyPanelSettings` takes them (Top-Down: the panel's one Anchor Part). */
+function effectiveHp(slot) {
     const hp = Object.assign({}, cfg.hp[slot]);
     if (cfg.modelType === 'top_down' || cfg.modelType === 'top_down_id') hp.anchorPart = cfg.anchorPart || null;
-    const doc = finalizeConfig(applyPanelSettings(s.doc, hp), { runName: runName });
-    return YAML.stringify(doc);
+    return hp;
+}
+
+/** The finished YAML of a slot for one group's run. */
+function configText(slot, runName) {
+    return YAML.stringify(finalizeConfig(applyPanelSettings(cfg.slots[slot].doc, effectiveHp(slot)), { runName: runName }));
+}
+
+/**
+ * sleap-app's Full Configuration... (`ui/training-config-dialog.js`). It edits the configs themselves, so the
+ * panel's fields are written into them first and re-read from them after each edit: both always agree.
+ */
+function openFullConfig(initialTab) {
+    if (!YAML || isRunning()) return;
+    const slots = getConfigSlots(cfg.modelType).filter(function (s) { return !!cfg.slots[s]; });
+    if (!slots.length) return;
+    slots.forEach(function (s) { cfg.slots[s].doc = applyPanelSettings(cfg.slots[s].doc, effectiveHp(s)); });
+    openTrainingConfigDialog({
+        slots: function () { return slots.filter(function (s) { return !!cfg.slots[s]; }).map(function (s) { return { slot: s, label: getSlotLabel(s).replace(' Config', '') }; }); },
+        doc: function (s) { return cfg.slots[s] ? cfg.slots[s].doc : null; },
+        changed: function (s) {
+            const keep = cfg.hp[s] ? cfg.hp[s].anchorPart : null;
+            cfg.hp[s] = Object.assign(hyperparamsFromConfig(cfg.slots[s].doc), { anchorPart: keep });
+            refresh();
+        },
+        reset: function (which) {
+            (which || slots).forEach(function (s) { const c = cfg.slots[s]; if (c && c.text) setSlotConfig(s, c.text, c.name, c.filename, c.preset); });
+            refresh();
+        },
+        yamlOf: function (s) { return YAML.stringify(finalizeConfig(applyPanelSettings(cfg.slots[s].doc, effectiveHp(s)), {})); },
+        fileNameOf: function (s) { return (cfg.slots[s].head || s) + '.yaml'; },
+        isBusy: function () { return isRunning() || dry.status === 'running'; },
+        initialTab: initialTab,
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -545,9 +582,7 @@ function groupModels(g, slots, runNames) {
 
 /** The finished config (an object) of a slot for one run name. */
 function configObject(slot, runName) {
-    const hp = Object.assign({}, cfg.hp[slot]);
-    if (cfg.modelType === 'top_down' || cfg.modelType === 'top_down_id') hp.anchorPart = cfg.anchorPart || null;
-    return finalizeConfig(applyPanelSettings(cfg.slots[slot].doc, hp), { runName: runName });
+    return finalizeConfig(applyPanelSettings(cfg.slots[slot].doc, effectiveHp(slot)), { runName: runName });
 }
 
 /**
@@ -1409,6 +1444,12 @@ function buildRemoteSection(top) {
 }
 
 function buildRunBlock(top) {
+    // sleap-app: "Full Configuration..." above the run buttons, once there are configs; not while a run goes.
+    const full = button('Full Configuration...', 'btn btn-sm trn-fullcfg', 'settings-2');
+    full.id = 'trnFullConfig';
+    full.addEventListener('click', function () { openFullConfig(); });
+    top.appendChild(form.shownIf(full, function () { return getConfigSlots(cfg.modelType).some(function (s) { return !!cfg.slots[s]; }); }));
+    form.onRefresh(function () { full.disabled = isRunning(); });
     const startRow = el('div', 'trn-btns trn-start-row');
     const startBtn = button('Start Remote Training', 'btn btn-primary inf-run', 'upload');
     startBtn.id = 'trnStart';
@@ -1785,6 +1826,9 @@ export async function setupTrainingPanel() {
 
 /** Test/automation hook: show the panel. */
 export function showTrainingPanel() { return showPanelTab(TRAINING_TAB_ID); }
+
+/** For tests: open Full Configuration (as its button does). */
+export function _openTrainingConfig(tab) { openFullConfig(tab); }
 
 /** For tests: the live config and run state (read-only use). */
 export function _trainingState() {

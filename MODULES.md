@@ -13294,8 +13294,10 @@ of the running token; Dry run (sleap-app `DryRunResult` states, incl. "This slea
 Nothing first, the Inference panel's targets, default Random sample of 20) with Skip user labeled frames and
 Existing predictions: once a run completes, the trained models go to the Inference panel (`runTrainedModels`;
 local or worker, as trained), skipped when the skeleton's node names changed since Start; a status box says how
-it went, with Show Inference panel. A Start clears the dry run's result (sleap-app). Full Configuration is a later
-phase. A row with a chart
+it went, with Show Inference panel. A Start clears the dry run's result (sleap-app). "Full Configuration..." (above
+the Start row, not while a run goes) opens `ui/training-config-dialog.js` on the slots' configs: the panel's fields
+are baked into them first (`applyPanelSettings` via `effectiveHp`) and `hyperparamsFromConfig` re-reads them after
+each edit; Reset to profile defaults re-reads each slot's original text (`cfg.slots[slot].text`). A row with a chart
 opens the Training Monitor (`ui/training-monitor.js`); rows keep their start / epoch / end times and the
 config's plateau settings for its runtime lines. The label counts walk every lazy store row, so they are recomputed when the project changes or
 every 15 s while the panel shows, not on each 2 s refresh. Loaded on every build by one literal dynamic
@@ -13308,8 +13310,37 @@ import in `pose/initialization.js`, after the Inference panel. **Exports.** `TRA
 `./connect/backend-picker.js`, `./connect/remote-training.js`, `../pose/connect/remote-training-plan.js`,
 `../pose/connect/store.js` (`configureConnect`: the YAML parser for `withYamlRunName`),
 `../pose/connect/timestamp.js`, `../pose/training-metrics.js`, `./training-monitor.js`, `../pose/training-local-progress.js`,
-`../pose/training-handoff.js`, `./inference-panel.js`; the importmap's `yaml` (dynamic). **Imported by.**
-`pose/initialization.js` (dynamic). **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/desktop-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/panel-rail.mjs`.
+`../pose/training-handoff.js`, `./inference-panel.js`, `./training-config-dialog.js`; the importmap's `yaml` (dynamic). **Imported by.**
+`pose/initialization.js` (dynamic). **Exports** also `_openTrainingConfig(tab)` (tests). **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/desktop-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/training-config-dialog.mjs`, `tests/e2e/panel-rail.mjs`.
+
+### ui/training-config-dialog.js
+
+**Purpose.** The Training panel's Full Configuration dialog, a replica of sleap-app `TrainingConfigDialog.tsx`:
+"Training Configuration", a Pipeline tab and one tab per model (`trn-seg` buttons, `aria-pressed`), "Search
+parameters..." (the best 8 matches, each with Training Pipeline / Per-Head; a click switches tab, scrolls to the
+field and flashes it), a left nav of the tab's sections, every field with its ⓘ, edits saved as you type ("All
+changes saved"), footer Reset to profile defaults… (confirmed through `ui/ask.js`) / Copy to clipboard / Save
+configuration files… (one `<head>.yaml` per model, as sent, via `<a download>`) / Done. Pipeline fields write every
+model's config, a model tab's only that model's; `host.changed(slot)` after each edit. Rows hide with `field.when`.
+Vanilla DOM card (Esc / Done / scrim close, Tab trapped by `trapModal`, `data-shortcut-modal`); the content column
+is the one scroller. LUCID changes: no W&B, devices fixed at 1, no job package or run scripts, backbone shown (UNet
+settings only). **Exports.** `openTrainingConfigDialog(host)` → `{close, update, focus, isOpen}`,
+`trainingConfigDialog()`. **Imports.** `./training-config-fields.js`, `./connect/layers.js` (`trapModal`),
+`./panel-form.js`, `./ask.js`. **Imported by.** `ui/training-panel.js`. **Tests.** `tests/e2e/training-config-dialog.mjs`.
+
+### ui/training-config-fields.js
+
+**Purpose.** The Full Configuration dialog's fields, DOM-free: sleap-app's field set (sections, labels, hints)
+each mapped to sleap-nn config paths, `{id, tab, section, label, hint, kind, get(doc), set(doc, v), options, min,
+max, step, nullable, when, readOnly, note}`. Pipeline: Sigma for Nodes, Convert Colors, Data Pipeline (streaming
+sets num_workers 0), Dataloader Workers, Accelerator, Number of Devices (1, read-only), Evaluation, Output
+(checkpoints, prediction images). Per model: Data (validation fraction, overfit, seed, input scaling, crop size),
+Augmentation (rotation as the panel writes it, scale, intensity toggles), Optimization (max epochs, batch size,
+learning rate, LR scheduler with one block at a time and sleap-nn's defaults, plateau stopping, online mining),
+Model (backbone read-only, UNet settings, sigma, output stride, PAF loss weight). Every key it writes must be in
+`src-tauri/src/train_config_keys.json`. **Exports.** `CONFIG_FIELDS`, `SECTIONS`, `LR_SCHEDULERS`,
+`searchFields(query)`, `coerce(field, raw)`, `getPath`, `setPath`. **Imports.** `./training-args.js`. **Imported
+by.** `ui/training-config-dialog.js`. **Tests.** `tests/test-training-config-fields.mjs`.
 
 ### ui/training-monitor.js
 
@@ -13342,10 +13373,11 @@ the offline `yaml` package is installed).
 
 **Purpose.** The form toolkit of the sleap-app-style rail panels, same markup and classes as the
 Inference panel's own helpers: `el`, `icon`, `button`, and `createPanelForm({isBusy, refresh})` →
-`{onRefresh, runRefreshers, hintBtn, fieldLabel, section, sep, check, numField, selectField, shownIf}`
-(controls re-read their value on every refresh, disabled while busy). Used by the Training panel; the
-Inference panel keeps its own copy for now. **Imports.** `./info-tip.js`, `./panel-rail-icons.js`.
-**Imported by.** `ui/training-panel.js`.
+`{onRefresh, runRefreshers, clear, hintBtn, fieldLabel, section, sep, check, numField, selectField, shownIf}`
+(controls re-read their value on every refresh, disabled while busy; `numField` takes `nullable` (an empty box
+sets null) and `placeholder`; `clear` drops the refreshers of a view that rebuilds its rows). Used by the
+Training panel and its Full Configuration dialog; the Inference panel keeps its own copy for now. **Imports.**
+`./info-tip.js`, `./panel-rail-icons.js`. **Imported by.** `ui/training-panel.js`, `ui/training-config-dialog.js`.
 
 ### ui/panel-rail-icons.js
 
@@ -13358,7 +13390,7 @@ Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
 and the section headers' ChevronDown / ChevronRight / X (sleap-app's). The
 desktop Inference panel adds Zap (its rail icon, sleap-app's) and the glyphs its
 buttons and status use (Folder, FolderOpen, Play, LoaderCircle, CircleCheck,
-CircleX, CircleAlert, Download, Copy, Maximize2). The Connect panel adds Globe (its rail icon), Plug, Unplug, Trash2, ExternalLink and TriangleAlert. The Training panel adds GraduationCap (its rail icon, sleap-app's), Square, Ban, ChartLine, Lightbulb, Upload and FlaskConical. Inline strings: no fetch, so offline mode and the version stamp are unaffected.
+CircleX, CircleAlert, Download, Copy, Maximize2). The Connect panel adds Globe (its rail icon), Plug, Unplug, Trash2, ExternalLink and TriangleAlert. The Training panel adds GraduationCap (its rail icon, sleap-app's), Square, Ban, ChartLine, Lightbulb, Upload, FlaskConical and Settings2 (Full Configuration...). Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 
 **Key exports.** `RAIL_ICONS` (Lucide name → SVG child markup),
 `railIconSvg(name)` (wraps it in Lucide's 24x24 stroke-2 currentColor `<svg>`;

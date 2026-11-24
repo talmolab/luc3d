@@ -44,6 +44,8 @@ export function createPanelForm(o) {
     const refreshers = [];
     function onRefresh(f) { refreshers.push(f); }
     function runRefreshers() { refreshers.forEach(function (f) { f(); }); }
+    /** Forget every refresher (a view that rebuilds its rows, e.g. a dialog switching tabs). */
+    function clear() { refreshers.length = 0; }
 
     function hintBtn(text) {
         const b = el('button', 'plane-section-info inf-hint');
@@ -101,8 +103,11 @@ export function createPanelForm(o) {
         if (oo.max != null) input.max = oo.max;
         input.step = oo.step != null ? oo.step : (oo.integer ? 1 : 'any');
         if (oo.id) input.id = oo.id;
+        if (oo.placeholder) input.placeholder = oo.placeholder;
         input.addEventListener('change', function () {
             let n = Number(input.value.trim());
+            // `nullable`: an empty box means "none" (e.g. Auto), not "keep the old value".
+            if (input.value.trim() === '' && oo.nullable) { set(null); o.refresh(); return; }
             if (input.value.trim() === '' || !Number.isFinite(n)) { o.refresh(); return; }
             if (oo.integer) n = Math.round(n);
             if (oo.min != null) n = Math.max(oo.min, n);
@@ -156,7 +161,7 @@ export function createPanelForm(o) {
     }
 
     return {
-        onRefresh: onRefresh, runRefreshers: runRefreshers, hintBtn: hintBtn, fieldLabel: fieldLabel,
+        onRefresh: onRefresh, runRefreshers: runRefreshers, clear: clear, hintBtn: hintBtn, fieldLabel: fieldLabel,
         section: section, sep: sep, check: check, numField: numField, selectField: selectField, shownIf: shownIf,
     };
 }
