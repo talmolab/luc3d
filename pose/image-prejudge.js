@@ -39,6 +39,12 @@
  * rows: 14 of 95 swaps called, 2 false alarms, about 3 rows in 4 unsure. The
  * About text gives these in round numbers.
  *
+ * On several cameras (multi-camera Track All's review list, pose/multi-camera-review.js) each identity's
+ * views at an image sample are pooled into one vector first (`poolViews`), then the rows are pre-judged once.
+ * On 22 proofread 8-camera recordings (186 places, 16 of them swaps): a package trained on the rig's other
+ * recordings called 8 swaps, the built-in model 4, neither a false alarm. Judging each camera on its own left
+ * most places with too few crops on any one camera.
+ *
  * Pure — no DOM, no app state, no imports.
  */
 
@@ -197,6 +203,21 @@ export function prejudgeReviewRows(emb, rows, fps, opts) {
                  verdict: prejudgeVerdict(sep, score, o) };
     });
     return { rows: out, pairs: pairs, gateCos: o.gateCos, margin: o.margin, windowSeconds: o.windowSeconds };
+}
+
+/**
+ * One identity's vector at one image sample from its views on several cameras: the mean of their unit vectors,
+ * re-normalised. One view: that vector itself, so a single-camera session is judged exactly as calibrated.
+ * @param {Array<?Float64Array>} vectors  unit vectors (null entries skipped)
+ * @returns {?Float64Array}
+ */
+export function poolViews(vectors) {
+    var vs = vectors.filter(Boolean);
+    if (!vs.length) return null;
+    if (vs.length === 1) return vs[0];
+    var D = vs[0].length, sum = new Float64Array(D);
+    for (var i = 0; i < vs.length; i++) for (var x = 0; x < D; x++) sum[x] += vs[i][x];
+    return unitVector(sum);
 }
 
 /** The pre-judge row for a review-list row (same frame and pair, either order), or null. */

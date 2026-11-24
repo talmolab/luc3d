@@ -20,6 +20,7 @@ import {
 import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js';
 import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, reviewResult, retrackLosses, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js';
 import { confirmRetrack } from '../ui/retrack-warning.js';
+import { multiCameraReview } from './multi-camera-review.js';
 import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
@@ -1850,12 +1851,24 @@ async function runTrackingPass(range) {
         }
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         console.timeEnd('[' + label + '] total');
+        // The review list (pose/multi-camera-review.js), as after a single-camera Track All: where two animals'
+        // 3D paths nearly cross, plus a check of who is who where every animal is first in view and at the end.
+        // Track All only (a range is a targeted re-run), after the tail-mark pass, which may swap labels.
+        var reviewFps = state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 30);
+        var nReview = 0, nCrossings = 0;
+        if (!isRange && lres.numIdentities > 1) {
+            var review = multiCameraReview(session, reviewFps);
+            nReview = review.length;
+            nCrossings = review.filter(function (r) { return r.cues.indexOf('crossing') >= 0; }).length;
+            if (nReview) setReviewList(session, reviewResult(review, session, reviewFps));
+        }
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount.toLocaleString('en-US') + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by Identity' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') +
             (tailMarks ? ', ' + describeTailMarks(tailMarks) : '') +
+            (nReview ? ', ' + nReview.toLocaleString('en-US') + ' place' + (nReview === 1 ? '' : 's') + ' to review in the ID Switches tab' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body
@@ -1885,6 +1898,8 @@ async function runTrackingPass(range) {
                     // from the video when one is loaded), for the real-time multiplier.
                     fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
                     tailMarks: tailMarks ? describeTailMarks(tailMarks) : null,
+                    reviewPlaces: nReview,
+                    reviewCrossings: nCrossings,
                 };
                 var summaryChecks = {
                     size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),

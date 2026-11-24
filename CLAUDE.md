@@ -163,6 +163,15 @@ A session with ONE camera (File ▸ Load SLP, or Load Single Session Folder on o
 
 Tests: `test-sleap-tracker.mjs`, `test-single-camera-tracking.mjs`, `test-id-switch-check.mjs`, e2e `single-camera-track-all`, `single-camera-folder-load`.
 
+## Multi-camera Track All leaves a review list too
+
+`pose/multi-camera-review.js` (`multiCameraReview`, after the tail-mark pass; Track All only, never a range): 'crossing' rows where two identities' 3D centroids nearly coincide ((swapped − kept)/(swapped + kept) < 0.01 against each one's previous sighting ≤ 5 frames back, 3 s clusters per pair), plus the start and end check rows (`videoStartRow`/`videoEndRow` on `identityTrack`). Same tab, Fix (identities, every view), Earlier encounter (`pairEncounters3d`, node-name-free 3D body length) and pre-judge as one camera.
+- `gapSeconds` (1/6 s, 5 frames at 30 fps) is in seconds. Measured on one rig only (22 proofread 8-camera recordings, 30 fps): a simulated reviewer that always knew which animal was which took 88.2% → 99.7% at about one row a minute, none worse (an upper bound). Every 3D encounter as a row: 8.6 a minute (encounters cover 45–97% of those videos).
+- The pre-judge on several cameras is opt-in (Tracking Wizard `imageCheckPrejudgeMultiCamera`, default off: it makes the image check embed every sample, which changes what the check learns from; not yet measured on a large project). It pools each animal's views at a sample into one vector first (`poolViews`), then judges once: on those recordings a package called 8 of 16 swaps, the built-in model 4, no false alarm. Judging each camera on its own left most places with too few crops.
+- The summary's primary is Review the list only when the list has a near-crossing (`reviewCrossings`); a list of only its two check rows is offered beside Triangulation Wizard…. A reopened summary recounts the list (Clear → back to Triangulation).
+
+Tests: `test-multi-camera-review.mjs`, `test-image-prejudge.mjs`, e2e `multi-camera-review-list`, `track-all-summary`.
+
 ## Per-node prediction scores
 
 `ui/node-tooltip.js` shows a node's name and, on a prediction, that node's score, with a stripe in its skeleton colour. Take the colour from `getGroupColor`/`unlinkedBaseColor` (`ui/overlays.js`); never compute it separately.

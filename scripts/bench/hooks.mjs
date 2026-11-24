@@ -50,6 +50,7 @@ const THRESHOLD_DEFAULTS = {
     imageCheckHz: 2,
     imageCheckBackgroundHz: 0.1,
     imageCheckMaxViews: 3,
+    imageCheckPrejudgeMultiCamera: 0,
     imageCheckGpuTimePct: 100,
     imageCheckCpuTimePct: 100,
     imageCheckWebNN: 0,

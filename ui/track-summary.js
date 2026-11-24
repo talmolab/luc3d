@@ -78,7 +78,7 @@ export function formatTrackingSpeed(frames, ms, recordingFps) {
  * @param {Object} session
  * @param {{frames:number, animals:number, animalsAuto?:boolean, elapsedMs?:number, fps?:number,
  *          singleCamera?:string, untracked?:number, filtered?:number, duplicates?:number,
- *          reviewPlaces?:number}} opts
+ *          reviewPlaces?:number, reviewCrossings?:number}} opts
  *   `frames` — the frames the pass swept (the denominator); `animals` — the
  *   animal count it ran with; `animalsAuto` — whether that count was detected
  *   rather than entered; `elapsedMs` — how long tracking took; `fps` — the
@@ -89,7 +89,9 @@ export function formatTrackingSpeed(frames, ms, recordingFps) {
  *   Wizard's detection filters, and `duplicates`, both before tracking),
  *   and the number of places on its review list (`reviewPlaces`, the ID Switches
  *   tab's 'review' rows), and is counted on the stand-in session
- *   `singleCameraCheckSession` builds.
+ *   `singleCameraCheckSession` builds. A multi-camera Track All passes
+ *   `reviewPlaces` too (pose/multi-camera-review.js), and how many of them are
+ *   near-crossings (`reviewCrossings`; the rest are its two check rows).
  */
 export function summarizeTrackedIdentities(session, opts) {
     opts = opts || {};
@@ -127,6 +129,7 @@ export function summarizeTrackedIdentities(session, opts) {
         filtered: opts.filtered || 0,
         duplicates: opts.duplicates || 0,
         reviewPlaces: opts.reviewPlaces || 0,
+        reviewCrossings: opts.reviewCrossings || 0,
         identities: ids.map(function (id, i) {
             return { id: id.id, name: id.name, color: id.color, frames: counts[i] };
         }),
@@ -262,6 +265,12 @@ export function planTrackSummary(s, checks) {
             detail: formatShare(s.completeFrames, s.frames),
         });
     }
+    if (s.reviewPlaces > 0) {
+        stats.push({ label: 'To review', value: plural(s.reviewPlaces, 'place'),
+                     detail: s.fps > 0 && s.frames > 0 ? (s.reviewPlaces / (s.frames / s.fps / 60)).toFixed(1) + ' a minute' : '',
+                     title: 'Where a switch is most likely: two animals\' 3D paths nearly cross, plus a check of who is who where ' +
+                            'every animal is first in view and at the end. Listed in the ID Switches tab.' });
+    }
     var trackTime = formatDuration(s.elapsedMs);
     if (trackTime) {
         var speed = formatTrackingSpeed(s.frames, s.elapsedMs, s.fps);
@@ -319,9 +328,23 @@ export function planTrackSummary(s, checks) {
         next = {
             headline: 'Review the possible ID switches.',
             caveat: null,
-            steps: ['Step through them in the ID Switches tab and fix the real ones.', TRIANGULATE, PROPAGATE],
+            steps: ['Step through them in the ID Switches tab' + (s.reviewPlaces > 0 ? ', with the ' + plural(s.reviewPlaces, 'place') +
+                ' on the review list,' : '') + ' and fix the real ones.', TRIANGULATE, PROPAGATE],
         };
         primary = { action: 'review', label: 'Review switches' };
+    } else if (nIds > 1 && s.reviewPlaces > 0 && s.reviewCrossings > 0) {
+        // No check flagged anything, but the review list is where most switches are found (pose/multi-camera-review.js);
+        // triangulating comes after it. A list of only its two check rows (no crossings) is offered, not the next step.
+        next = {
+            headline: 'Review the ' + plural(s.reviewPlaces, 'place') + ' most likely to hold a switch.',
+            caveat: size.state === 'clear' && canImage ? 'Body size cannot tell apart animals of similar size. If yours are, run the image check too.' : null,
+            steps: ['Step through the review list in the ID Switches tab and fix the places where the labels swap: a fix ' +
+                'swaps the two identities from the frame you are on to the end, in every view.', TRIANGULATE, PROPAGATE],
+        };
+        primary = { action: 'review', label: 'Review the list' };
+        if (size.state === 'off') secondary.push({ action: 'sizeCheck', label: 'Check by body size' });
+        if (canImage) secondary.push({ action: 'imageCheck', label: 'Check by images…' });
+        secondary.push({ action: 'triangulationSettings', label: 'Triangulation Wizard…' });
     } else {
         var headline, caveat = null;
         if (nIds === 1) {
@@ -339,10 +362,15 @@ export function planTrackSummary(s, checks) {
             headline = 'Identities were not checked for switches.';
             caveat = 'Spot-check them by playing through moments when animals come close.';
         }
-        next = { headline: headline, caveat: caveat, steps: [TRIANGULATE, PROPAGATE] };
+        // the review list without a crossing: only its check rows (who is who where every animal is first in view
+        // and at the end), offered beside the checks
+        var lookStep = nIds > 1 && s.reviewPlaces > 0 ? ['Optionally, look at the ' + plural(s.reviewPlaces, 'place') +
+            ' on the review list in the ID Switches tab: where every animal is first in view, and the end.'] : [];
+        next = { headline: headline, caveat: caveat, steps: lookStep.concat([TRIANGULATE, PROPAGATE]) };
         primary = { action: 'triangulationSettings', label: 'Triangulation Wizard…' };
         if (nIds > 1 && size.state === 'off') secondary.push({ action: 'sizeCheck', label: 'Check by body size' });
         if (nIds > 1 && canImage) secondary.push({ action: 'imageCheck', label: 'Check by images…' });
+        if (lookStep.length) secondary.push({ action: 'review', label: 'Review the list' });
     }
 
     return {

@@ -9,7 +9,8 @@
  *  - verdicts: the gate (cos ≥ 0.7: 'alike', whatever the score), the margin
  *    ('unsure'), too few crops ('sparse'), too few samples ('unknown');
  *  - windows: ±3 s around the close spell, the spell itself left out;
- *  - the built-in model's settings (PREJUDGE_BUILTIN): no gate, margin 0.2.
+ *  - the built-in model's settings (PREJUDGE_BUILTIN): no gate, margin 0.2;
+ *  - several cameras (`poolViews`): each identity's views at a sample averaged into one vector first.
  *
  * Run:  node tests/test-image-prejudge.mjs
  */
@@ -153,6 +154,31 @@ group('prejudgeReviewRows — rows of a video with one swap');
     // one identity hardly ever cropped together with the other: no separation
     const lone = PJ.prejudgeReviewRows(stream(animals(0, 31), { fps, missing: (f, id) => id === 1 && f > 150 }), rows.slice(0, 1), fps);
     eq(lone.rows[0].verdict, 'unknown', 'fewer than 10 samples show both: unknown');
+}
+
+group('several cameras: poolViews (multi-camera review lists)');
+{
+    const u = PJ.unitVector(Float64Array.from([3, 4]));
+    ok(PJ.poolViews([u]) === u, 'one view: that vector itself (single-camera sessions judged as calibrated)');
+    ok(PJ.poolViews([null, u, null]) === u, 'missing views are skipped');
+    eq(PJ.poolViews([]), null, 'no view: null');
+    eq(PJ.poolViews([null]), null, 'only missing views: null');
+    const p = PJ.poolViews([Float64Array.from([1, 0]), Float64Array.from([0, 1])]);
+    ok(Math.abs(p[0] - Math.SQRT1_2) < 1e-12 && Math.abs(p[1] - Math.SQRT1_2) < 1e-12, `two views: their mean, re-normalised (${[...p]})`);
+    // a swap where one camera sees the animals only before the place and the other only after: neither camera alone
+    // has crops on both sides, the pooled views do
+    const fps = 30, rows = [{ frame: 2420, startFrame: 2400, identityA: 0, identityB: 1 }], P = animals(0, 31);
+    const camA = stream(P, { fps, swapAt: 2400, gaps: [[2380, 2420]], seed: 5, missing: f => f >= 2400 });
+    const camB = stream(P, { fps, swapAt: 2400, gaps: [[2380, 2420]], seed: 9, missing: f => f < 2400 });
+    eq(PJ.prejudgeReviewRows(camA, rows, fps).rows[0].verdict, 'sparse', 'camera A alone: too few crops after the place');
+    eq(PJ.prejudgeReviewRows(camB, rows, fps).rows[0].verdict, 'sparse', 'camera B alone: too few crops before it');
+    const pooled = { frames: camA.frames, vector: (j, id) => PJ.poolViews([camA.vector(j, id), camB.vector(j, id)]) };
+    const r = PJ.prejudgeReviewRows(pooled, rows, fps).rows[0];
+    ok(r.verdict === 'swapped', `pooled: swapped (${r.verdict}, ${r.score && r.score.toFixed(3)})`);
+    // the same two cameras both seeing every sample, no swap: kept
+    const k0 = stream(P, { fps, seed: 5 }), k1 = stream(P, { fps, seed: 9 });
+    const kept = PJ.prejudgeReviewRows({ frames: k0.frames, vector: (j, id) => PJ.poolViews([k0.vector(j, id), k1.vector(j, id)]) }, rows, fps).rows[0];
+    eq(kept.verdict, 'kept', 'pooled, no swap: kept');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

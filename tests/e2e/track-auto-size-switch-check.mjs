@@ -6,7 +6,7 @@
  * Fixture A (tracked by the REAL tracker): two mouse-shaped animals of different
  * size seen by three calibrated cameras for 65 s at 30 fps, kept apart, so the
  * tracker makes no switch. Asserted:
- *  1. Track All clears stale switch markers, runs the check, and appends its
+ *  1. Track All clears stale switch markers (the review list's places are its own), runs the check, and appends its
  *     result to Track All's own status line — without opening the ID Switches tab
  *     when nothing is found.
  *  2. Track Frame Range runs it too, over the WHOLE session's identities: after
@@ -99,7 +99,9 @@ try {
         document.getElementById('trackSummaryClose').click();   // Track All's summary box
     });
     let st = await statusText();
-    const markersA = await page.evaluate(async () => (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().length);
+    // what is left are the review list's places (pose/multi-camera-review.js: here the check rows where both animals are
+    // first in view and at the end), never the stale marker
+    const markersA = await page.evaluate(async () => (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().filter(m => m.cue !== 'review').length);
     check(/^Assigned 2 identities/.test(st) && /ID-switch check \(body size\): nothing flagged/.test(st),
         `Track All: check ran, result appended to its status ("${st}")`);
     check(markersA === 0, 'Track All: the stale marker from before was cleared');

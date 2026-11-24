@@ -41,6 +41,7 @@ import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js';
 import { scoreSizeGridOffThread } from '../pose/size-check-pool.js';
 import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraFixSwapsTracks, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js';
+import { pairEncounters3d } from '../pose/multi-camera-review.js';
 import { formatFrameNumber } from './frame-readout.js';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
          inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js';
@@ -410,7 +411,7 @@ async function runImage(session, rate, inject, reviewRows) {
             keyframes: embedder.keyframes,
             inFlight: embedder.inFlight || 2,
             releaseFrames: embedder.releaseFrames,
-            // single camera with a review list: pre-judge its rows (pose/image-prejudge.js; embeds every sample)
+            // with a review list: pre-judge its rows (pose/image-prejudge.js; embeds every sample)
             reviewRows: reviewRows || null,
             // ...with the settings measured for this kind of model: the built-in one has no gate and a wider margin
             prejudge: prejudgeSettings(!pkg),
@@ -551,8 +552,10 @@ export async function runIdSwitchChecks(opts) {
     // (pose/single-camera-tracking.js `candidateMoments`); the coat-brightness check scores those too (the
     // size and image checks score every contact without the tracker's labels, so they take no moments).
     var moments = single && session._idSwitchCandidates ? session._idSwitchCandidates : null;
-    // ...and its review list, which the image check pre-judges (pose/image-prejudge.js): the rows' frames and pairs.
-    var reviewRows = single ? reviewRowsOf(session) : null;
+    // ...and the review list, which the image check pre-judges (pose/image-prejudge.js): the rows' frames and pairs.
+    // Always on one camera; on several only when the Tracking Wizard's imageCheckPrejudgeMultiCamera is on, since it
+    // makes the check embed every sample and so changes what the check itself learns from.
+    var reviewRows = single || getTrackingThreshold('imageCheckPrejudgeMultiCamera') ? reviewRowsOf(session) : null;
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
         var res, t0 = performance.now();
@@ -653,7 +656,8 @@ export function clearIdSwitchResults(session) {
 }
 
 /**
- * Put single-camera Track All's review list (pose/single-camera-tracking.js `reviewResult`) on the session:
+ * Put Track All's review list (pose/single-camera-tracking.js `reviewResult`, from its own candidates on one camera
+ * or pose/multi-camera-review.js `multiCameraReview` on several) on the session:
  * the places a switch is most likely, as rows of their own. A new tracking pass has just cleared the old
  * results, so this starts a fresh checklist; checks that run after it add their rows beside it.
  */
@@ -735,10 +739,18 @@ function prejudgeSummaryHtml(st) {
 function aboutHtml(st, ran) {
     var checks = ran.filter(function (c) { return c !== 'review'; });
     var rv = st.results.review && st.results.review.ok ? st.results.review : null;
-    var reviewAbout = rv ? '<p><b>The review list</b> is where a switch is most likely on one camera — where the tracker nearly ' +
+    var multi = !singleCameraName(getActiveSession());
+    var reviewAbout = rv ? (multi
+        ? '<p><b>The review list</b> is where a switch is most likely across the cameras — where two animals\' 3D paths nearly ' +
+          'cross, so the tracker could have paired them either way — plus a check of who is who where every animal is first in view ' +
+          'and at the end. About one place a minute. On proofread 8-camera recordings, a simulated reviewer who always knew which ' +
+          'animal was which, watching 2 s before to 5 s after each place and stepping back through earlier encounters, took accuracy ' +
+          'from about 88% to over 99%: an upper bound, since a person cannot always tell look-alike animals apart. Rows have no score: look at ' +
+          'each, and Fix the ones where the labels swap.</p>'
+        : '<p><b>The review list</b> is where a switch is most likely on one camera — where the tracker nearly ' +
         'chose the other assignment, where the input file\'s own tracks disagree with Track All, or where a lone animal\'s track ' +
         'changes, plus a check of who is who where every animal is first in view and at the end. About one place a minute; on proofread videos most switches were within 2 s of one. Rows have ' +
-        'no score: look at each, and Fix the ones where the labels swap.</p>' +
+        'no score: look at each, and Fix the ones where the labels swap.</p>') +
         (st.results.image && st.results.image.ok && st.results.image.prejudge ? '<p><b>Image pre-judge.</b> The image check also ' +
             'compares each animal\'s look in the ' + PREJUDGE_DEFAULTS.windowSeconds + ' s before a place with the ' + PREJUDGE_DEFAULTS.windowSeconds +
             ' s after it. ' + (st.results.image.imageModel
@@ -748,7 +760,15 @@ function aboutHtml(st, ran) {
                 : 'With the built-in model, never trained on your animals, it calls a place only when the score is past ±' +
                   PREJUDGE_BUILTIN.margin.toFixed(1) + ': on proofread two-mouse videos it called about 1 swap in 7 and was unsure at most ' +
                   'places; a model trained on the rig called about 2 in 3. ') +
-            'Still watch each place: a verdict is a lead, not the answer.</p>' : '') : '';
+            (multi ? 'On several cameras each animal\'s views at a moment are averaged first. On proofread 8-camera recordings ' +
+                (st.results.image.imageModel
+                    ? 'a model trained on the rig called about half the swaps on the list, ' : 'it called about 1 swap in 4, ') +
+                'with no false alarm, but there were few swaps to go on. ' : '') +
+            'Still watch each place: a verdict is a lead, not the answer.</p>'
+        // several cameras, no pre-judge: it is opt-in there (imageCheckPrejudgeMultiCamera)
+        : multi ? '<p><b>Image pre-judge</b> (optional on several cameras): the image check can also say at each place whether ' +
+            'the two animals look swapped. Turn on "Image check: pre-judge the review list on several cameras" in Settings ▸ ' +
+            'Tracking Wizard ▸ ID Switches; the check then takes longer.</p>' : '') : '';
     if (!checks.length) return reviewAbout;
     return reviewAbout + aboutChecksHtml(st, checks);
 }
@@ -983,12 +1003,14 @@ function swapForFix(session, from, to, idA, idB) {
 }
 
 // ---- Earlier encounter --------------------------------------------------------------
-// On one camera a swap often happens at a close encounter with no place on the list near it: the reviewer finds
+// A swap often happens at a close encounter with no place on the list near it: the reviewer finds
 // the labels already swapped as the next place starts. "◂ Earlier encounter" goes to 1 s before the pair's latest
-// close encounter before that (pairEncounters), then the one before, …, no further back than the place before
+// close encounter before that (pairEncounters on one camera, pairEncounters3d on several), then the one before, …, no
+// further back than the place before
 // (whose stretch it is); and from then on this place's own fix may start anywhere back to there. On proofread data
 // a reviewer doing this (with a check row at the end of the tracking) matched one who watches every frame between
-// places (MODULES.md, 2026-11-09). Kept in memory only (`st.stepBack`), never saved.
+// places (MODULES.md; on 8-camera recordings, without it the review lost 0.3–0.4 points). Kept in memory only
+// (`st.stepBack`), never saved.
 var EARLIER_LEAD_SECONDS = 1;
 
 /** The step-back state of the place `f` stands for, or null. */
@@ -1006,7 +1028,8 @@ function stepBackToEncounter(session, st, f) {
     var cur = state.currentFrame != null ? state.currentFrame : rr.p0;
     // pressed again: the encounter before the last one it went to (or before where you are, if further back)
     var anchor = Math.min(cur, sb ? sb.start : rr.p0);
-    var encs = anchor > bound ? pairEncounters(session, idA, idB, bound, anchor - 1, { fps: fps }) : [];
+    var encounters = singleCameraName(session) ? pairEncounters : pairEncounters3d;   // in 2D on one camera, in 3D on several
+    var encs = anchor > bound ? encounters(session, idA, idB, bound, anchor - 1, { fps: fps }) : [];
     st.stepBack = { key: key, bound: bound, start: sb ? sb.start : anchor, at: sb ? sb.at : null, n: sb ? sb.n : 0 };
     var since = bound > 0 ? ' since the place before (' + fmtTenths(bound - 1) + ')' : ' before this place';
     if (!encs.length) {
@@ -1125,7 +1148,8 @@ function lookNote(cues) {
             : c === 'arrival' ? 'a second animal arrives (the one already there kept one track until here)'
             : c === 'return' ? 'an animal comes back after being out of sight'
             : c === 'videoEnd' ? 'the end of the tracking: check who is who (a swap after the last place shows only here)'
-            : c === 'videoStart' ? 'every animal first in view: note who is who (a later swap is noticed against this)' : c;
+            : c === 'videoStart' ? 'every animal first in view: note who is who (a later swap is noticed against this)'
+            : c === 'crossing' ? 'their 3D paths nearly cross (the tracker could have paired them either way)' : c;
     }).join(', ');
 }
 
@@ -1139,6 +1163,7 @@ function lookNote(cues) {
 function selectedHtml(st, f) {
     var fix = idSwitchFixFor(st, f), last = st.fixes && st.fixes.length ? st.fixes[st.fixes.length - 1] : null;
     var place = idSwitchPlaceOf(f), act;
+    var two = singleCameraName(getActiveSession()) ? 'the two tracks' : 'the two identities in every view';   // what a place's fix swaps
     var placeBtn = function (label, title) { return '<button class="panel-btn id-switch-fix" data-place="1" title="' + title + '">' + label + '</button>'; };
     if (fix && place) {
         var keys = [rowKey(f)].concat(f.agree ? [rowKey(f.agree)] : []);
@@ -1147,22 +1172,22 @@ function selectedHtml(st, f) {
             return (i ? 'again ' : escapeHtml(x.nameA) + ' ↔ ' + escapeHtml(x.nameB) + ' swapped ') + 'on frames ' +
                 formatFrameNumber(x.from + 1) + '–' + formatFrameNumber(x.to + 1);
         }).join('; ') + '</span>' +
-            placeBtn('Fix again…', 'Swap the two tracks again, from the frame you are on to the end of the video — for labels that swap back before the next place') +
+            placeBtn('Fix again…', 'Swap ' + two + ' again, from the frame you are on to the end of the video — for labels that swap back before the next place') +
             (mine.indexOf(last) >= 0 ? '<button class="panel-btn id-switch-undo" title="Swap the same frames back">Undo fix</button>' : '');
     } else if (fix) {
         act = '<span class="id-switch-fixed-note">Fixed: ' + escapeHtml(fix.nameA) + ' ↔ ' + escapeHtml(fix.nameB) +
             ' swapped on frames ' + (fix.from + 1).toLocaleString() + '–' + (fix.to + 1).toLocaleString() + '</span>' +
             (fix === last ? '<button class="panel-btn id-switch-undo" title="Swap the same frames back">Undo fix</button>' : '');
     } else if (!f.continues) {
-        act = f.cue === 'review' ? placeBtn('Fix switch…', 'Swap the two tracks from the frame you are on to the end of the video — ' +
+        act = f.cue === 'review' ? placeBtn('Fix switch…', 'Swap ' + two + ' from the frame you are on to the end of the video — ' +
                 'a dialog shows exactly which frames, before anything changes')
             : '<button class="panel-btn id-switch-fix" title="Swap these two identities over the frames this switch covers — ' +
                 'a dialog shows exactly which, before anything changes">Fix switch…</button>' +
-              (place ? placeBtn('Fix from here…', 'Swap the two tracks from the frame you are on to the end of the video — ' +
+              (place ? placeBtn('Fix from here…', 'Swap ' + two + ' from the frame you are on to the end of the video — ' +
                 'this place\'s own fix, for when the check\'s Fix switch… covers the wrong frames') : '');
     } else return progressHtml(f);
-    // one camera: step back through the pair's earlier close encounters, for labels already swapped as the place starts
-    if (place && singleCameraName(getActiveSession())) act += '<button class="panel-btn id-switch-back" title="Already swapped when this place ' +
+    // step back through the pair's earlier close encounters, for labels already swapped as the place starts
+    if (place) act += '<button class="panel-btn id-switch-back" title="Already swapped when this place ' +
         'starts? Go to where these two were last close before it — press again to go further back. Then Fix from where the labels swap">' +
         '◂ Earlier encounter</button>';
     return progressHtml(f) + '<div class="id-switch-actions">' + act + '</div>';

@@ -1968,6 +1968,17 @@ Track All does not run it, the status line and the summary box say so
 on one camera, saying why, as does Track All on a lazy one-camera project.
 ~1 s for an 18,000-frame, 3-mouse video in the app.
 
+**Multi-camera Track All leaves a review list too** (`pose/multi-camera-review.js`
+`multiCameraReview`, after the tail-mark pass, which may swap labels; Track All only,
+not a range; with two or more identities): where two animals' 3D paths nearly cross,
+plus the check rows where every animal is first in view and at the end, put in the
+ID Switches tab before the automatic checks run (`setReviewList` with `reviewResult`),
+counted in the status line (", N places to review in the ID Switches tab", after the
+tail-mark note) and the summary box (`reviewPlaces`, and `reviewCrossings`, how many
+are near-crossings). On 22 proofread 8-camera recordings a simulated reviewer that
+always knew which animal was which took the mean from 88.2% to 99.7% at about one
+row a minute (an upper bound).
+
 **Track All closes the Timeline and the 3D viewer.** On success, a full Track
 All calls `collapseTimeline()` (`ui/timeline-controller.js`) and
 `collapseViewport3D(viewport3d)` (`ui/panel-visibility.js`) — there is no 3D pose
@@ -2179,6 +2190,7 @@ tracked and never fails the run; the status line and summary box say what it did
 (`describeTailMarks`). The result stays on `session._tailMarkResult`, in memory only.
 
 **Imports from project modules.**
+- `./multi-camera-review.js` — `multiCameraReview` (multi-camera Track All's review list).
 - `./single-camera-tracking.js` — `singleCameraName`, `singleCameraTrackerConfig`,
   `trackSingleCamera`, `reviewResult`, `retrackLosses`, `SINGLE_CAMERA_LAZY_REASON` (the
   one-camera Track All).
@@ -2823,6 +2835,69 @@ the start and end rows, `pairEncounters`); `tests/e2e/single-camera-track-all.mj
 (the real buttons end to end: Track All and its warning, a planted swap found,
 fixed and undone, the review list and its Fixes, the image pre-judge);
 `tests/e2e/_real-single-camera.mjs` runs it on a real SLEAP file.
+
+---
+
+### pose/multi-camera-review.js
+
+**Purpose.** The review list multi-camera Track All leaves in the ID Switches tab —
+the places a switch is most likely, as unscored rows, as single-camera Track All
+does (`pose/single-camera-tracking.js` `reviewResult` builds the result for both) —
+and the 3D close encounters the tab's **◂ Earlier encounter** steps back through on
+a multi-camera session. Label-free, read from the committed 3D groups
+(`session.instanceGroups`, never evicted on a lazy project). Pure — no DOM, no app
+state.
+
+**The rows.**
+- **'crossing'** — two identities whose 3D paths nearly cross: at a frame where both
+  have a group with 3D, pairing each with the OTHER's previous sighting (at most
+  `gapSeconds` 1/6 s back: 5 frames at 30 fps, 25 at 150 fps) costs almost what the kept pairing does, by centroid distance:
+  (swapped − kept) / (swapped + kept) < `margin` (0.01; scale-free). In practice the
+  two centroids nearly coincide. One row per pair per run of them no more than
+  `clusterSeconds` (3) apart, through `candidateMoments` (no input tracklets).
+  Note: "their 3D paths nearly cross (the tracker could have paired them either way)".
+- **'videoStart'** — where every identity is first in view together, unless a row's
+  clip shows that frame (`videoStartRow`); **'videoEnd'** — at the last tracked frame,
+  unless a row ends within 5 s (`videoEndRow`). Both read `identityTrack`'s
+  frames/identities the way they read single-camera Track All's output.
+
+**Why these.** On 22 proofread 8-camera recordings at 30 fps (the app's own Track All,
+scored per view), a simulated reviewer played the list: it watches 2 s before to 5 s
+after each row, knows which animal is which (so an upper bound: a person cannot always
+tell look-alike animals apart), Fixes a swap frame-exactly, and steps back through the
+pair's encounters. Its answer key ties each view's proofread tracks to animals through
+Track All's own grouping (99.6–100% agreement), so it is mildly circular. Track All
+alone: mean 88.2%; with this list 99.7% at about one row a minute, none worse. The
+margin is flat from 0.005 to 0.03 (99.69–99.71%). Other rows tried: the start and end
+rows alone 90.1%; wherever the input file's tracks disagree with Track All in ≥ 3 views
+99.66%; an identity's centroid jumping a body length 99.64%; every 3D close encounter
+99.55% at 8.6 rows a minute (encounters cover 45–97% of these videos). The step-back's
+body length is node-name-free (the median largest node-to-node 3D distance). Measured
+on one rig at one frame rate only.
+
+**Exports.** `MULTI_CAMERA_REVIEW_DEFAULTS` (`margin` 0.01, `gapSeconds` 1/6,
+`clusterSeconds` 3); `identityTrack(session)` -> `{frames: [{frameIdx}], out: [[ids]],
+cen: [[[x,y,z]|null]]}` (groups with an identity, by frame); `crossingCandidates(track,
+opts)` -> `[{f, a, b, cue: 'crossing'}]` (`opts.fps`, default 30, turns `gapSeconds` into frames); `multiCameraReview(session, fps, opts)` ->
+moments `{frame, startFrame, identityA, identityB, cues}` sorted by frame (for
+`reviewResult`); `sessionBodyLength3d(session)` (not cached: a re-triangulation keeps the frame count);
+`pairEncounters3d(session, idA, idB, from, to, opts)` -> `[{start, end}]` ascending
+(`PAIR_ENCOUNTER_DEFAULTS`: 1.5 body lengths, gaps of 0.25 s joined; read from the
+current labels, so after a Fix too). Reads flat (3N) and boxed `points3d`.
+
+**Imports from project modules.** `pose/single-camera-tracking.js` (`candidateMoments`,
+`videoStartRow`, `videoEndRow`, `PAIR_ENCOUNTER_DEFAULTS`).
+
+**Imported by.** `pose/tracker.js` (after multi-camera Track All), `ui/id-switch-modal.js`
+(`pairEncounters3d` for Earlier encounter).
+
+**Coverage.** `tests/test-multi-camera-review.mjs` (a crossing's row and its span, none
+for animals passing apart, near-ties within 3 s as one row, the check rows and when
+they are left out, flat = boxed 3D, groups without an identity or 3D, one identity,
+the previous-sighting limit in seconds at 30 and 150 fps, `pairEncounters3d` and the
+body length, which follows a re-triangulation), `tests/e2e/multi-camera-review-list.mjs` (the
+real Track All on three cameras: the rows, status, summary box and tab; Earlier
+encounter and the place's Fix in every view; the image pre-judge on three cameras).
 
 ---
 
@@ -4632,17 +4707,18 @@ identical at every threshold from -0.8 to -1.6. Cost on an M2 Pro: whole check
 +13-19% over DINOv2-small (145420 80 vs 68 s), 43 MB; CPU workers the same speed
 (19.4 vs 19.9 crops/s). DINOv2-base was worse on the held-out set (5 false at -1).
 
-**Review-list pre-judge.** `checkImageSwitches(session, {reviewRows})` (single-camera
-Track All's review rows `[{frame, startFrame, identityA, identityB}]`, passed by
+**Review-list pre-judge.** `checkImageSwitches(session, {reviewRows})` (Track All's
+review rows, single- or multi-camera, `[{frame, startFrame, identityA, identityB}]`, passed by
 `ui/id-switch-modal.js`) embeds EVERY image sample (`backgroundHz` set to Infinity:
 the 2-means was calibrated on every sample, not the scored windows; the check's own
 rows were unchanged by it on the synthetic sessions) and returns `prejudge`
 (`pose/image-prejudge.js` `prejudgeReviewRows`, computed before the scoring from the
-same vectors, unit-normalised; `opts.prejudge` overrides its defaults). Without
+same vectors, unit-normalised; on several cameras each identity's views at a sample
+are pooled into one vector first, `poolViews`; `opts.prejudge` overrides its defaults). Without
 `reviewRows`, `prejudge` is null and nothing changes.
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`), `pose/image-prejudge.js`
-(`prejudgeReviewRows`, `unitVector`).
+(`prejudgeReviewRows`, `poolViews`, `unitVector`).
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
 `ui/brightness-sampler.js` (`planKeyframeSamples`).
@@ -4665,11 +4741,21 @@ review rows every sample is embedded and the pre-judge calls a swap and a kept r
 
 ### pose/image-prejudge.js
 
-**Purpose.** The image check's pre-judge of single-camera Track All's review list:
-for each review row, do the two animals look like themselves after it, or like
-each other — given only where the image model tells this video's two animals
-apart. Pure — no DOM, no app state, no imports. Called by `checkImageSwitches`
-(`pose/id-switch-check.js`) with the check's own crop embeddings.
+**Purpose.** The image check's pre-judge of Track All's review list (single- or
+multi-camera): for each review row, do the two animals look like themselves after
+it, or like each other — given only where the image model tells this video's two
+animals apart. Pure — no DOM, no app state, no imports. Called by `checkImageSwitches`
+(`pose/id-switch-check.js`) with the check's own crop embeddings; on several cameras
+each identity's views at a sample are pooled first (`poolViews`).
+
+**Several cameras (`poolViews`; opt-in, `imageCheckPrejudgeMultiCamera`).** Per image sample, each identity's unit vectors from
+its views (the image check's 3 largest by default) are averaged and re-normalised; the
+rows are then pre-judged once with the one-camera settings (one view: that vector
+itself, so single-camera sessions are unchanged). On 22 proofread 8-camera recordings
+(186 places, 16 of them swaps): a package trained on the rig's other recordings called
+8 swaps with no false alarm and gave a verdict at 2 places in 3; the built-in model
+called 4, no false alarm. Few swaps to go on, so the About text calls a verdict a lead.
+Judging each camera on its own left most places with too few crops on any one camera.
 
 **Key exports.** `PREJUDGE_DEFAULTS` (a fine-tuned package's settings:
 `windowSeconds` 3, `gateCos` 0.7, `margin` 0.1, `minCrops` 2, `minPairs` 10,
@@ -4688,8 +4774,8 @@ few crops on a side), `'unknown'` (fewer than 10 samples with both);
 `prejudgeReviewRows({frames, vector(i, identityId)}, rows, fps, opts)` →
 `{rows: [{frame, startFrame, identityA, identityB, score, cos, verdict}], pairs:
 [{identityA, identityB, cos, agree, samples}], gateCos, margin, windowSeconds}`
-(each pair separated once); `prejudgeFor(prejudge, row)` (by frame and pair, either
-order); `unitVector(v)`.
+(each pair separated once); `poolViews(vectors)` → the mean of an identity's unit
+vectors at one sample, re-normalised (one: itself; none: null); `prejudgeFor(prejudge, row)` (by frame and pair, either order); `unitVector(v)`.
 
 **Calibration.** On 1,633 review rows of 395 proofread two-mouse top-camera
 videos (a fine-tuned dinov2-small package that never saw the video's animal;
@@ -4726,8 +4812,9 @@ The tab's About text gives them in round numbers.
 
 **Coverage.** `tests/test-image-prejudge.mjs` (separation of distinct vs look-alike
 animals, under partly swapped labels; score signs; every verdict and the gate; the
-windows; `prejudgeFor`; the built-in settings), `tests/test-id-switch-check.mjs` (through
-`checkImageSwitches`), `tests/e2e/single-camera-track-all.mjs` §10.
+windows; `prejudgeFor`; the built-in settings; `poolViews`, incl. a swap no single camera has crops on both sides of), `tests/test-id-switch-check.mjs` (through
+`checkImageSwitches`), `tests/e2e/single-camera-track-all.mjs` §10, `tests/e2e/multi-camera-review-list.mjs` §3
+(three cameras).
 
 ---
 
@@ -10176,8 +10263,8 @@ markers on the seekbar — called after a check, from `updateInfoPanel` and from
 showing the info panel if hidden, via `showPanelTab` in `ui/panel-rail.js` —
 never a rail click, which would fold an already-expanded section);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
-`setReviewList(session, result, navigateToFrame?)` (single-camera Track All puts its
-review list on the session as `results.review` — see below);
+`setReviewList(session, result, navigateToFrame?)` (Track All, single- or
+multi-camera, puts its review list on the session as `results.review` — see below);
 `ID_SWITCH_LEAD_IN_SECONDS` (1), `ID_SWITCH_SINGLE_CAMERA_LEAD_SECONDS` (2),
 `idSwitchLeadSeconds(session)` (2 on a single-camera session, else 1),
 `idSwitchLeadInFrame(marker, fps, seconds?)`,
@@ -10193,7 +10280,20 @@ lone-animal arrival, and a check row at the end of the tracking. They are
 rows like the checks' (ticks, seekbar markers, progress bar, Next unreviewed,
 the saved checklist), drawn grey, with NO score; their note says why the place is
 listed ("a lone animal's track changes", "an animal comes back after being out of sight", …); the header counts them ("N places to
-look at") and "About these flags" explains the list first. A check row at the same
+look at") and "About these flags" explains the list first.
+
+**The review list on several cameras** (`pose/multi-camera-review.js`): the
+same rows after multi-camera Track All — where two animals' 3D paths nearly cross
+('crossing', "their 3D paths nearly cross (the tracker could have paired them either
+way)") and the check rows where every animal is first in view and at the end. "About
+these flags" then explains the multi-camera list (a simulated reviewer's ~88% -> over 99%
+on proofread 8-camera recordings, called an upper bound). A place's Fix swaps the two IDENTITIES in every view
+(its buttons say so); Earlier encounter reads `pairEncounters3d`; the image pre-judge
+pools each animal's views at a sample first (`poolViews`; "About these flags" quotes
+its measurement in round numbers, about half the swaps with a rig's model and 1 in 4
+with the built-in one, with "few swaps to go on" and "a lead, not the answer").
+
+A check row at the same
 place and pair is ONE row, the check's, marked "on the review list" ('review' is
 last in `ID_SWITCH_CUES`). **Fix on a review row** swaps from the frame you are on
 (anywhere from the row's lead-in up to just before the NEXT place on the list) or
@@ -10212,9 +10312,11 @@ reviewer could not make 13 place fixes on 64 hard SLAP-2M views. With more than 
 pick the two tracks (`pairSelect`, `#idSwitchFixA` / `#idSwitchFixB`, defaulting to
 the row's pair): on 3–4 mice the row's own pair was the swapped one in only a third
 to two thirds of the switches found. The dialog keeps Esc / Cancel.
-**◂ Earlier encounter** (one camera, on every row that stands for a place): for
-labels already swapped as the place starts, it goes to 1 s before the pair's latest
-close encounter before the place's lead-in (`pairEncounters`, current labels), and
+**◂ Earlier encounter** (on every row that stands for a place; one or several
+cameras): for labels already swapped as the place starts, it goes to 1 s before the
+pair's latest close encounter before the place's lead-in (`pairEncounters` in 2D on
+one camera, `pose/multi-camera-review.js` `pairEncounters3d` by 3D centroid on several;
+current labels), and
 on each further press the one before that, no further back than the place before
 (`idSwitchPrevPlaceEnd`), saying "No earlier close encounter …" past the first.
 From then on that place's own Fix may start anywhere back to the place before
@@ -10407,13 +10509,16 @@ scores here and its `onProgress: yieldToPaint` lets the page paint between the t
 halves. On the 8-camera, 108,000-frame project no task of the check passes ~50 ms),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `pose/single-camera-tracking.js` (`singleCameraName`, `singleCameraCheckSession`,
-`swapSingleCameraIdentities`, `singleCameraFixSwapsTracks`, `singleCameraCheckOptions`),
+`swapSingleCameraIdentities`, `singleCameraFixSwapsTracks`, `singleCameraCheckOptions`, `pairEncounters`),
+`pose/multi-camera-review.js` (`pairEncounters3d`),
 `ui/frame-readout.js` (`formatFrameNumber`),
 `pose/size-check-pool.js` (`scoreSizeGridOffThread`),
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`, `setActiveImageModel`),
 `pose/image-prejudge.js` (`prejudgeFor`, `prejudgeSettings`, `PREJUDGE_DEFAULTS`,
-`PREJUDGE_BUILTIN`: on a single-camera session with a review list, `runImage` passes
+`PREJUDGE_BUILTIN`: on a session with a review list (always on one camera; on several only with the
+Tracking Wizard's `imageCheckPrejudgeMultiCamera` on, default off — "About these flags" then says how to turn
+it on), `runImage` passes
 the list's rows as `reviewRows` (all but the end-of-tracking row, which nothing follows, and the row where every animal is first in view, a look at who is who rather than a suspected swap), with `prejudgeSettings(!pkg)` — the built-in model
 has no gate and margin 0.2 — and
 each review row — or a check's row agreeing with one — says the image check's
@@ -10454,7 +10559,8 @@ dialog's measured CPU line and CPU-only graph), `tests/e2e/id-switch-fix.mjs`
 (Fix switch…: the dialog, the swap, the renamed follow-on, saved, Undo exact),
 `tests/e2e/single-camera-track-all.mjs` §10 (the review list's pre-judge, the
 built-in settings, a package's look-alike gate via `inject.imageModel`, the training
-prompt).
+prompt), `tests/e2e/multi-camera-review-list.mjs` (the multi-camera review list: rows,
+Earlier encounter in 3D, a place's Fix in every view, the pre-judge on three cameras).
 
 ---
 
@@ -11534,7 +11640,9 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   0/1, the image check likewise, default 0; `imageChangeThreshold` -1;
   `imageCheckHz` 2; `imageCheckBackgroundHz` 0.1 (crops per second away from contacts:
   `backgroundHz`, see pose/id-switch-check.js "Which samples are embedded"; Wizard only, not
-  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckGpuTimePct` 100 and
+  the Track All dialog); `imageCheckMaxViews` 3; `imageCheckPrejudgeMultiCamera` — 0/1,
+  let the image check pre-judge multi-camera Track All's review list, default 0 (it
+  embeds every sample then, and the check learns from them; Wizard only); `imageCheckGpuTimePct` 100 and
   `imageCheckCpuTimePct` 100 (uncapped; see ui/image-embedder.js "Why the default is 100") — labelled "GPU time (%)" / "CPU time (%)", the share
   of GPU time / of each CPU thread's time the image check may use, whole numbers 1..100,
   100 = uncapped (new ids each time the meaning changed — the unreleased
@@ -12468,15 +12576,18 @@ unit-tested in Node (`tests/test-track-summary.mjs`). It gives every outcome
   `clear` / `skipped` / `failed` / `cancelled` / `off` / `na` (one identity).
   Switches are `idSwitchOnsets` — the "possible switches" count the tab uses.
 - `planTrackSummary(summary, checks)` — the rows, the notes, the next step and the
-  buttons. Recommends **Review switches** when any check found one; **Default
-  Triangulation…** otherwise (it opens that Settings panel, whose footer has
+  buttons. Recommends **Review switches** when any check found one; else **Review the
+  list** when multi-camera Track All's review list has a near-crossing (`reviewPlaces`,
+  `reviewCrossings`, pose/multi-camera-review.js; a "To review" row counts it, with its
+  rate a minute; the steps then say to triangulate after it, and **Triangulation
+  Wizard…** is offered beside it; a list of only its two check rows is offered as
+  "Review the list" beside the usual primary, as an optional first step); **Default Triangulation…** otherwise (it opens that Settings panel, whose footer has
   Triangulate All) (with "Check by images…" / "Check by body size" offered when that
   check did not run, and a caveat that body size cannot separate similar-sized
   animals when only size came back clear); **Tracking Wizard…** when nothing was
   matched. A skipped check never gets a "nothing found" headline. Notes flag more
   (or fewer) identities than animals.
-  **A single-camera summary** (`summary.singleCamera`) is planned apart, so the
-  multi-camera one is unchanged.
+  **A single-camera summary** (`summary.singleCamera`) is planned apart.
   - **What it reports:** it counts **Tracks**, since SLEAP's tracker writes one per
     animal, and adds a "Without a track" row for detections over the animal count
     plus those the Tracking Wizard's detection filters removed (`filtered`) and the
@@ -12592,7 +12703,8 @@ to that frame — the tracker that opens the box cannot import `pose/initializat
 box showed on `session._trackSummary` — in memory, not saved — and refreshes the
 ID Switches tab so its button appears); `reopenTrackSummary(session, latest?)` (the
 tab's **Show Track All summary**, and the end of a check started from the box —
-`latest` is that run's results); `summarySession(session)` (what the box counts and
+`latest` is that run's results; it recounts the review list as it is now, so after
+Clear there is no "To review" and it is no longer the next step); `summarySession(session)` (what the box counts and
 draws from: the session itself, or for a single-camera one its stand-in from
 `pose/single-camera-tracking.js` `singleCameraCheckSession(session, {pixelCamera:
 true})` — one group per identified detection, and a PIXEL camera whose `project`
