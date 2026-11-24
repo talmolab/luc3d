@@ -329,7 +329,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'filterMinVisibleNodes', label: 'Min visible nodes (filter)', default: 0,
         min: 0, max: 30, step: 1,
-        desc: 'Detection-pool filter: drop instances with fewer than this many present keypoints before cross-view matching (geometry half of the detection filter). 0 = off; the sleap-3d reference used 8 on a 15-node skeleton.',
+        desc: 'Detection-pool filter: drop instances with fewer than this many present keypoints before tracking (cross-view matching, or SLEAP\'s tracker on one camera; a dropped detection keeps no track). 0 = off; the sleap-3d reference used 8 on a 15-node skeleton.',
     },
     {
         id: 'filterMinInstanceScore', label: 'Min instance score (filter)', default: 0,
@@ -339,7 +339,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'filterMinMeanNodeScore', label: 'Min mean node score (filter)', default: 0,
         min: 0, max: 1, step: 0.05,
-        desc: 'Detection-pool filter: drop predictions whose mean node score is below this value — the average of the model\'s per-node scores over every node of the skeleton, a missing node counting as 0 (sleap-nn\'s "mean node score"). Applies only to predictions that carry node scores. 0 = off.',
+        desc: 'Detection-pool filter: drop predictions whose mean node score is below this value — the average of the model\'s per-node scores over every node of the skeleton, a missing node counting as 0 (sleap-nn\'s "mean node score"). Applies only to predictions that carry node scores; the Instances tab shows each instance\'s value under its score. 0 = off.',
     },
     // --- CrossViewTracker engine (pose/cross-view-tracker.js) ---
     {
@@ -376,6 +376,42 @@ const TRACKING_THRESHOLDS = [
         id: 'matchGate', label: 'Reject negative matches (gate)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03). On: a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. Off (the default): the pre-gate forced assignment — on proofread benchmarks the gate helped SLAP but gave about 6x the ID switches on Mouse-Dyad-10M and 10x on s-DANNCE (#285).',
+    },
+    // --- Single-camera tracker (pose/sleap-tracker.js, sleap-nn's tracker) ---
+    {
+        id: 'scWindowSize', label: 'Single camera: candidate window (frames)', default: 5,
+        min: 1, max: 100, step: 1,
+        desc: 'Single-camera Track All runs SLEAP\'s tracker (sleap-nn track, local queues): each animal is matched against its last this-many detections. sleap-nn\'s default is 5; much larger windows let old detections from before a crossing outvote new ones.',
+    },
+    {
+        id: 'scOksStddev', label: 'Single camera: OKS tolerance', default: 0.1,
+        min: 0.005, max: 1, step: 0.005,
+        desc: 'Keypoint spread of the OKS match score (sleap-nn --oks_stddev). sleap-nn\'s default 0.025 is strict: two poses more than ~1.5 body lengths apart score exactly 0, so after a fast move or a gap the assignment comes down to tie-breaking. 0.1 cut lasting swaps by about a third on proofread videos; 0.2 and above get worse again.',
+    },
+    {
+        id: 'scConnectBreaks', label: 'Single camera: connect single breaks', default: 1,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'sleap-nn --post_connect_single_breaks: after tracking, where exactly one animal\'s track ends and exactly one new track starts on the same frame, join them.',
+    },
+    {
+        id: 'scRemoveDuplicates', label: 'Single camera: remove duplicate detections', default: 0,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'Before tracking, leave out a detection that duplicates a stronger one in the same frame — box IoU and OKS both at least the two values below. SLEAP sometimes puts a second instance on an animal it already detected; that copy takes a track, and a lone animal can hop onto it. Removed detections keep no track and stay in the project. Off by default: it stops those hops, but elsewhere it changes little and sometimes removes a real animal.',
+    },
+    {
+        id: 'scLoneAnimal', label: 'Single camera: one track while one animal is in view', default: 1,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'Until two animals are in view together, the one animal there keeps one track, and the review list gets a row where the second arrives. When an animal starts alone (a subject before its partner is put in), the tracker otherwise moves it between tracks: a hand carries it, it comes back at the edge, a stray detection takes its track. Where one animal starts alone it shortens the review list by about a quarter and helps more videos than it hurts; with every animal in view from the start it almost never acts.',
+    },
+    {
+        id: 'scDuplicateIou', label: 'Single camera: duplicate box IoU', default: 0.5,
+        min: 0.05, max: 1, step: 0.05,
+        desc: 'With duplicate removal on: a detection is a duplicate only if its bounding box overlaps the stronger one\'s by at least this IoU (and their OKS is at least the value below). Box overlap alone would also take two touching animals.',
+    },
+    {
+        id: 'scDuplicateOks', label: 'Single camera: duplicate OKS', default: 0.6,
+        min: 0.05, max: 1, step: 0.05,
+        desc: 'With duplicate removal on: a detection is a duplicate only if its keypoints match the stronger detection\'s with at least this OKS (its own nodes, scaled by the stronger one\'s size, so a partial copy counts) — and the box IoU above holds too. Keypoints alone would also take two look-alike poses side by side.',
     },
     {
         id: 'maxPenalty', label: 'Cap a far node\'s 3D penalty (x 3D weight)', default: 0,
@@ -443,6 +479,21 @@ const TRACKING_THRESHOLDS = [
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
     },
     {
+        id: 'autoBrightnessSwitchCheck', label: 'Check ID switches after single-camera tracking (coat brightness)', default: 1,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'After Track All on a single-camera session, check for switches by how bright each animal\'s coat is (Tracks ▸ Check ID Switches (Coat Brightness)). Reads the video, but needs no model or GPU. It helps when the animals differ in brightness at their body keypoints: different coat colours, and possibly a dark head implant on one of two light mice (not yet measured). Where they look alike it rarely flags anything (one false row in 193 videos of same-coated mice). Not run automatically on multi-camera sessions, where it is not calibrated.',
+    },
+    {
+        id: 'brightnessCheckThreshold', label: 'Coat brightness check: flag threshold', default: -800,
+        min: -5000, max: 0, step: 50,
+        desc: 'An encounter starts a possible coat-brightness switch when its score falls below this. Strict on purpose: on one camera most encounters it flagged at a looser threshold were false alarms, while the moments where the tracker nearly chose the swap (tested separately) found the real switches.',
+    },
+    {
+        id: 'brightnessCheckHz', label: 'Coat brightness check: samples per second', default: 4,
+        min: 0.5, max: 15, step: 0.5,
+        desc: 'How many frames per second the coat brightness check reads, per animal and camera. With no model, decoding the video is its only cost.',
+    },
+    {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
         min: 0, max: 640, step: 1,
         desc: 'Robust triangulation: after the 3D solve, if a node\'s reprojection error in any view (the distance on that view\'s 2D image between the prediction and the reprojection) is over this many pixels, the view that misses by most is dropped for that node and the node is re-triangulated from the rest; this repeats while more than 2 views are left. A node whose last 2 views still miss by more gets no 3D point. 100 to 15 px is the recommended range: lower can drop good views too. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless. Settings ▸ Triangulation Wizard draws it.',
@@ -461,20 +512,23 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore', 'filterMinMeanNodeScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate', 'maxPenalty', 'matchReproj',
+    'scWindowSize', 'scOksStddev', 'scConnectBreaks', 'scLoneAnimal', 'scRemoveDuplicates', 'scDuplicateIou', 'scDuplicateOks',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz', 'imageCheckMaxViews',
     'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
+    'autoBrightnessSwitchCheck', 'brightnessCheckThreshold', 'brightnessCheckHz',
     'reprojErrorThreshold',
 ]);
 
 /**
  * The Tracking Wizard settings shown in its own "ID Switches" section rather than
- * under Tracking Thresholds, in this order: the two after-tracking checks, then the
- * image check's options. They configure the checks run AFTER tracking, not the
+ * under Tracking Thresholds, in this order: the three after-tracking checks, then the
+ * image check's options, then the coat-brightness check's. They configure the checks run AFTER tracking, not the
  * tracker's matching.
  */
 export const ID_SWITCH_SETTING_IDS = [
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'autoBrightnessSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckBackgroundHz',
     'imageCheckMaxViews', 'imageCheckGpuTimePct', 'imageCheckCpuTimePct', 'imageCheckWebNN',
+    'brightnessCheckThreshold', 'brightnessCheckHz',
 ];
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.

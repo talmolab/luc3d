@@ -19,6 +19,7 @@
  *     "license": "Apache-2.0",                            the base model's license
  *     "input": 168,                                       model input side (px), a multiple of 14 or 16
  *     "crop": 160,                                        the crop it was trained on: must equal the app's CROP
+ *     "cropRule": 2,                                      how its crops were cut (CROP_RULE); absent = 1
  *     "threshold": -1,                                    recommended flag threshold (-4..0)
  *     "fp16": true,                                       model_fp16.onnx checked against fp32 on WebGPU
  *     "sha256": {"onnx/model.onnx": "<hex>", ...},        optional; checked when the files are local
@@ -40,6 +41,36 @@ export const MODEL_FP32_PATH = 'onnx/model.onnx';
 export const MODEL_FP16_PATH = 'onnx/model_fp16.onnx';
 export const MODEL_CONFIG_PATH = 'config.json';
 
+/**
+ * How the app cuts an animal's crop, as a number a package records (`cropRule`)
+ * so a model trained on other crops is noticed. Bump it with
+ * `scripts/train_image_model.py`'s CROP_RULE whenever `cutCrop` / `cropGeometry`
+ * (ui/image-embedder.js) change what lands in a crop.
+ *   1: tail nodes are those named tail… (packages written before `cropRule`).
+ *   2: also t0, t1, t2… (`isTailNode`, pose/id-switch-check.js), which rule 1
+ *      left in the body: its crops then reach down the tail.
+ * Rule 2 also finds Nose / TTI in any case, but rule 1 refused such skeletons
+ * outright, so no rule-1 model was trained on one.
+ */
+export const CROP_RULE = 2;
+
+/** Node names rule 2 reads as tail and rule 1 read as body (keep in step with `isTailNode`). */
+const RULE2_ONLY_TAIL = /^t\d+$/i;
+
+/**
+ * Would a package of crop rule `rule` see different crops than this app cuts,
+ * on a skeleton with these node names? Rule 1 does on a skeleton naming tail
+ * segments t0, t1…, and cuts the same crop anywhere else. A newer rule than this
+ * app's is one it cannot judge, so it is taken to differ on every skeleton.
+ * @param {number} rule  a manifest's `cropRule` (parseModelManifest: absent = 1)
+ * @param {string[]} nodeNames
+ */
+export function cropRuleDiffers(rule, nodeNames) {
+    if (rule === CROP_RULE) return false;
+    if (rule > CROP_RULE) return true;
+    return (nodeNames || []).some(function (n) { return RULE2_ONLY_TAIL.test(String(n)); });
+}
+
 /** Input sides a package may declare (px): ViT patch grids of 14 or 16 px, 8 to 32 patches a side. */
 export function validModelInput(n) {
     return Number.isInteger(n) && n >= 112 && n <= 512 && (n % 14 === 0 || n % 16 === 0);
@@ -54,7 +85,7 @@ const str = function (v, max) { return typeof v === 'string' && v.trim() ? v.tri
  * Parse and check a manifest (its JSON text or the parsed object) against the
  * crop side the app cuts (`crop`, ui/image-embedder.js CROP).
  * @returns {{ok: true, manifest: Object} | {ok: false, error: string}}
- *   `manifest` is normalised: name, base, license, input, crop, threshold,
+ *   `manifest` is normalised: name, base, license, input, crop, cropRule (absent = 1), threshold,
  *   fp16 (boolean), sha256 (path -> lowercase hex), training, validation.
  */
 export function parseModelManifest(raw, crop) {
@@ -82,8 +113,12 @@ export function parseModelManifest(raw, crop) {
         }
     }
     const obj = function (v) { return v && typeof v === 'object' && !Array.isArray(v) ? v : null; };
+    if (m.cropRule != null && !(Number.isInteger(m.cropRule) && m.cropRule >= 1)) {
+        return { ok: false, error: '"cropRule" must be a whole number from 1 (the crop rule the model was trained with)' };
+    }
     return { ok: true, manifest: {
-        name: name, base: str(m.base), license: str(m.license), input: m.input, crop: m.crop, threshold: m.threshold,
+        name: name, base: str(m.base), license: str(m.license), input: m.input, crop: m.crop,
+        cropRule: m.cropRule == null ? 1 : m.cropRule, threshold: m.threshold,
         fp16: m.fp16 === true, sha256: sha, training: obj(m.training), validation: obj(m.validation),
     } };
 }

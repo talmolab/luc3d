@@ -11,7 +11,9 @@
  *
  * The ID Switches tab shows the model in use with a "Change…" button
  * (`imageModelLineHtml` / `wireImageModelLine`), which opens the dialog
- * (`showImageModelDialog`). Esc, Cancel and a backdrop click leave everything
+ * (`showImageModelDialog`). The dialog's "Train a model for this rig" fold
+ * (`trainingHelpHtml`) says how to make a package; the tab's "How to train
+ * one…" (after an image pre-judge on the built-in model) opens it there. Esc, Cancel and a backdrop click leave everything
  * as it was; "Use this model" sets the session's choice and marks the project
  * dirty.
  *
@@ -23,7 +25,7 @@ import { BUILTIN_IMAGE_MODEL } from './image-embedder.js';
 import {
     loadModelPackageFromFiles, loadModelPackageFromUrl, registeredModelPackage, registeredModelPackages,
 } from './image-model-package.js';
-import { modelChoiceOf } from '../pose/image-model-manifest.js';
+import { modelChoiceOf, cropRuleDiffers, CROP_RULE } from '../pose/image-model-manifest.js';
 import { markDirty } from '../import-export/save-load.js';
 
 function escapeHtml(s) {
@@ -63,10 +65,21 @@ export async function resolveSessionImageModel(session) {
 export function imageModelLineHtml(session) {
     const choice = session && session.imageModel;
     const name = choice ? choice.name : BUILTIN_IMAGE_MODEL.name;
-    const missing = choice && !registeredModelPackage(choice.key) && !choice.url;
+    const pkg = choice ? registeredModelPackage(choice.key) : null;
+    const missing = choice && !pkg && !choice.url;
+    // A package trained on crops cut by another rule than this app's, on a skeleton where the two differ.
+    const nodeNames = ((session && session.skeleton && session.skeleton.nodes) || []).map(function (n) { return typeof n === 'string' ? n : n && n.name; });
+    const otherCrops = pkg && cropRuleDiffers(pkg.cropRule, nodeNames);
+    const newer = otherCrops && pkg.cropRule > CROP_RULE;
     return '<div class="image-model-line">Image model: <b>' + escapeHtml(name) + '</b>' +
         (choice ? ' · flags below ' + escapeHtml(minus(choice.threshold)) : '') +
         (missing ? ' <span class="image-model-missing">(not loaded)</span>' : '') +
+        (otherCrops ? ' <span class="image-model-missing image-model-old-crops" title="' + (newer
+            ? 'It was trained by a newer LUCID, which cuts crops by another rule; this LUCID cuts them differently on this ' +
+              'skeleton, so its scores may be off. Update LUCID to use it.">(trained on other crops: update LUCID)'
+            : 'It was trained when tail segments named t0, t1… still counted as body, so its crops reached down the tail; this ' +
+              'LUCID leaves them out. Its scores may be off: retrain it with the current scripts/train_image_model.py.">' +
+              '(trained on older crops: retrain it)') + '</span>' : '') +
         ' <button class="panel-btn image-model-change" type="button">Change…</button></div>';
 }
 
@@ -78,6 +91,16 @@ export function wireImageModelLine(host, session, onChanged) {
     });
 }
 
+/** Wire every "How to train one…" button (`.image-model-train-open`) in `host`: the dialog, its training fold open. */
+export function wireTrainingPrompt(host, session, onChanged) {
+    if (!host) return;
+    host.querySelectorAll('.image-model-train-open').forEach(function (b) {
+        b.addEventListener('click', function () {
+            showImageModelDialog(session, { showTraining: true }).then(function (changed) { if (changed && onChanged) onChanged(); });
+        });
+    });
+}
+
 function describe(pkg) {
     if (pkg.builtin) {
         return [['Model', 'DINOv3 ViT-S/16, frozen (not trained on your recordings)'], ['License', pkg.license],
@@ -86,6 +109,9 @@ function describe(pkg) {
     const rows = [['Trained from', pkg.base || '—'], ['License', pkg.license || '—'], ['Input', pkg.input + ' px'],
         ['Flag threshold', minus(pkg.threshold) + ' (the package\'s; the Wizard\'s applies to the built-in model)'],
         ['Precision', pkg.fp16 ? 'fp16 on GPUs that support it, else fp32' : 'fp32'],
+        ['Crops', 'rule ' + pkg.cropRule + (pkg.cropRule === CROP_RULE ? ' (this LUCID\'s)'
+            : pkg.cropRule > CROP_RULE ? ' (newer than this LUCID\'s rule ' + CROP_RULE + ': update LUCID to use it as trained)'
+            : ' (older than this LUCID\'s rule ' + CROP_RULE + ': on a skeleton that names tail segments t0, t1…, retrain it)')],
         ['Source', pkg.source.kind === 'url' ? pkg.source.url : 'folder ' + (pkg.source.folder || '') + ' (pick it again after a reload)'],
         ['Key', pkg.key.slice(0, 16) + '…']];
     const flat = function (o) {
@@ -96,9 +122,31 @@ function describe(pkg) {
     return rows;
 }
 
+/** Where the training script is (the repository's main branch). */
+export const TRAIN_SCRIPT_URL = 'https://github.com/talmolab/luc3d/blob/main/scripts/train_image_model.py';
+
+/**
+ * The dialog's "Train a model for this rig" fold: how to make a package with
+ * scripts/train_image_model.py from the rig's own tracked recordings (no labels).
+ * Open when `open` (the ID Switches tab's prompt opens the dialog on it).
+ */
+export function trainingHelpHtml(open) {
+    return '<details class="image-model-train"' + (open ? ' open' : '') + '><summary>Train a model for this rig</summary>' +
+        '<ol class="image-model-steps">' +
+        '<li>Track a few recordings from this rig (Track All, then review the list) and save each one with File ▸ Save ' +
+        '(on several cameras, File ▸ Export SLEAP File By Cam). No hand labels are needed, and a few swaps left in the tracks do little harm. ' +
+        'Keep one recording out to see the gain.</li>' +
+        '<li>On a computer with an NVIDIA GPU, run LUC3D\'s <a href="' + TRAIN_SCRIPT_URL + '" target="_blank" rel="noopener">train_image_model.py</a> ' +
+        '(needs torch, transformers, sleap-io, av, opencv-python and onnx); about 6 minutes on a recent GPU:' +
+        '<code class="image-model-cmd">python scripts/train_image_model.py rig-model --labels rec1.slp rec2.slp --holdout rec3.slp --name "My rig"</code></li>' +
+        '<li>Here: <b>Load package folder…</b>, pick the <b>rig-model</b> folder, <b>Use this model</b>, and run the image check again.</li>' +
+        '</ol></details>';
+}
+
 /**
  * The dialog. Resolves true when the session's model changed, false otherwise.
  * `opts.pickFiles` (tests) stands in for the folder picker: returns a Promise of a File list.
+ * `opts.showTraining` opens the "Train a model for this rig" fold.
  */
 export function showImageModelDialog(session, opts) {
     opts = opts || {};
@@ -121,7 +169,7 @@ export function showImageModelDialog(session, opts) {
             '<input type="file" id="imageModelFolderInput" webkitdirectory hidden>' +
             '<input type="text" id="imageModelUrl" placeholder="owner/repo or https://…/package/" aria-label="Package URL or Hugging Face repo">' +
             '<button type="button" class="panel-btn" id="imageModelUrlLoad">Load from URL</button></div>' +
-            '<dl class="image-model-details"></dl>' +
+            '<dl class="image-model-details"></dl>' + trainingHelpHtml(!!opts.showTraining) +
             '<div class="modal-error" id="imageModelError"></div>' +
             '<div class="modal-actions"><button id="imageModelCancel">Cancel</button><button id="imageModelUse" class="primary">Use this model</button></div>';
         overlay.appendChild(modal);
@@ -194,5 +242,6 @@ export function showImageModelDialog(session, opts) {
         render();
         document.body.appendChild(overlay);
         modal.querySelector('#imageModelCancel').focus();
+        if (opts.showTraining) { const t = modal.querySelector('.image-model-train'); if (t && t.scrollIntoView) t.scrollIntoView({ block: 'nearest' }); }
     });
 }

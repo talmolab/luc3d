@@ -10,6 +10,82 @@
 
 describe('SLP Merge Helpers', function () {
 
+    // --- slpVideoByCamera / camerasAlreadyInSession (Load SLP on a video the session has) ---
+
+    describe('camerasAlreadyInSession', function () {
+        var cam = function (n) { return new Camera(n, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]); };
+        var videos = [{ filename: '/data/rec_a/top.mp4' }, { sourceFilename: '/data/rec_a/side.mp4', filename: 'side_embedded.slp' }, { filename: '.' }];
+
+        it('records each camera\'s video path as the file names it', function () {
+            var m = slpVideoByCamera(videos, { 0: 'top', 1: 'side', 2: 'cam_2' });
+            assertDeepEqual(m, { top: '/data/rec_a/top.mp4', side: '/data/rec_a/side.mp4' }, 'sourceFilename first; "." left out');
+        });
+
+        it('matches a camera with the same name AND the same video path', function () {
+            var s = new Session([cam('top')], new Skeleton('s', ['A'], []), []);
+            s.slpVideoByCamera = { top: '/data/rec_a/top.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), ['top']);
+        });
+
+        it('does not match the same name on another video (campy: every video is 0.mp4)', function () {
+            var s = new Session([cam('0')], new Skeleton('s', ['A'], []), []);
+            s.slpVideoByCamera = { 0: '/data/rec/cam_a/0.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { 0: '/data/rec/cam_b/0.mp4' }), []);
+        });
+
+        it('does not match a camera the session did not get from an SLP, or one it no longer has', function () {
+            var s = new Session([cam('top')], new Skeleton('s', ['A'], []), []);
+            assertDeepEqual(s.slpVideoByCamera, {}, 'a new session records nothing');
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), [], 'no recorded path: never matched');
+            s.slpVideoByCamera = { side: '/data/rec_a/side.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { side: '/data/rec_a/side.mp4' }), [], 'recorded, but the camera is gone');
+        });
+
+        it('after a reopen, a saved short name is only PERHAPS the full path (the user is asked)', function () {
+            var s = new Session([cam('top')], new Skeleton('s', ['A'], []), []);
+            s.slpVideoByCamera = { top: 'top.mp4' };           // what the saved file's videos say
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), [], 'not certain from the name alone');
+            assertDeepEqual(camerasPerhapsInSession(s, { top: '/data/rec_a/top.mp4' }), ['top'], 'so it may be the same video');
+            s.slpVideoByCamera = { top: 'rec_a/top.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { top: 'D:\\data\\rec_a\\top.mp4' }), ['top'], 'a folder and the name: certain (Windows separators too)');
+            s.slpVideoByCamera = { top: 'rec_b/top.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), [], 'another folder: another video');
+            assertDeepEqual(camerasPerhapsInSession(s, { top: '/data/rec_a/top.mp4' }), [], '…not even perhaps');
+        });
+
+        it('campy: another camera\'s 0.mp4 with a different frame count is added without asking', function () {
+            var s = new Session([cam('0')], new Skeleton('s', ['A'], []), []);
+            s.slpVideoByCamera = { 0: '0.mp4' };
+            s.slpVideoFramesByCamera = { 0: 3000 };
+            assertDeepEqual(camerasPerhapsInSession(s, { 0: '/rec/cam_b/0.mp4' }, { 0: 2999 }), [], 'frame counts differ: another video');
+            assertDeepEqual(camerasPerhapsInSession(s, { 0: '/rec/cam_b/0.mp4' }, { 0: 3000 }), ['0'], 'the same count (synced cameras): ask');
+            assertDeepEqual(camerasPerhapsInSession(s, { 0: '/rec/cam_b/0.mp4' }, {}), ['0'], 'no count for the new file: ask');
+        });
+
+        it('slpVideoFramesByCamera reads shape[0] where the file gives one', function () {
+            var m = slpVideoFramesByCamera([{ shape: [60, 32, 256, 1] }, { shape: [0, 32, 256, 1] }, {}], { 0: 'a', 1: 'b', 2: 'c' });
+            assertDeepEqual(m, { a: 60 });
+        });
+
+        it('a lazy project reads the paths and frame counts its loader holds', function () {
+            var s = new Session([cam('top')], new Skeleton('s', ['A'], []), []);
+            s.lazyLoader = { videos: new Map([['top', { filename: 'rec_a/top.mp4', shape: [60, 32, 256, 1] }]]) };
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), ['top']);
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/other.mp4' }), [], 'another video');
+            s.lazyLoader = { videos: new Map([['top', { filename: 'top.mp4', shape: [60, 32, 256, 1] }]]) };
+            assertDeepEqual(camerasPerhapsInSession(s, { top: '/x/top.mp4' }, { top: 50 }), [], 'its frame count tells them apart');
+        });
+
+        it('videoPathMatch: "path" when equal or matching with a folder, "name" on the file name alone', function () {
+            assertEqual(videoPathMatch('/a/b/c.mp4', '/a/b/c.mp4'), 'path', 'equal');
+            assertEqual(videoPathMatch('b/c.mp4', '/a/b/c.mp4'), 'path', 'a folder and the name');
+            assertEqual(videoPathMatch('c.mp4', '/a/b/c.mp4'), 'name', 'the name alone');
+            assertEqual(videoPathMatch('/rec/cam_a/0.mp4', '/rec/cam_b/0.mp4'), null, 'two full paths to different folders');
+            assertNull(videoPathMatch('', '/a/c.mp4'), 'empty');
+            assertNull(videoPathMatch('bc.mp4', '/a/c.mp4'), 'whole names only');
+        });
+    });
+
     // --- validateSkeletonCompatibility ---
 
     describe('validateSkeletonCompatibility', function () {

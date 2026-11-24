@@ -33,6 +33,7 @@ import {
     getTrackerNumAnimals, setTrackerNumAnimals,
 } from '../pose/tracker.js';
 import { hasRealCalibration } from '../pose/placeholder-cameras.js';
+import { singleCameraName } from '../pose/single-camera-tracking.js';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a
@@ -78,6 +79,12 @@ export function showTrackRangeModal(opts) {
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
+        return;
+    }
+    // One camera: SLEAP's tracker runs on the whole video only (runTrackingPass
+    // refuses a range), and needs no calibration, so say that rather than ask for one.
+    if (singleCameraName(session)) {
+        setStatus('Track Frame Range is for multi-camera sessions; on a single camera use Track All', 'warning');
         return;
     }
     // Placeholder cameras only (no calibration loaded): tracking would refuse
