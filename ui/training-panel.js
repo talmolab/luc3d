@@ -26,9 +26,9 @@
  *     `ui/connect/remote-training.js`); every video must already be on the worker (Locate on
  *     worker… as for remote inference); validation is sleap-nn's own random split there (the
  *     protocol takes a validation file only as a worker path), which the Data section says;
- *   - progress rows stay in the panel while the run goes (no RemoteRunCard / Watch Live); the
- *     Training Monitor, Dry run, Full Configuration, post-training inference and local training
- *     come in later updates.
+ *   - progress rows stay in the panel while the run goes (no RemoteRunCard / Watch Live); a row
+ *     opens the Training Monitor (`ui/training-monitor.js`). Dry run, Full Configuration,
+ *     post-training inference and local training come in later updates.
  *
  * Loaded on every build: `pose/initialization.js` imports it after the Inference panel. It talks
  * to native code only through `window.lucidDesktop`, inside `setupTrainingPanel`.
@@ -55,6 +55,8 @@ import { createRemoteTraining } from './connect/remote-training.js';
 import { bytesToBase64, payloadCheck, buildTrainSpec, initialRows, rowWithTelemetry, finishRow, rowText } from '../pose/connect/remote-training-plan.js';
 import { configureConnect } from '../pose/connect/store.js';
 import { formatRunTimestamp, formatDuration } from '../pose/connect/timestamp.js';
+import { plateauSettings } from '../pose/training-metrics.js';
+import { openTrainingMonitor, trainingMonitor } from './training-monitor.js';
 
 export const TRAINING_TAB_ID = 'tabTraining';
 
@@ -85,12 +87,15 @@ const run = {
 const analysis = { key: '', at: 0, counts: new Map(), rec: null, idReport: null, nodeNames: [], trackNames: [] };
 let elapsedTimer = null;
 let form = null;
+let monitorIndex = null;          // the row the Training Monitor shows
 
 function isRunning() { return run.status === 'running'; }
 function isDone() { return run.status === 'completed' || run.status === 'error'; }
 function refresh() {
     if (remote) remote.sync();
     if (form) form.runRefreshers();
+    const mon = trainingMonitor();
+    if (mon && monitorIndex != null) mon.update();
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +448,11 @@ async function startTraining() {
             });
             plans.push({
                 group: g, spec: spec, stats: built.stats,
-                models: heads.map(function (h, i) { return { head: h, label: groupModelLabel(headLabel(h), g), maxEpochs: cfg.hp[slots[i]].maxEpochs, runName: runNames[i] }; }),
+                models: heads.map(function (h, i) {
+                    const pl = plateauSettings(cfg.slots[slots[i]].doc);
+                    return { head: h, label: groupModelLabel(headLabel(h), g), maxEpochs: cfg.hp[slots[i]].maxEpochs, runName: runNames[i],
+                        plateauPatience: pl.patience, plateauMinDelta: pl.minDelta };
+                }),
             });
         }
     } catch (e) {
@@ -452,6 +461,8 @@ async function startTraining() {
         return;
     }
     run.rows = initialRows(plans);
+    let ri = 0;
+    plans.forEach(function (p) { p.models.forEach(function (m) { run.rows[ri].plateauPatience = m.plateauPatience; run.rows[ri].plateauMinDelta = m.plateauMinDelta; ri++; }); });
     plans.forEach(function (p) {
         appendLog('$ Remote training: ' + p.group.name + ' — ' + p.stats.frames.toLocaleString('en-US') + ' labelled frames, ' +
             p.stats.instances.toLocaleString('en-US') + ' instances, ' + p.stats.videos + ' video' + (p.stats.videos === 1 ? '' : 's') +
@@ -465,7 +476,7 @@ async function startTraining() {
         for (const p of plans) {
             if (run.cancelled) break;
             let inGroup = 0;
-            run.rows[base].status = 'running';
+            markRunning(base);
             refresh();
             const res = await remote.submitGroup(p.spec, {
                 onLog: function (line, progress) { appendLog(line, progress); scheduleRefresh(); },
@@ -473,24 +484,25 @@ async function startTraining() {
                     const k = base + i;
                     if (!run.rows[k]) return;
                     run.rows[k] = rowWithTelemetry(run.rows[k], t);
-                    run.rows[k].status = 'running';
+                    if (run.rows[k].status !== 'running') markRunning(k);
+                    if (t.kind === 'epoch') run.rows[k].epochStartedAt = Date.now();
                     scheduleRefresh();
                 },
                 onModelComplete: function (r) {
                     const k = base + inGroup;
-                    run.rows[k] = finishRow(run.rows[k], { status: 'completed', modelDir: r.modelDir });
+                    run.rows[k] = endRow(run.rows[k], { status: 'completed', modelDir: r.modelDir });
                     if (r.modelDir) run.modelDirs.push(r.modelDir);
                     inGroup++;
-                    if (run.rows[base + inGroup]) run.rows[base + inGroup].status = 'running';
+                    if (run.rows[base + inGroup]) markRunning(base + inGroup);
                     refresh();
                 },
             });
             const k = base + inGroup;
             if (res && res.success) {
-                run.rows[k] = finishRow(run.rows[k], { status: 'completed', modelDir: res.modelDir });
+                run.rows[k] = endRow(run.rows[k], { status: 'completed', modelDir: res.modelDir });
                 if (res.modelDir) run.modelDirs.push(res.modelDir);
             } else {
-                run.rows[k] = finishRow(run.rows[k], { status: run.cancelled ? 'cancelled' : 'failed' });
+                run.rows[k] = endRow(run.rows[k], { status: run.cancelled ? 'cancelled' : 'failed' });
                 if (!run.cancelled) {
                     const last = run.errorTail.length ? run.errorTail[run.errorTail.length - 1] : '';
                     run.error = 'Training ' + run.rows[k].label + ' failed' + (res && res.error ? ': ' + res.error : '') + (last ? ' — ' + last : '');
@@ -506,12 +518,45 @@ async function startTraining() {
     if (run.cancelled) {
         run.status = 'error';
         run.error = 'Training cancelled';
-        run.rows.forEach(function (r, i) { if (r.status === 'running') run.rows[i] = finishRow(r, { status: 'cancelled' }); });
+        run.rows.forEach(function (r, i) { if (r.status === 'running') run.rows[i] = endRow(r, { status: 'cancelled' }); });
     } else {
         run.status = run.error ? 'error' : 'completed';
     }
     stopElapsed();
     refresh();
+}
+
+/** A row starts: its clocks start (the monitor's runtime lines). */
+function markRunning(k) {
+    const r = run.rows[k];
+    if (!r) return;
+    r.status = 'running';
+    r.startedAt = r.startedAt || Date.now();
+    r.epochStartedAt = Date.now();
+}
+
+/** A row ends: `finishRow` plus its end time. */
+function endRow(r, outcome) {
+    const out = finishRow(r, outcome);
+    out.endedAt = Date.now();
+    return out;
+}
+
+/** Open the Training Monitor on row `i` (sleap-app: click a progress row). */
+function openMonitor(i) {
+    if (!run.rows[i]) return;
+    monitorIndex = i;
+    openTrainingMonitor({
+        row: function () { return run.rows[monitorIndex]; },
+        runStatus: function () { return run.status; },
+        isActive: function () {
+            const r = run.rows[monitorIndex];
+            return isRunning() && !!r && r.status === 'running' && !run.cancelled;
+        },
+        errorLines: function () { return run.errorTail.slice(); },
+        onStopEarly: stopEarly,
+        onCancel: cancelTraining,
+    });
 }
 
 let refreshPending = false;
@@ -538,6 +583,9 @@ async function cancelTraining() {
 }
 
 function resetRun(keepConfig) {
+    const mon = trainingMonitor();
+    if (mon) mon.close();
+    monitorIndex = null;
     run.status = 'idle'; run.error = null; run.rows = []; run.log = []; run.errorTail = []; run.modelDirs = [];
     run.startedAt = null; run.endedAt = null; run.cancelled = false; run.stopRequested = false; run.note = null;
     if (!keepConfig) {
@@ -1017,6 +1065,16 @@ function buildProgress(root) {
                 if (ic) lab.appendChild(icon(ic, r.status === 'running' ? 'inf-spin' : ''));
                 else lab.appendChild(el('span', 'trn-dot'));
                 lab.appendChild(el('span', 'trn-row-text'));
+                if (r.status !== 'pending') {
+                    // sleap-app: a row with a chart opens the Training Monitor.
+                    lab.classList.add('trn-row-open');
+                    lab.setAttribute('role', 'button');
+                    lab.tabIndex = 0;
+                    lab.title = 'Open the Training Monitor';
+                    lab.appendChild(icon('chart-line', 'trn-row-chart'));
+                    lab.addEventListener('click', function () { openMonitor(i); });
+                    lab.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMonitor(i); } });
+                }
                 row.appendChild(lab);
                 const bar = el('div', 'inf-bar trn-bar');
                 const fill = el('div', 'inf-bar-fill trn-fill-' + r.status);
@@ -1133,7 +1191,7 @@ export function showTrainingPanel() { return showPanelTab(TRAINING_TAB_ID); }
 
 /** For tests: the live config and run state (read-only use). */
 export function _trainingState() {
-    return { cfg: cfg, run: run, analysis: analysis, groups: groups(), selections: includedSelections(), remote: remote && remote._state() };
+    return { cfg: cfg, run: run, analysis: analysis, groups: groups(), selections: includedSelections(), remote: remote && remote._state(), monitorIndex: monitorIndex };
 }
 /** For tests: recompute the label analysis now. */
 export function _trainingAnalyze() { analyze(true); panelRefresh(); }

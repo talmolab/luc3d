@@ -2836,6 +2836,17 @@ view for a per-view group; `RUN_NAME_RE` is the charset Rust will accept.
 **Imports.** None. **Imported by** `ui/training-panel.js`.
 **Tests.** `tests/test-training-groups.mjs`.
 
+### pose/training-metrics.js
+
+**Purpose.** The Training Monitor's runtime lines, port of sleap-app `trainingMetrics.ts`
+(`computeRuntimeMetrics`: mean epoch time, ETA of the next 10 epochs, epochs in plateau against the
+config's `min_delta`, best validation epoch; `formatRuntimeTitle`: "Training Epoch N / Total Runtime: mm:ss /
+Epoch Runtime: mm:ss", "Mean Time per Epoch … / ETA Next 10 Epochs: N min", "Epochs in Plateau: n / patience",
+last / best validation loss as `toExponential(3)`). `rowRuntimeLines(row, now)` for a panel row,
+`plateauSettings(doc)` reads a config's `early_stopping`. DOM-free. **Exports.** `computeRuntimeMetrics`,
+`mmss`, `formatRuntimeTitle`, `rowRuntimeLines`, `plateauSettings`. **Imports.** None. **Imported by.**
+`ui/training-monitor.js`, `ui/training-panel.js`. **Tests.** `tests/test-training-metrics.mjs`.
+
 ### pose/training-recommend.js
 
 **Purpose.** Port of sleap-app's pipeline recommendation (`recommendPipeline`: one animal per frame →
@@ -13242,8 +13253,9 @@ user-labelled counts (`import-export/training-slp.js` writes the training file f
 "Models for views" (one for all views / one per view, `pose/training-groups.js`), identity checks for "+ ID"
 types, box types disabled, Top-Down + ID's second slot defaults to the Multi-Class Top-Down preset, every
 video must be on the worker (Locate on worker…), validation is sleap-nn's random split on a worker. Local
-training, the Training Monitor, Dry run, Full Configuration and post-training inference are later
-phases. The label counts walk every lazy store row, so they are recomputed when the project changes or
+training, Dry run, Full Configuration and post-training inference are later phases. A row with a chart
+opens the Training Monitor (`ui/training-monitor.js`); rows keep their start / epoch / end times and the
+config's plateau settings for its runtime lines. The label counts walk every lazy store row, so they are recomputed when the project changes or
 every 15 s while the panel shows, not on each 2 s refresh. Loaded on every build by one literal dynamic
 import in `pose/initialization.js`, after the Inference panel. **Exports.** `TRAINING_TAB_ID`,
 `setupTrainingPanel()`, `showTrainingPanel()`, `_trainingState()`, `_trainingAnalyze()` (tests).
@@ -13253,8 +13265,21 @@ import in `pose/initialization.js`, after the Inference panel. **Exports.** `TRA
 `../import-export/training-slp.js`, `../import-export/file-io.js` (`findSkeletonMismatch`),
 `./connect/backend-picker.js`, `./connect/remote-training.js`, `../pose/connect/remote-training-plan.js`,
 `../pose/connect/store.js` (`configureConnect`: the YAML parser for `withYamlRunName`),
-`../pose/connect/timestamp.js`; the importmap's `yaml` (dynamic). **Imported by.**
-`pose/initialization.js` (dynamic). **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/panel-rail.mjs`.
+`../pose/connect/timestamp.js`, `../pose/training-metrics.js`, `./training-monitor.js`; the importmap's `yaml` (dynamic). **Imported by.**
+`pose/initialization.js` (dynamic). **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/panel-rail.mjs`.
+
+### ui/training-monitor.js
+
+**Purpose.** The Training Monitor (port of sleap-app `LossViewerDialog.tsx`): opened from a progress row of
+the Training panel, "Training Monitor — <model>", sleap-app's runtime lines (`pose/training-metrics.js`,
+numbers bold like `renderTitleLine`), the loss plot (`ui/connect/loss-plot.js`, LUCID colours), the error
+output of a failed run, Stop Early / Cancel pinned at the bottom while the shown model trains. One at a
+time; redraws on the panel's refresh at most every 250 ms; Esc / ✕ / scrim close, Tab trapped
+(`trapModal`), `data-shortcut-modal` (playback keys off). The validation-image strip comes with local
+training. **Exports.** `openTrainingMonitor({row, runStatus, isActive, errorLines, onStopEarly,
+onCancel})` → `{update, close, isOpen}`, `trainingMonitor()`. **Imports.** `./connect/loss-plot.js`,
+`./connect/layers.js`, `./panel-form.js`, `../pose/training-metrics.js`. **Imported by.**
+`ui/training-panel.js`. **Tests.** `tests/e2e/training-monitor.mjs`.
 
 ### ui/training-args.js
 
@@ -13541,7 +13566,8 @@ only, Wrap, Stop Early / Cancel while running and `canStop`, failure detail) ove
 "Log scale" / "Ignore outliers" / Batches 200-1000-5000-All, hover tooltip, drag-zoom + Reset zoom (double-click
 resets), PNG and CSV export through `downloadBytes`; colours from CSS variables), with LossPlot.tsx's empty-state
 texts and title numbering (`Epoch ${model.epoch}`, best epoch 1-based). **Exports.**
-`createLossPlot(container, {height})` → `{update({model, status}), destroy}`, `lossTitle`. **Imports.** `import-export/file-io.js` (`downloadBytes`). **Imported by.** `job-viewer.js`. **Coverage.** `tests/e2e/connect-jobs.mjs` §D.
+`createLossPlot(container, {height, titleLines})` → `{update({model, status}), destroy}` (`titleLines: false` hides the one-line title: the
+Training Monitor shows sleap-app's runtime lines instead), `lossTitle`. **Imports.** `import-export/file-io.js` (`downloadBytes`). **Imported by.** `job-viewer.js`, `ui/training-monitor.js`. **Coverage.** `tests/e2e/connect-jobs.mjs` §D, `tests/e2e/training-monitor.mjs`.
 
 #### ui/connect/merge-predictions-dialog.js
 **Purpose.** Fetch & Load from a Jobs-tab row (`MergePredictionsDialog.tsx`, adapted to LUCID's views): a job this

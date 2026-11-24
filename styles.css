@@ -9003,6 +9003,30 @@ div.track-summary-steps { padding-left: 0; }
   border-radius: 6px; padding: 8px; font-size: 11px; }
 .trn-errout { display: flex; flex-direction: column; gap: 4px; }
 .trn-errout .inf-log { color: var(--error-color); }
+/* The monitor hides parts with the `hidden` attribute, some of which set `display` (the panel itself
+   is covered by `.inference-panel [hidden]`). */
+.trn-mon [hidden] { display: none !important; }
+/* Training Monitor (ui/training-monitor.js) — sleap-app's LossViewerDialog: a 760 px card, the
+   body scrolls between a pinned title and pinned Stop Early / Cancel. */
+.trn-row-open { cursor: pointer; }
+.trn-row-open:hover .trn-row-text, .trn-row-open:focus-visible .trn-row-text { text-decoration: underline; }
+.trn-row-chart { margin-left: auto; opacity: 0.6; flex-shrink: 0; }
+.trn-mon-scrim { position: fixed; inset: 0; z-index: 10000; background: rgba(0, 0, 0, 0.55); display: flex;
+  align-items: center; justify-content: center; padding: 16px; }
+.trn-mon { width: min(760px, 100%); max-height: 90vh; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); }
+.trn-mon-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px 6px; flex-shrink: 0; }
+.trn-mon-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.trn-mon-x { background: transparent; border: none; color: var(--text-muted); cursor: pointer; width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; }
+.trn-mon-x:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.trn-mon-x .inf-icon { width: 14px; height: 14px; }
+.trn-mon-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 16px 12px; display: flex; flex-direction: column; gap: 10px; }
+.trn-mon-runtime { font-size: 12px; line-height: 1.45; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.trn-mon-runtime strong { color: var(--text-primary); font-weight: 700; }
+.trn-mon-foot { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-color); flex-shrink: 0; }
+.trn-mon-foot .btn { flex: 1; height: 32px; }
 
 /* ============================================
    Connect panel (ui/connect/*) — sleap-app's ConnectPanel.tsx look:
