@@ -17,7 +17,7 @@
  * Depends on: ui/confirm-dialog.js
  */
 
-import { confirmDialog } from './confirm-dialog.js?v=e0c5253a4e00';
+import { confirmDialog } from './confirm-dialog.js?v=01fbda1a1d65';
 
 /** How many track names the dialog lists before "and N more". */
 var NAMES_SHOWN = 4;

@@ -14,7 +14,7 @@
 // The model operations (`textToParts`, `partsToText`, `dropTile`, `appendTile`, `removeTile`) are pure and DOM-free;
 // tests/test-skeleton-chain-editor.mjs runs them in Node. The DOM half is `buildSkeletonChainEditor`.
 
-import { parseChainText } from '../pose/skeleton-check-run.js?v=e0c5253a4e00';
+import { parseChainText } from '../pose/skeleton-check-run.js?v=01fbda1a1d65';
 
 /** The setting's text -> parts (arrays of node names). */
 export function textToParts(text) {

@@ -23,17 +23,17 @@
 //             pose/pose-data.js (`groupDisplayName`), pose/outline-core.js,
 //             pose/outline-worker.js (`handleOutlineMessage`, the inline path)
 
-import { state, isViewDocked } from './app-state.js?v=e0c5253a4e00';
-import { groupReprojection, getGroupColor, unlinkedBaseColor, unlinkedDupIndices } from './overlays.js?v=e0c5253a4e00';
-import { keyframeIndices } from './image-embedder.js?v=e0c5253a4e00';
-import { drawAllOverlays } from './rendering.js?v=e0c5253a4e00';
-import { showLoadingProgress, hideLoading } from './loading-overlay.js?v=e0c5253a4e00';
-import { ensureLazyFrameData } from '../pose/triangulation.js?v=e0c5253a4e00';
-import { groupDisplayName } from '../pose/pose-data.js?v=e0c5253a4e00';
-import { cagePlanes, mirroredPoint, reflectionVisible } from '../pose/cage-mirrors.js?v=e0c5253a4e00';
-import { tailChain, animalFromInstance, areaModel, poseAreaModel, outlineParams, pointInPolygon, labelImageContours, keypointCheck, outlineSuspects } from '../pose/outline-core.js?v=e0c5253a4e00';
-import { outlineEditAt, rleEncode, rleDecode } from '../pose/outline-edits.js?v=e0c5253a4e00';
-import { handleOutlineMessage } from '../pose/outline-worker.js?v=e0c5253a4e00';
+import { state, isViewDocked } from './app-state.js?v=01fbda1a1d65';
+import { groupReprojection, getGroupColor, unlinkedBaseColor, unlinkedDupIndices } from './overlays.js?v=01fbda1a1d65';
+import { keyframeIndices } from './image-embedder.js?v=01fbda1a1d65';
+import { drawAllOverlays } from './rendering.js?v=01fbda1a1d65';
+import { showLoadingProgress, hideLoading } from './loading-overlay.js?v=01fbda1a1d65';
+import { ensureLazyFrameData } from '../pose/triangulation.js?v=01fbda1a1d65';
+import { groupDisplayName } from '../pose/pose-data.js?v=01fbda1a1d65';
+import { cagePlanes, mirroredPoint, reflectionVisible } from '../pose/cage-mirrors.js?v=01fbda1a1d65';
+import { tailChain, animalFromInstance, areaModel, poseAreaModel, outlineParams, pointInPolygon, labelImageContours, keypointCheck, outlineSuspects } from '../pose/outline-core.js?v=01fbda1a1d65';
+import { outlineEditAt, rleEncode, rleDecode } from '../pose/outline-edits.js?v=01fbda1a1d65';
+import { handleOutlineMessage } from '../pose/outline-worker.js?v=01fbda1a1d65';
 
 /** Frames sampled per camera for its empty arena (odd: an exact median). */
 export var BACKGROUND_FRAMES = 39;
@@ -79,7 +79,7 @@ function makePool() {
     if (!inline) {
         for (var i = 0; i < size; i++) {
             try {
-                var w = new Worker(new URL('../pose/outline-worker.js?v=e0c5253a4e00', import.meta.url), { type: 'module' });
+                var w = new Worker(new URL('../pose/outline-worker.js?v=01fbda1a1d65', import.meta.url), { type: 'module' });
                 w.onmessage = onWorkerMessage;
                 w.onerror = onWorkerError(i);
                 pool.workers.push(w);
