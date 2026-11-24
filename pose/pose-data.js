@@ -1823,9 +1823,16 @@ export class Session {
          * lazy one's loader holds the same paths. It lets a second Load SLP of
          * the same video be recognised instead of adding its camera again
          * (`camerasAlreadyInSession`, which also matches a saved short name to
-         * the full path, `sameVideoPath`).
+         * the full path by its folders, `videoPathMatch`).
          */
         this.slpVideoByCamera = {};
+        /**
+         * @type {Object<string, number>} cameraName -> the frame count of that
+         * video, where the SLP gave one (`slpVideoFramesByCamera`). Beside
+         * `slpVideoByCamera`: two videos with the same file name but different
+         * frame counts are different videos (`camerasPerhapsInSession`).
+         */
+        this.slpVideoFramesByCamera = {};
         /**
          * @type {Object<string, number>} cameraName -> contrast setting, an
          * integer in [-100, 100]. Display-only (a CSS filter on the view
