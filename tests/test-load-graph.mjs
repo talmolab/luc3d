@@ -54,6 +54,81 @@ group('createBusyClock — busy time summed over threads, spans in flight includ
     eq(m.ms(), 170, '…a handler inside an open span is not counted twice');
 }
 
+group('createBusyClock.add + createSyncTimer — a worker that waits reports only its compute');
+{
+    let t = 0;
+    const clk = G.createBusyClock(() => t);
+    clk.add(40); clk.add(-5); clk.add(NaN); clk.add(undefined);
+    eq(clk.ms(), 40, 'add counts a reported compute time; negative, NaN and missing are ignored');
+    clk.begin('m'); t = 10;
+    clk.add(25);
+    eq(clk.ms(), 75, '…on top of the spans still open');
+    clk.close();
+
+    // a crop worker's job: wait in its queue, wait for the read token, cut (sync), write the inputs (sync)
+    let now = 0;
+    const timer = G.createSyncTimer(() => now);
+    const wait = (ms) => new Promise(r => setTimeout(() => { now += ms; r(); }, 0));
+    const job = async () => {
+        await wait(500);                                         // queued behind another job
+        await wait(300);                                         // waiting for the read token / the decoder
+        const cut = timer.time(() => { now += 12; return 'grey'; });
+        await wait(200);                                         // waiting again (the GPU)
+        timer.time(() => { now += 8; });
+        return cut;
+    };
+    eq(await job(), 'grey', 'time() returns what the section returns');
+    eq(timer.take(), 20, 'only the synchronous sections count (12 + 8 ms), not the 1,000 ms of waits between them');
+    eq(timer.take(), 0, 'take() starts again');
+    let threw = false;
+    try { timer.time(() => { now += 5; throw new Error('bad crop'); }); } catch (e) { threw = true; }
+    ok(threw && timer.take() === 5, 'a section that throws still counts its time, and the error goes through');
+
+    // the old way, for contrast: a lane open while the job waits counts the waits as busy
+    now = 0;
+    const lane = G.createBusyClock(() => now), fixed = G.createBusyClock(() => now), tm = G.createSyncTimer(() => now);
+    const jobs = [0, 1, 2, 3].map(async (k) => {
+        lane.begin(k);
+        await wait(100 * k);                                     // the read token: one worker cuts at a time
+        tm.time(() => { now += 10; });
+        lane.end(k);
+        fixed.add(tm.take());
+    });
+    await Promise.all(jobs);
+    ok(fixed.ms() === 40 && lane.ms() > fixed.ms(), `four jobs of 10 ms each: 40 ms of compute reported, where open lanes counted ${lane.ms()} ms`);
+}
+
+group('createPressureWatch — the machine\'s CPU pressure, where the browser has it');
+{
+    const none = G.createPressureWatch(null, undefined);
+    ok(typeof PressureObserver === 'undefined' ? none.state() === null : true, 'no PressureObserver (Node, Firefox, Safari) → null, silently');
+    none.stop();
+    let made = null;
+    class FakePO {
+        constructor(cb) { this.cb = cb; this.on = false; made = this; }
+        observe(src, opts) { this.src = src; this.opts = opts; this.on = true; return Promise.resolve(); }
+        disconnect() { this.on = false; }
+    }
+    const heard = [];
+    const w = G.createPressureWatch((s) => heard.push(s), FakePO);
+    ok(made && made.src === 'cpu' && made.opts.sampleInterval === 1000, 'observes the cpu source, once a second');
+    eq(w.state(), null, 'no reading yet → null');
+    made.cb([{ state: 'nominal' }, { state: 'fair' }]);
+    eq(w.state(), 'fair', 'the latest record\'s state');
+    made.cb([{ state: 'fair' }]); made.cb([{ state: 'weird' }]); made.cb([]);
+    eq(heard.join(','), 'fair', 'onChange hears each new known state once');
+    w.stop();
+    ok(!made.on, 'stop() disconnects');
+    made.cb([{ state: 'critical' }]);
+    eq(w.state(), 'fair', '…and later records are ignored');
+    class Refused extends FakePO { observe() { return Promise.reject(new Error('NotAllowedError')); } }
+    const r = G.createPressureWatch(null, Refused);
+    await new Promise(res => setTimeout(res, 0));
+    ok(r.state() === null && !made.on, 'refused (permissions policy) → stays null, disconnected');
+    class Throws { constructor() { throw new Error('nope'); } }
+    eq(G.createPressureWatch(null, Throws).state(), null, 'a constructor that throws → null, no exception');
+}
+
 group('createLoadMeter — share of the window spent busy');
 {
     const meter = G.createLoadMeter(5000);
@@ -69,7 +144,15 @@ group('formatCpuLoad — the CPU line');
     c = G.formatCpuLoad(12, 91.6, 'Triangulate All: 11 workers solving');
     ok(c.text === 'CPU: 12 cores · load 92%' && c.load === 91.6, 'with its load ("' + c.text + '")');
     eq(c.title, 'The share of the CPU\'s 12 cores kept busy over the last 5 s by Triangulate All: 11 workers solving. ' +
+       'Busy means computing: time a thread spends waiting (for the video decoder, the GPU or another thread) is not counted. ' +
        'Browsers do not report the CPU\'s total load, so other apps are not included.', 'the tooltip says what it counts, and what it cannot');
+    ok(!/system/i.test(c.text + c.title), 'no pressure given → nothing about the system');
+    c = G.formatCpuLoad(32, 4.2, 'X', 'fair');
+    eq(c.text, 'CPU: 32 cores · load 4% · fair', 'the machine\'s CPU pressure goes after the load');
+    ok(/ "fair": the whole machine's CPU pressure .*other apps included\.$/.test(c.title), '…and the tooltip says what the word is, other apps included');
+    eq(G.formatCpuLoad(32, null, 'X', 'serious').text, 'CPU: 32 cores · serious', '…shown before the load is measured too');
+    ok(/^"serious": /.test(G.formatCpuLoad(32, null, 'X', 'serious').title), '…with only its own tooltip sentence');
+    eq(G.formatCpuLoad(32, 10, 'X', 'bogus').text, 'CPU: 32 cores · load 10%', 'an unknown state is left out');
     eq(G.formatCpuLoad(1, 50, 'X').text, 'CPU: 1 core · load 50%', 'one core, singular');
     eq(G.formatCpuLoad(0, 50, 'X').text, 'CPU · load 50%', 'unknown core count → no count claimed');
     eq(G.formatCpuLoad(undefined, null, 'X').text, 'CPU', '…nor before the load');
