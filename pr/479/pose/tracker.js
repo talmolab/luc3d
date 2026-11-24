@@ -16,40 +16,40 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=cc2138a6b2f2';
-import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=cc2138a6b2f2';
-import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, reviewResult, retrackLosses, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=cc2138a6b2f2';
-import { confirmRetrack } from '../ui/retrack-warning.js?v=cc2138a6b2f2';
-import { multiCameraReview } from './multi-camera-review.js?v=cc2138a6b2f2';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=cc2138a6b2f2';
+} from './triangulation.js?v=81287881f060';
+import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js?v=81287881f060';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, reviewResult, retrackLosses, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=81287881f060';
+import { confirmRetrack } from '../ui/retrack-warning.js?v=81287881f060';
+import { multiCameraReview } from './multi-camera-review.js?v=81287881f060';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=81287881f060';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=cc2138a6b2f2';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=81287881f060';
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
     getTrackingThresholdDefs, updateTrackingThresholds,
-} from '../ui/settings.js?v=cc2138a6b2f2';
-import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=cc2138a6b2f2';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=cc2138a6b2f2';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=cc2138a6b2f2';
-import { startTrackerWorker } from './tracker-pool.js?v=cc2138a6b2f2';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=cc2138a6b2f2';
-import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=cc2138a6b2f2';
-import { hasRealCalibration } from './placeholder-cameras.js?v=cc2138a6b2f2';
-import { drawAllOverlays, holdOverlayDraws, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=cc2138a6b2f2';
-import { updateInfoPanel } from '../ui/info-panel.js?v=cc2138a6b2f2';
-import { setColorByIdentity } from '../ui/color-by.js?v=cc2138a6b2f2';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=cc2138a6b2f2';
-import { runIdSwitchChecks, clearIdSwitchResults, setReviewList } from '../ui/id-switch-modal.js?v=cc2138a6b2f2';
-import { summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks } from '../ui/track-summary.js?v=cc2138a6b2f2';
-import { showTrackSummaryModal, rememberTrackSummary, summarySession } from '../ui/track-summary-modal.js?v=cc2138a6b2f2';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=cc2138a6b2f2';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=cc2138a6b2f2';
-import { noteTrackRun } from './run-state.js?v=cc2138a6b2f2';
-import { resolveTailMarks, createTailBandCue, TAIL_BAND_READ } from './tail-mark.js?v=cc2138a6b2f2';
-import { resolveIdentityCues } from './identity-cues.js?v=cc2138a6b2f2';
-import { createTailMarkReader } from '../ui/tail-mark-reader.js?v=cc2138a6b2f2';
+} from '../ui/settings.js?v=81287881f060';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js?v=81287881f060';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=81287881f060';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=81287881f060';
+import { startTrackerWorker } from './tracker-pool.js?v=81287881f060';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=81287881f060';
+import { loadAllLazyFrames, sweepLazyFrameWindows, showCalibrationRequiredPopup } from './triangulation.js?v=81287881f060';
+import { hasRealCalibration } from './placeholder-cameras.js?v=81287881f060';
+import { drawAllOverlays, holdOverlayDraws, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=81287881f060';
+import { updateInfoPanel } from '../ui/info-panel.js?v=81287881f060';
+import { setColorByIdentity } from '../ui/color-by.js?v=81287881f060';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=81287881f060';
+import { runIdSwitchChecks, clearIdSwitchResults, setReviewList } from '../ui/id-switch-modal.js?v=81287881f060';
+import { summarizeTrackedIdentities, describeSwitchCheck, describeTailMarks } from '../ui/track-summary.js?v=81287881f060';
+import { showTrackSummaryModal, rememberTrackSummary, summarySession } from '../ui/track-summary-modal.js?v=81287881f060';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=81287881f060';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=81287881f060';
+import { noteTrackRun } from './run-state.js?v=81287881f060';
+import { resolveTailMarks, createTailBandCue, TAIL_BAND_READ } from './tail-mark.js?v=81287881f060';
+import { resolveIdentityCues } from './identity-cues.js?v=81287881f060';
+import { createTailMarkReader } from '../ui/tail-mark-reader.js?v=81287881f060';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -2028,16 +2028,16 @@ async function runSingleCameraTrackAll(session, bail) {
         collapseViewport3D(viewport3d);
         console.timeEnd('[TrackAll] total');
         var doneMsg = 'Tracked ' + res.numIdentities + ' animal' + (res.numIdentities === 1 ? '' : 's') + ' across ' +
-            res.frames.toLocaleString() + ' frames with SLEAP\'s tracker (one track per animal)' +
-            (res.untracked ? ', ' + res.untracked.toLocaleString() + ' detection' + (res.untracked === 1 ? '' : 's') +
+            res.frames.toLocaleString('en-US') + ' frames with SLEAP\'s tracker (one track per animal)' +
+            (res.untracked ? ', ' + res.untracked.toLocaleString('en-US') + ' detection' + (res.untracked === 1 ? '' : 's') +
                 ' over the animal count left without a track' : '') +
-            (res.filtered ? ', ' + res.filtered.toLocaleString() + ' detection' + (res.filtered === 1 ? '' : 's') +
+            (res.filtered ? ', ' + res.filtered.toLocaleString('en-US') + ' detection' + (res.filtered === 1 ? '' : 's') +
                 ' removed by the detection filters (left without a track)' : '') +
-            (res.duplicates ? ', ' + res.duplicates.toLocaleString() + ' duplicate detection' + (res.duplicates === 1 ? '' : 's') +
+            (res.duplicates ? ', ' + res.duplicates.toLocaleString('en-US') + ' duplicate detection' + (res.duplicates === 1 ? '' : 's') +
                 ' removed first (left without a track)' : '') +
             (res.lone ? ', one animal alone ' + (res.lone.until != null ? 'until frame ' + (res.lone.until + 1).toLocaleString('en-US') : 'throughout') +
                 ' kept on one track' : '') +
-            (nReview ? ', ' + nReview.toLocaleString() + ' place' + (nReview === 1 ? '' : 's') + ' to review in the ID Switches tab' : '') +
+            (nReview ? ', ' + nReview.toLocaleString('en-US') + ' place' + (nReview === 1 ? '' : 's') + ' to review in the ID Switches tab' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');
         // The body-size check is OPTIONAL on one camera (the user's choice, 2026-10-12): not run here, and the

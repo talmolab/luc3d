@@ -30,30 +30,30 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=cc2138a6b2f2';
-import { state, getActiveSession } from './app-state.js?v=cc2138a6b2f2';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=cc2138a6b2f2';
-import { showPanelTab } from './panel-rail.js?v=cc2138a6b2f2';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=cc2138a6b2f2';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=cc2138a6b2f2';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=cc2138a6b2f2';
-import { getTrackingThreshold } from './settings.js?v=cc2138a6b2f2';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=cc2138a6b2f2';
-import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=cc2138a6b2f2';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraFixSwapsTracks, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=cc2138a6b2f2';
-import { pairEncounters3d } from '../pose/multi-camera-review.js?v=cc2138a6b2f2';
-import { formatFrameNumber } from './frame-readout.js?v=cc2138a6b2f2';
+import { noteProgress } from './progress-delta.js?v=81287881f060';
+import { state, getActiveSession } from './app-state.js?v=81287881f060';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=81287881f060';
+import { showPanelTab } from './panel-rail.js?v=81287881f060';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=81287881f060';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=81287881f060';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=81287881f060';
+import { getTrackingThreshold } from './settings.js?v=81287881f060';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=81287881f060';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=81287881f060';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraFixSwapsTracks, singleCameraCheckOptions, pairEncounters } from '../pose/single-camera-tracking.js?v=81287881f060';
+import { pairEncounters3d } from '../pose/multi-camera-review.js?v=81287881f060';
+import { formatFrameNumber } from './frame-readout.js?v=81287881f060';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=cc2138a6b2f2';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=cc2138a6b2f2';
-import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=cc2138a6b2f2';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=cc2138a6b2f2';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=cc2138a6b2f2';
-import { createBrightnessSampler } from './brightness-sampler.js?v=cc2138a6b2f2';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=81287881f060';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine, wireTrainingPrompt } from './image-model-dialog.js?v=81287881f060';
+import { prejudgeFor, prejudgeSettings, PREJUDGE_DEFAULTS, PREJUDGE_BUILTIN } from '../pose/image-prejudge.js?v=81287881f060';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=81287881f060';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=81287881f060';
+import { createBrightnessSampler } from './brightness-sampler.js?v=81287881f060';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary,
-         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=cc2138a6b2f2';
+         idSwitchPlaceOf, idSwitchPrevPlaceEnd } from './id-switch-review.js?v=81287881f060';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness', review: 'review list' };
 
@@ -486,7 +486,7 @@ async function runBrightness(session, rate, inject, moments, single) {
                 if (stage === 'embed') {
                     var el = (performance.now() - t0) / 1000, left = done ? el * (total - done) / done : NaN;
                     prog.update('Reading coat brightness in ' + sampler.views.length + ' view' + (sampler.views.length === 1 ? '' : 's') +
-                        ': frame ' + done.toLocaleString() + ' of ' + total.toLocaleString() + (done > 3 ? ' — about ' + fmtDuration(left) + ' left' : ''),
+                        ': frame ' + formatFrameNumber(done) + ' of ' + formatFrameNumber(total) + (done > 3 ? ' — about ' + fmtDuration(left) + ' left' : ''),
                         0.9 * done / total);
                 } else {
                     prog.update('Learning each animal\'s coat (' + done + ' / ' + total + ')…', 0.9 + 0.1 * done / Math.max(1, total));
@@ -796,7 +796,7 @@ function aboutChecksHtml(st, ran) {
         (im && im.ok ? '; images at ' + im.imageHz.toFixed(1) + '/s, ' + im.crops.toLocaleString() + ' crops from ' + im.cameras.length + ' views' +
             (im.model && im.model.note ? ' (' + escapeHtml(im.model.note) + ')' : '') +
             (im.imageModel ? '; image model <b>' + escapeHtml(im.imageModel.name) + '</b>, flag threshold ' + escapeHtml(String(im.imageModel.threshold).replace('-', '−')) : '') : '') +
-        (br && br.ok ? '; coat brightness at ' + br.imageHz.toFixed(1) + '/s, ' + br.crops.toLocaleString() + ' samples from ' +
+        (br && br.ok ? '; coat brightness at ' + br.imageHz.toFixed(1) + '/s, ' + br.crops.toLocaleString('en-US') + ' samples from ' +
             br.cameras.length + ' view' + (br.cameras.length === 1 ? '' : 's') : '') +
         (r0.fpsFromVideo ? ', measured from the video)'
             : ') — <b>no video is loaded, so this frame rate was not measured</b>. If the recording ran at a ' +
@@ -1172,7 +1172,7 @@ function selectedHtml(st, f) {
         var mine = (st.fixes || []).filter(function (x) { return keys.indexOf(x.key) >= 0 || keys.indexOf(x.partnerKey) >= 0; });
         act = '<span class="id-switch-fixed-note is-list">Fixed: ' + mine.map(function (x, i) {
             return (i ? 'again ' : escapeHtml(x.nameA) + ' ↔ ' + escapeHtml(x.nameB) + ' swapped ') + 'on frames ' +
-                (x.from + 1).toLocaleString() + '–' + (x.to + 1).toLocaleString();
+                formatFrameNumber(x.from + 1) + '–' + formatFrameNumber(x.to + 1);
         }).join('; ') + '</span>' +
             placeBtn('Fix again…', 'Swap ' + two + ' again, from the frame you are on to the end of the video — for labels that swap back before the next place') +
             (mine.indexOf(last) >= 0 ? '<button class="panel-btn id-switch-undo" title="Swap the same frames back">Undo fix</button>' : '');
@@ -1203,8 +1203,8 @@ function spanHtml(f) {
     var end = '<button class="id-switch-end" title="Jump to frame ' + (f.frame + 1).toLocaleString() +
         (f.look && f.look.length ? ', the end of this moment — where the labels after it are read'
             : ', the end of the encounter — where the animals separate and their labels are read') + '">end ⇥</button>';
-    if (s == null || s === f.frame) return (what === 'at' ? 'at ' : 'close at ') + fmtTenths(f.frame) + ' (frame ' + (f.frame + 1).toLocaleString() + ') ' + end;
-    return what + ' ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (frames ' + (s + 1).toLocaleString() + '–' + (f.frame + 1).toLocaleString() + ') ' + end;
+    if (s == null || s === f.frame) return (what === 'at' ? 'at ' : 'close at ') + fmtTenths(f.frame) + ' (frame ' + formatFrameNumber(f.frame + 1) + ') ' + end;
+    return what + ' ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (frames ' + formatFrameNumber(s + 1) + '–' + formatFrameNumber(f.frame + 1) + ') ' + end;
 }
 
 /**
@@ -1242,12 +1242,12 @@ export function refreshIdSwitchPanel(session) {
         ran.map(function (c) {
             var r = st.results[c], n = countOnsets(r);
             if (c === 'review') {
-                return '<div class="id-switch-summary">' + (both ? '<b>Review list:</b> ' : '') + '<b>' + n.toLocaleString() + '</b> place' +
+                return '<div class="id-switch-summary">' + (both ? '<b>Review list:</b> ' : '') + '<b>' + n.toLocaleString('en-US') + '</b> place' +
                     (n === 1 ? '' : 's') + ' to look at</div>' + prejudgeSummaryHtml(st);
             }
             var mo = r.moments && r.moments.length;
             return '<div class="id-switch-summary">' + (both ? '<b>' + { size: 'Body size', image: 'Images', brightness: 'Coat brightness' }[c] + ':</b> ' : '') +
-                encounterCount(r).toLocaleString() + ' close encounters' + (mo ? ' + ' + mo.toLocaleString() + ' moments' : '') + ' · ' +
+                encounterCount(r).toLocaleString('en-US') + ' close encounters' + (mo ? ' + ' + mo.toLocaleString('en-US') + ' moments' : '') + ' · ' +
                 (n ? '<b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') : 'nothing flagged') + '</div>';
         }).join('') +
         '<details class="id-switch-about"><summary>About these flags</summary>' + aboutHtml(st, ran) + '</details>' +
