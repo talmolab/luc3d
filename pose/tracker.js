@@ -2013,16 +2013,16 @@ async function runSingleCameraTrackAll(session, bail) {
         collapseViewport3D(viewport3d);
         console.timeEnd('[TrackAll] total');
         var doneMsg = 'Tracked ' + res.numIdentities + ' animal' + (res.numIdentities === 1 ? '' : 's') + ' across ' +
-            res.frames.toLocaleString() + ' frames with SLEAP\'s tracker (one track per animal)' +
-            (res.untracked ? ', ' + res.untracked.toLocaleString() + ' detection' + (res.untracked === 1 ? '' : 's') +
+            res.frames.toLocaleString('en-US') + ' frames with SLEAP\'s tracker (one track per animal)' +
+            (res.untracked ? ', ' + res.untracked.toLocaleString('en-US') + ' detection' + (res.untracked === 1 ? '' : 's') +
                 ' over the animal count left without a track' : '') +
-            (res.filtered ? ', ' + res.filtered.toLocaleString() + ' detection' + (res.filtered === 1 ? '' : 's') +
+            (res.filtered ? ', ' + res.filtered.toLocaleString('en-US') + ' detection' + (res.filtered === 1 ? '' : 's') +
                 ' removed by the detection filters (left without a track)' : '') +
-            (res.duplicates ? ', ' + res.duplicates.toLocaleString() + ' duplicate detection' + (res.duplicates === 1 ? '' : 's') +
+            (res.duplicates ? ', ' + res.duplicates.toLocaleString('en-US') + ' duplicate detection' + (res.duplicates === 1 ? '' : 's') +
                 ' removed first (left without a track)' : '') +
             (res.lone ? ', one animal alone ' + (res.lone.until != null ? 'until frame ' + (res.lone.until + 1).toLocaleString('en-US') : 'throughout') +
                 ' kept on one track' : '') +
-            (nReview ? ', ' + nReview.toLocaleString() + ' place' + (nReview === 1 ? '' : 's') + ' to review in the ID Switches tab' : '') +
+            (nReview ? ', ' + nReview.toLocaleString('en-US') + ' place' + (nReview === 1 ? '' : 's') + ' to review in the ID Switches tab' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');
         // The body-size check is OPTIONAL on one camera (the user's choice, 2026-10-12): not run here, and the
