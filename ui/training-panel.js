@@ -33,8 +33,11 @@
  *     pickles); each view's video is found on disk from the file the user opened. Locally the
  *     validation split is LUCID's by moment (a separate validation file);
  *   - progress rows stay in the panel while the run goes (no RemoteRunCard / Watch Live); a row
- *     opens the Training Monitor (`ui/training-monitor.js`, with the validation images locally).
- *     Full Configuration and post-training inference come in later updates.
+ *     opens the Training Monitor (`ui/training-monitor.js`, with the validation images locally);
+ *   - post-training inference hands the trained models to the Inference panel (`runTrainedModels`),
+ *     which runs them on the current session's views each was trained for, with its usual progress,
+ *     Cancel and (worker) Fetch & Load; targets and defaults in `pose/training-handoff.js` (Random
+ *     sample, not sleap-app's Suggested frames). Full Configuration comes in a later update.
  *
  * Loaded on every build: `pose/initialization.js` imports it after the Inference panel. It talks
  * to native code only through `window.lucidDesktop`, inside `setupTrainingPanel`.
@@ -64,6 +67,9 @@ import { formatRunTimestamp, formatDuration } from '../pose/connect/timestamp.js
 import { plateauSettings } from '../pose/training-metrics.js';
 import { openTrainingMonitor, trainingMonitor } from './training-monitor.js';
 import { rowWithLocalProgress } from '../pose/training-local-progress.js';
+import { POST_TRAINING_TARGETS, POST_TRAINING_DEFAULTS, POST_TRAINING_TARGET_HINT, inferencePipelineFor, trainedModels,
+    skeletonChangeProblem } from '../pose/training-handoff.js';
+import { runTrainedModels, showInferencePanel } from './inference-panel.js';
 
 export const TRAINING_TAB_ID = 'tabTraining';
 
@@ -95,11 +101,16 @@ const cfg = {
     anchorPart: null,
     groupMode: DEFAULT_GROUP_MODE,
     unchecked: new Set(),        // 'sessionIdx:view'
+    post: Object.assign({}, POST_TRAINING_DEFAULTS),   // post-training inference (target, sampleCount, ...)
 };
 const run = {
     status: 'idle', error: null, rows: [], log: [], errorTail: [], startedAt: null, endedAt: null,
     modelDirs: [], cancelled: false, stopRequested: false, note: null,
+    groups: [], trainedNodes: null,  // the run's groups and the skeleton's node names when it started
 };
+// Post-training inference: status null | 'running' | 'completed' | 'error' | 'skipped'.
+const postRun = { status: null, message: null, remote: false };
+let postSeq = 0;   // the newest post-training inference; an older one finishing late writes nothing
 const analysis = { key: '', at: 0, counts: new Map(), rec: null, idReport: null, nodeNames: [], trackNames: [] };
 let elapsedTimer = null;
 let form = null;
@@ -606,6 +617,8 @@ function runLocalModel(token, index, k, dryRun, onLine) {
 async function startLocalTraining() {
     const stamp = formatRunTimestamp();
     run.status = 'running'; run.error = null; run.log = []; run.errorTail = []; run.modelDirs = [];
+    run.groups = groups(); run.trainedNodes = currentNodeNames(); postRun.status = null; postRun.message = null; postSeq++;
+    dry.status = 'idle'; dry.rows = []; dry.log = []; dry.error = null;   // sleap-app: a Start clears the dry run's result
     run.cancelled = false; run.stopRequested = false; run.startedAt = Date.now(); run.endedAt = null; run.note = null;
     refresh();
     let plans;
@@ -682,6 +695,7 @@ async function startLocalTraining() {
     }
     stopElapsed();
     refresh();
+    if (run.status === 'completed') await postTrainingInference(false);
 }
 
 function joinRunDir(root, name) {
@@ -750,6 +764,8 @@ async function startRemoteTraining() {
     const slots = getConfigSlots(cfg.modelType);
     const stamp = formatRunTimestamp();
     run.status = 'running'; run.error = null; run.log = []; run.errorTail = []; run.modelDirs = [];
+    run.groups = groups(); run.trainedNodes = currentNodeNames(); postRun.status = null; postRun.message = null; postSeq++;
+    dry.status = 'idle'; dry.rows = []; dry.log = []; dry.error = null;   // sleap-app: a Start clears the dry run's result
     run.cancelled = false; run.stopRequested = false; run.startedAt = Date.now(); run.endedAt = null; run.note = null;
     // Plan every group first (data + configs), so nothing is sent if one of them cannot be built.
     const plans = [];
@@ -850,6 +866,66 @@ async function startRemoteTraining() {
     }
     stopElapsed();
     refresh();
+    if (run.status === 'completed') await postTrainingInference(true);
+}
+
+/** The project skeleton's node names (one skeleton is shared by every session). */
+function currentNodeNames() { const sk = skeletonOf(); return sk ? sk.nodes.slice() : []; }
+
+function postTargetLabel(v) {
+    const o = POST_TRAINING_TARGETS.find(function (x) { return x[0] === v; });
+    return o ? o[1] : v;
+}
+
+/**
+ * sleap-app's post-training inference: once every model trained, the Inference panel runs them on the
+ * current session (`runTrainedModels`) with this panel's target and options. The Inference panel shows
+ * the run (progress, log, Cancel, Fetch & Load); the status box here says how it went.
+ */
+async function postTrainingInference(remoteRun) {
+    const p = cfg.post;
+    if (p.target === 'nothing') return;
+    const seq = ++postSeq;
+    postRun.remote = remoteRun;
+    const tm = trainedModels(run.rows, run.groups);
+    const skip = function (msg) {
+        postRun.status = 'skipped'; postRun.message = msg;
+        appendLog('\u2014 Post-training inference skipped: ' + msg);
+        refresh();
+    };
+    if (!tm.models.length) return skip('no trained model reported its folder.');
+    const sk = skeletonChangeProblem(run.trainedNodes, currentNodeNames());
+    if (sk) return skip(sk);
+    postRun.status = 'running'; postRun.message = null;
+    appendLog('\u2014 Running inference (' + postTargetLabel(p.target) + ') with models: ' +
+        tm.models.map(function (m) { return m.paths.join(' + '); }).join(', ') + '...');
+    refresh();
+    let r;
+    try {
+        r = await runTrainedModels({
+            remote: remoteRun, pipeline: inferencePipelineFor(cfg.modelType), models: tm.models, frameRange: p.target,
+            sampleCount: p.sampleCount, excludeUserLabeled: p.skipUserLabeled, existingPredictions: p.existingPredictions,
+        });
+    } catch (e) {
+        r = { ok: false, error: (e && e.message) || String(e) };
+    }
+    if (seq !== postSeq) return;   // a new run started meanwhile; the Inference panel still shows this one
+    const left = tm.incomplete.length ? ' No model folder for: ' + tm.incomplete.join(', ') + '.' : '';
+    if (r.ok) {
+        postRun.status = 'completed';
+        postRun.message = (remoteRun ? 'Use Fetch & Load in the Inference panel once its jobs finish.' : '') + left || null;
+        appendLog(remoteRun ? '\u2014 Inference submitted to the worker. Use Fetch & Load in the Inference panel.' : '\u2014 Predictions merged into project.');
+    } else if (r.status === 'cancelled') {
+        postRun.status = 'skipped'; postRun.message = 'Post-training inference cancelled.';
+        appendLog('\u2014 Post-training inference cancelled.');
+    } else if (r.skipped) {
+        postRun.status = 'skipped'; postRun.message = (r.error || '') + left || null;
+        appendLog('\u2014 Post-training inference skipped: ' + (r.error || ''));
+    } else {
+        postRun.status = 'error'; postRun.message = (r.error || 'Inference failed.') + left;
+        appendLog('\u2014 Post-training inference failed: ' + (r.error || 'Inference failed.'));
+    }
+    refresh();
 }
 
 /** A row starts: its clocks start (the monitor's runtime lines). */
@@ -929,9 +1005,12 @@ function resetRun(keepConfig) {
     monitorIndex = null;
     run.status = 'idle'; run.error = null; run.rows = []; run.log = []; run.errorTail = []; run.modelDirs = [];
     run.startedAt = null; run.endedAt = null; run.cancelled = false; run.stopRequested = false; run.note = null;
+    run.groups = []; run.trainedNodes = null;
+    if (postRun.status !== 'running') { postRun.status = null; postRun.message = null; }
     if (!keepConfig) {
         cfg.slots = {}; cfg.hp = {}; cfg.anchorPart = null; cfg.modelTypeTouched = false; cfg.modelType = DEFAULT_MODEL_TYPE;
         cfg.groupMode = DEFAULT_GROUP_MODE; cfg.unchecked.clear();
+        cfg.post = Object.assign({}, POST_TRAINING_DEFAULTS);
         ensureSlots();
     }
     refresh();
@@ -1235,6 +1314,27 @@ function buildDataSection(top) {
         outPath.textContent = remote.outputChecking() ? 'Checking…' : (remote.outputDir() ? remote.outputDir() + '/models' : 'none: choose a folder');
         outChange.disabled = isRunning();
     });
+
+    // Post-training inference (sleap-app: Post-Training Inference Target here; Skip user labeled frames and
+    // Existing predictions sit in its Full Configuration dialog, here under the target).
+    const post = el('div', 'inf-block');
+    post.id = 'trnPost';
+    post.appendChild(form.fieldLabel('Post-Training Inference Target', POST_TRAINING_TARGET_HINT));
+    sec.appendChild(post);
+    form.selectField(post, null, null, POST_TRAINING_TARGETS, function () { return cfg.post.target; },
+        function (v) { cfg.post.target = v; }, { id: 'trnPostTarget' });
+    form.shownIf(form.numField(post, 'Sample count', 'How many frames to randomly sample for post-training inference. Every view runs on the same frames.',
+        function () { return cfg.post.sampleCount; }, function (v) { cfg.post.sampleCount = v; }, { min: 1, integer: true, id: 'trnPostSamples' }),
+    function () { return cfg.post.target === 'random'; });
+    const postOpts = el('div', 'trn-post-opts');
+    post.appendChild(postOpts);
+    form.check(postOpts, 'Skip user labeled frames', 'Do not run inference on frames that already have your labels.',
+        function () { return cfg.post.skipUserLabeled; }, function (v) { cfg.post.skipUserLabeled = v; }).id = 'trnPostSkipUser';
+    form.selectField(postOpts, 'Existing predictions', 'Predictions already in the project: Replace them on the frames inferred again, ' +
+        'Keep them (the new ones are added), or Clear all first. Your own labels are never touched.',
+    [['replace', 'Replace'], ['keep', 'Keep'], ['clear_all', 'Clear all']],
+    function () { return cfg.post.existingPredictions; }, function (v) { cfg.post.existingPredictions = v; }, { id: 'trnPostExisting' });
+    form.shownIf(postOpts, function () { return cfg.post.target !== 'nothing'; });
 }
 
 function firstSlot() { return getConfigSlots(cfg.modelType)[0]; }
@@ -1360,6 +1460,7 @@ function buildRunBlock(top) {
         models.appendChild(el('div', 'trn-strong', 'Trained model' + (run.modelDirs.length > 1 ? 's' : '') + ':'));
         for (const d of run.modelDirs) models.appendChild(el('div', 'trn-path-ok', d));
     });
+    buildPostInferenceBox(top);
     const again = button('Train Again', 'btn btn-primary inf-run');
     again.id = 'trnTrainAgain';
     again.addEventListener('click', function () { resetRun(true); });
@@ -1373,6 +1474,40 @@ function buildRunBlock(top) {
     fresh.addEventListener('click', function () { resetRun(false); });
     failRow.appendChild(retry); failRow.appendChild(fresh);
     top.appendChild(form.shownIf(failRow, function () { return run.status === 'error'; }));
+}
+
+/** sleap-app's post-training inference box: status, message, and the way to the Inference panel. */
+function buildPostInferenceBox(top) {
+    const box = el('div', 'trn-dry-box trn-post');
+    box.id = 'trnPostInference';
+    const head = el('div', 'trn-dry-head');
+    const headIcon = el('span', 'inf-icon');
+    const headText = el('span');
+    head.appendChild(headIcon); head.appendChild(headText);
+    box.appendChild(head);
+    const msg = el('div', 'trn-post-msg');
+    box.appendChild(msg);
+    const show = button('Show Inference panel', 'btn btn-sm inf-btn-outline', 'zap');
+    show.id = 'trnPostShow';
+    show.addEventListener('click', function () { showInferencePanel(); });
+    box.appendChild(show);
+    top.appendChild(form.shownIf(box, function () { return !!postRun.status; }));
+    form.onRefresh(function () {
+        const S = {
+            running: ['loader-circle', postRun.remote ? 'Submitting post-training inference to the worker\u2026' : 'Running post-training inference\u2026 (progress in the Inference panel)', 'inf-spin'],
+            completed: ['circle-check', postRun.remote ? 'Post-training inference submitted.' : 'Predictions merged into the project.', 'inf-ok'],
+            error: ['circle-x', 'Post-training inference failed.', 'inf-bad'],
+            skipped: ['circle-alert', 'Post-training inference skipped.', 'inf-warnc'],
+        }[postRun.status];
+        if (!S) return;
+        box.classList.toggle('trn-post-error', postRun.status === 'error');
+        headIcon.className = 'inf-icon ' + S[2];
+        headIcon.innerHTML = railIconSvg(S[0]);
+        headText.textContent = S[1];
+        msg.textContent = postRun.message || '';
+        msg.hidden = !msg.textContent;
+        show.hidden = postRun.status === 'skipped';
+    });
 }
 
 /** sleap-app DryRunResult: a headline, one row per model, the error output and the log on demand. */
@@ -1654,7 +1789,8 @@ export function showTrainingPanel() { return showPanelTab(TRAINING_TAB_ID); }
 /** For tests: the live config and run state (read-only use). */
 export function _trainingState() {
     return { cfg: cfg, run: run, analysis: analysis, groups: groups(), selections: includedSelections(), remote: remote && remote._state(), monitorIndex: monitorIndex,
-        local: { runsRoot: local.runsRoot, videos: Object.fromEntries(local.videos), token: local.token }, dry: dry, backendRemote: isRemoteRun() };
+        local: { runsRoot: local.runsRoot, videos: Object.fromEntries(local.videos), token: local.token }, dry: dry, backendRemote: isRemoteRun(),
+        post: cfg.post, postRun: postRun };
 }
 /** For tests: recompute the label analysis now. */
 export function _trainingAnalyze() { analyze(true); panelRefresh(); }

@@ -21,8 +21,14 @@
  *     "Training cancelled" with nothing else run.
  *  6. A failing model: the error names it and the exit code; Error output shows the traceback
  *     line, not the macOS objc noise.
+ *  7. Post-training inference (default Random sample; 1-6 ran with Nothing): once both models
+ *     trained, the Inference panel runs them (`runTrainedModels`): its Top-Down pipeline, the two run
+ *     folders (centroid, then centered instance) as each view's model, one sleap-nn job per view on
+ *     the same sampled frames, Skip user labeled honoured; REAL sleap-nn predictions merged (20 per
+ *     view), your labels kept; the status box says "Predictions merged into the project".
+ *  8. The skeleton changed while the models trained: skipped, naming the node; nothing runs.
  *
- * Usage: node tests/e2e/desktop-training.mjs   (PORT= to move its server)
+ * Usage: node tests/e2e/desktop-training.mjs   (PORT= to move its server; SHOT=file.png screenshots 7)
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -36,6 +42,8 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const SHIM = fs.readFileSync(path.join(repoRoot, 'src-tauri', 'js', 'lucid-desktop.js'), 'utf8');
 const EVENTS = JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'sleap-nn-training', 'run-3epoch.events.json'), 'utf8'));
 const PNG_B64 = fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'sleap-nn-training', 'validation-sample.png')).toString('base64');
+// REAL sleap-nn predictions (nodes A,B; 20 predicted instances on frames 0-9), as desktop-inference uses.
+const PRED_B64 = fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'sleap-nn-predictions', 'two-node.predictions.slp')).toString('base64');
 const PORT = Number(process.env.PORT || 9399);
 const BASE = `http://localhost:${PORT}`;
 
@@ -55,6 +63,8 @@ function installMock(cfg) {
     const mkdirp = (p) => { while (p && p !== '/') { dirs.add(p); p = parent(p); } };
     const under = (p, root) => p === root || p.startsWith(root.replace(/\/$/, '') + '/');
     const readable = (p) => grants.some((g) => under(p, g.path));
+    const writable = (p) => grants.some((g) => g.kind === 'dir' && under(p, g.path)) &&
+        !grants.some((g) => g.kind === 'model' && under(p, g.path));
     const deny = (p) => { throw 'NOT_GRANTED: ' + p; };
     const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
     const mock = {
@@ -64,6 +74,7 @@ function installMock(cfg) {
         picks: [],
         runsPicks: ['refuse', 'ok'],
         stopped: new Set(), cancelled: new Set(), released: new Set(),
+        inference: [],        // run_python_command argv (post-training inference)
         inputPick(p, directories) { grants.push({ path: p, kind: 'dir' }); mock.picks.push({ paths: [p], directories, seq: mock.picks.length + 1 }); },
         put(p, bytes) { files.set(p, bytes); mkdirp(parent(p)); },
     };
@@ -133,6 +144,17 @@ function installMock(cfg) {
             send({ event: 'finished', data: { success: true, code: 0, stopped: false, cancelled: false, modelDir: runDir, error: null } });
             return true;
         },
+        make_dir: ({ path: p }) => { if (!writable(p)) deny(p); mkdirp(p); return null; },
+        run_python_command: async ({ program, args, onEvent }) => {
+            const send = (m) => { if (onEvent && onEvent.onmessage) onEvent.onmessage(m); };
+            mock.inference.push({ program, args: args.slice() });
+            const out = args[args.indexOf('--output_path') + 1];
+            if (!writable(out)) deny(out);
+            send({ event: 'stdout', data: { line: '{"n_processed": 10, "n_total": 10, "rate": 3.9, "eta": 0.0}\n' } });
+            mock.put(out, b64(cfg.pred));
+            send({ event: 'finished', data: { success: true, code: 0 } });
+            return true;
+        },
         training_stop: ({ token }) => { mock.stopped.add(token); return true; },
         training_cancel: ({ token }) => { mock.cancelled.add(token); return true; },
         training_release: ({ token }) => { mock.released.add(token); return null; },
@@ -157,7 +179,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
     page.setDefaultTimeout(60000);
     page.on('pageerror', (e) => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
-    await page.addInitScript(installMock, { events: EVENTS, png: PNG_B64 });
+    await page.addInitScript(installMock, { events: EVENTS, png: PNG_B64, pred: PRED_B64 });
     await page.addInitScript(SHIM);
     await page.goto(`${BASE}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, null, { timeout: 60000 });
@@ -176,6 +198,12 @@ try {
     }));
     check(s1.backend === '__local__' && s1.start === 'Start Training' && s1.dry && s1.runs, 'Local by default: Start Training, Dry run, a Runs folder row', s1);
     check(/Choose a runs folder/.test(s1.why), 'Start waits for a runs folder', s1.why);
+    const p1 = await page.evaluate(() => ({ target: document.getElementById('trnPostTarget').value,
+        options: Array.from(document.querySelectorAll('#trnPostTarget option')).map((o) => o.value),
+        samples: document.getElementById('trnPostSamples').value, existing: document.getElementById('trnPostExisting').value }));
+    check(p1.target === 'random' && p1.options[0] === 'nothing' && p1.samples === '20' && p1.existing === 'replace',
+        'Post-Training Inference Target: Nothing first, Random sample (20) by default, Existing predictions Replace', p1);
+    await page.selectOption('#trnPostTarget', 'nothing');   // 2-6 train only; 7 runs the hand-off
 
     console.log('\n2. Runs folder; videos on disk');
     await page.click('#trnRunsChoose');
@@ -236,6 +264,7 @@ try {
         'both rows filled from the real progress: 3 epochs, best val_loss', rows4);
     const models4 = await page.evaluate(() => Array.from(document.querySelectorAll('#trnModels .trn-path-ok')).map((e) => e.textContent));
     check(models4.length === 2 && models4.every((m) => m.startsWith('/rec/models/')), 'Complete lists both run folders', models4);
+    check(await page.evaluate(() => document.getElementById('trnDryResult').hidden), 'Start cleared the dry run\'s result (sleap-app)');
     await page.click('#trnRows .trn-row .trn-row-open');
     await page.waitForSelector('#trnMonitor');
     await page.waitForFunction(() => { const i = document.querySelector('#trnMonitor .trn-mon-vizimg'); return i && !i.hidden && i.naturalWidth > 0; }, null, { timeout: 20000 });
@@ -275,6 +304,68 @@ try {
     check(/^Training Centroid · all views failed \(exit code 1\)/.test(f6.err), 'the error names the model and the exit code', f6.err);
     check(f6.shown && /MPS backend out of memory/.test(f6.out) && !/objc/.test(f6.out), 'Error output: the traceback line, not the objc noise', f6.out);
     check(f6.released.includes('tok' + (nPrep + 1)), 'the failed run\'s token is released');
+    check(await page.evaluate(() => document.getElementById('trnPostInference').hidden && window.__mock.inference.length === 0),
+        'with Nothing (or a failed run) no inference runs and no status box shows');
+
+    console.log('\n7. Post-training inference: the trained models run in the Inference panel');
+    await page.click('#trnRetry');
+    await page.selectOption('#trnPostTarget', 'random');
+    await page.check('#trnPostSkipUser input');
+    await page.click('#trnStart');
+    await page.waitForFunction(() => { const b = document.getElementById('trnPostInference'); return b && !b.hidden && /merged into the project|failed|skipped/.test(b.textContent); }, null, { timeout: 60000 });
+    const h7 = await page.evaluate(async () => {
+        const I = (await import('./ui/inference-panel.js'))._inferenceState();
+        const T = (await import('./ui/training-panel.js'))._trainingState();
+        const AS = (await import('./ui/app-state.js')).state;
+        const counts = {};
+        for (const cam of ['cam1', 'cam2']) {
+            let pred = 0, user = 0;
+            for (const [, fg] of AS.session.frameGroups) {
+                for (const i of (fg.instances.get(cam) || [])) { if (i && i.type === 'predicted') pred++; else if (i && i.type === 'user') user++; }
+                for (const u of (fg.unlinkedInstances.get(cam) || [])) { if (u.instance.type === 'predicted') pred++; else user++; }
+            }
+            counts[cam] = { pred, user };
+        }
+        return {
+            box: document.getElementById('trnPostInference').textContent,
+            status: T.postRun.status, dirs: T.run.modelDirs.slice(),
+            inference: window.__mock.inference.map((c) => c.args),
+            pipeline: I.cfg.pipeline, frameRange: I.cfg.frameRange, skip: I.cfg.excludeUserLabeled,
+            models: I.assignment.models.map((m) => m.paths), byView: Object.assign({}, I.assignment.byView),
+            runStatus: I.run.status, counts,
+        };
+    });
+    check(h7.status === 'completed' && /Predictions merged into the project/.test(h7.box), 'the status box: Predictions merged into the project', h7.box);
+    check(h7.pipeline === 'top-down' && h7.frameRange === 'random' && h7.skip === true && h7.runStatus === 'completed',
+        'the Inference panel ran Top-Down on a random sample, skipping user labeled frames', h7);
+    check(h7.models.length === 1 && h7.models[0].join() === h7.dirs.join() && /centroid/.test(h7.dirs[0]) && /centered_instance/.test(h7.dirs[1]) &&
+        h7.byView.cam1 === h7.byView.cam2, 'both views run the shared model: the two run folders, centroid first', { models: h7.models, byView: h7.byView });
+    const mp = (a) => { const out = []; a.forEach((x, i) => { if (x === '--model_paths') out.push(a[i + 1]); }); return out.join(); };
+    const fr = (a) => a[a.indexOf('--frames') + 1];
+    check(h7.inference.length === 2 && h7.inference.every((a) => mp(a) === h7.dirs.join()) &&
+        h7.inference.map((a) => a[a.indexOf('--data_path') + 1]).join() === '/rec/cam1/cam1.mp4,/rec/cam2/cam2.mp4',
+        'one sleap-nn job per view, each with the two run folders', h7.inference);
+    check(h7.inference.every((a) => a.indexOf('--frames') !== -1 && fr(a) === fr(h7.inference[0]) && fr(a).split(/[-,]/).every((f) => Number(f) >= 6)),
+        'the same sampled frames on every view, user labeled frames (0-5) skipped', h7.inference.map(fr));
+    check(h7.counts.cam1.pred >= 20 && h7.counts.cam2.pred >= 20 && h7.counts.cam1.user === 6 && h7.counts.cam2.user === 6,
+        'REAL predictions merged into both views; the user labels kept', h7.counts);
+    if (process.env.SHOT) {
+        await page.evaluate(() => document.getElementById('trnPostInference').scrollIntoView({ block: 'center' }));
+        await page.screenshot({ path: process.env.SHOT });
+    }
+
+    console.log('\n8. The skeleton changed while training');
+    await page.click('#trnTrainAgain');
+    await page.evaluate(() => { window.__mock.runPlan.push('hold', 'ok'); window.__mock.inference.length = 0; window.__mock.stopped.clear(); });
+    await page.click('#trnStart');
+    await page.waitForFunction(() => /1 \/ 200 epochs/.test((document.querySelector('#trnRows .trn-row') || {}).textContent || ''), null, { timeout: 30000 });
+    // The skeleton the run started with (recorded at Start) no longer matches the project's: as after a
+    // node edit during training (a real edit re-shapes every instance; the check only compares names).
+    await page.evaluate(async () => { (await import('./ui/training-panel.js'))._trainingState().run.trainedNodes.push('Z'); });
+    await page.click('#trnStopEarly');
+    await page.waitForFunction(() => { const b = document.getElementById('trnPostInference'); return b && !b.hidden && /skipped/.test(b.textContent); }, null, { timeout: 60000 });
+    const h8 = await page.evaluate(() => ({ box: document.getElementById('trnPostInference').textContent, n: window.__mock.inference.length }));
+    check(/skeleton changed while the models trained \(removed Z\)/.test(h8.box) && h8.n === 0, 'skipped, naming the node; no inference ran', h8);
 } catch (e) {
     console.error(e);
     fails++;

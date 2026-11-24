@@ -182,6 +182,9 @@ export function applyPanelSettings(doc, hp) {
     }
     if (hp.scaleEnabled) { geo.scale_min = hp.scaleMin; geo.scale_max = hp.scaleMax; }
     else { geo.scale_min = 1.0; geo.scale_max = 1.0; }
+    // sleap-app writes the panel's Validation Fraction too: a worker's sleap-nn splits by it (locally LUC3D
+    // splits by moment into a separate file, which sleap-nn then uses instead).
+    if (Number.isFinite(Number(hp.validationFraction)) && hp.validationFraction > 0 && hp.validationFraction < 1) data.validation_fraction = hp.validationFraction;
     // anchor_part: a null anchor clears a key the head already has, never adds one to a head
     // whose schema lacks it (sleap-app).
     const h = activeHead(d);

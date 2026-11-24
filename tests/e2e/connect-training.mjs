@@ -15,7 +15,8 @@
  *     "1 / 3 epochs", "loss: 0.0200").
  *  5. Stop Early: `jobs.cancel {mode: "stop"}` on the running job only; it completes (sleap-nn exits 0)
  *     and the centered-instance job follows; both done → Complete, both model folders listed, Next
- *     step, Train Again.
+ *     step, Train Again. Post-training inference (default Random sample): the Inference panel submits
+ *     one `track` job per view with both trained folders; the box points to Fetch & Load.
  *  6. One per view: Train Again → Start sends cam1's job only (one video in its file); Cancel sends
  *     `mode: "cancel"`; the run ends Failed "Training cancelled", the row "cancelled", nothing more is
  *     submitted.
@@ -160,6 +161,15 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     }));
     check(/All 2 models trained successfully/.test(done.banner) && done.models.join() === '/data/sess/models/run.centroid,/data/sess/models/run.centered_instance' &&
         done.next && done.again, 'Complete: both model folders listed, Next step, Train Again', done);
+    await page.waitForFunction(() => { const b = document.getElementById('trnPostInference'); return b && !b.hidden && !/Submitting/.test(b.textContent); }, null, { timeout: 40000 });
+    const post = await page.evaluate(async () => ({ box: document.getElementById('trnPostInference').textContent,
+        inf: (await import('./ui/inference-panel.js'))._inferenceState().cfg.frameRange }));
+    const tracks = [...worker.jobs.values()].filter((j) => j.spec.type === 'track').map((j) => ({ data: j.spec.data_path, models: j.spec.model_paths, frames: j.spec.frames, out: j.spec.output_path }));
+    check(/Post-training inference submitted/.test(post.box) && /Fetch & Load/.test(post.box) && post.inf === 'random',
+        'post-training inference: submitted by the Inference panel (Random sample), Fetch & Load named', post);
+    check(tracks.length === 2 && tracks.map((t) => t.data).join() === '/data/sess/cam1/cam1.mp4,/data/sess/cam2/cam2.mp4' &&
+        tracks.every((t) => t.models.join() === '/data/sess/models/run.centroid,/data/sess/models/run.centered_instance' && t.frames === tracks[0].frames),
+        'one track job per view with both trained folders (centroid first), the same frames', tracks);
 
     console.log('\n6. One per view, then Cancel');
     await page.click('#trnTrainAgain');

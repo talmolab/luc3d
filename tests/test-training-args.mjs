@@ -65,6 +65,8 @@ assert.deepEqual([out.data_config.augmentation_config.geometric.scale_min, out.d
 assert.equal(out.model_config.head_configs.centered_instance.confmaps.anchor_part, 'head');
 assert.equal(out.model_config.head_configs.centered_instance.confmaps.sigma, 2.5, 'other values kept');
 assert.equal(doc.trainer_config.max_epochs, 200, 'the source config is not changed');
+// The panel's Validation Fraction is written (sleap-app applyHyperparamsToYaml): a worker's sleap-nn splits by it.
+assert.equal(applyPanelSettings(doc, Object.assign({}, hp, { validationFraction: 0.25 })).data_config.validation_fraction, 0.25);
 const off = applyPanelSettings(doc, Object.assign({}, hp, { rotationPreset: 'off' }));
 assert.deepEqual([off.data_config.augmentation_config.geometric.rotation_max, off.data_config.augmentation_config.geometric.affine_p], [0, 0]);
 assert.equal(hyperparamsFromConfig(off).rotationPreset, 'off');

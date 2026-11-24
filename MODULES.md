@@ -2859,6 +2859,19 @@ DOM-free. **Exports.** `rowWithLocalProgress(row, msg, now)`, `MAX_BATCH_SAMPLES
 **Imported by.** `ui/training-panel.js`. **Tests.** `tests/test-training-local-progress.mjs`,
 `tests/e2e/desktop-training.mjs`.
 
+### pose/training-handoff.js
+
+**Purpose.** Post-training inference, DOM-free (sleap-app `postTrainingTarget.ts` + trainingStore's
+post-training step): the targets (`nothing` first, then the Inference panel's: current frame, user labeled,
+frames with predictions, entire session, random sample; no custom range / suggestions / clip), the defaults
+(Random sample of 20, Skip user labeled off, Existing predictions Replace), the Inference panel pipeline of a
+trained model type, which trained folders run on which views (`trainedModels`: per fully trained group, its views
+and its folders in model order), and the skeleton check (`skeletonChangeProblem`: the merge needs the same node
+names). **Exports.** `POST_TRAINING_TARGETS`, `POST_TRAINING_DEFAULTS`, `POST_TRAINING_TARGET_HINT`,
+`inferencePipelineFor(modelType)`, `trainedModels(rows, groups)`, `skeletonChangeProblem(trained, current)`.
+**Imports.** None. **Imported by.** `ui/training-panel.js`. **Tests.** `tests/test-training-handoff.mjs`,
+`tests/e2e/desktop-training.mjs` §7–8, `tests/e2e/connect-training.mjs` §5.
+
 ### pose/training-recommend.js
 
 **Purpose.** Port of sleap-app's pipeline recommendation (`recommendPipeline`: one animal per frame →
@@ -13114,6 +13127,10 @@ a window (Esc closes). Output: `<video folder>/predictions/<view>.<stamp>.predic
   never fetches it and is unchanged.
 
 **Key exports.** `setupInferencePanel()` → Promise<bool>, `showInferencePanel()`, `runRemoteInferenceWithModels(models)` (the Connect New job wizard's "This project" hand-off: sets the remote models and starts the panel's own remote Run),
+`runTrainedModels(o)` (the Training panel's post-training inference: `{remote, pipeline, models: [{views, paths}],
+frameRange, sampleCount, excludeUserLabeled, existingPredictions}` → each model on the current session's views it
+was trained for, the panel's settings set to these, then its own Run; local resolves when the run ends, remote
+once the jobs are submitted; `skipped: true` when nothing could start, with the Run note's reason),
 `INFERENCE_TAB_ID` (`tabInference`), `INFERENCE_BACKENDS`, `_inferenceState()` (tests).
 
 **Imports from project modules.** `./app-state.js`, `./panel-rail.js`,
@@ -13121,7 +13138,7 @@ a window (Esc closes). Output: `<video folder>/predictions/<view>.<stamp>.predic
 `./inference-args.js`, `./inference-jobs.js`, `./inference-video-paths.js`,
 `./inference-merge.js`, `./inference-model-assignment.js`, `./inference-models-modal.js`.
 
-**Imported by.** `pose/initialization.js` (dynamic `import()`, desktop only).
+**Imported by.** `pose/initialization.js` (dynamic `import()`, desktop only), `ui/training-panel.js` (`runTrainedModels`, `showInferencePanel`).
 
 **User-facing features.** Inference panel. Test: `tests/e2e/desktop-inference.mjs`.
 
@@ -13273,8 +13290,12 @@ a validation file split by moment (videos named by their disk paths, the same pa
 `--video-paths`), each model's config as an OBJECT (`configObject`), `prepare` then `run` per model in
 order with progress folded by `pose/training-local-progress.js`; Stop Early / Cancel = `stop` / `cancel`
 of the running token; Dry run (sleap-app `DryRunResult` states, incl. "This sleap-nn can't do a dry run");
-`objc` noise kept out of the error output. Full Configuration and post-training inference are later
-phases. A row with a chart
+`objc` noise kept out of the error output. Post-Training Inference Target (Data; `pose/training-handoff.js`:
+Nothing first, the Inference panel's targets, default Random sample of 20) with Skip user labeled frames and
+Existing predictions: once a run completes, the trained models go to the Inference panel (`runTrainedModels`;
+local or worker, as trained), skipped when the skeleton's node names changed since Start; a status box says how
+it went, with Show Inference panel. A Start clears the dry run's result (sleap-app). Full Configuration is a later
+phase. A row with a chart
 opens the Training Monitor (`ui/training-monitor.js`); rows keep their start / epoch / end times and the
 config's plateau settings for its runtime lines. The label counts walk every lazy store row, so they are recomputed when the project changes or
 every 15 s while the panel shows, not on each 2 s refresh. Loaded on every build by one literal dynamic
@@ -13286,8 +13307,9 @@ import in `pose/initialization.js`, after the Inference panel. **Exports.** `TRA
 `../import-export/training-slp.js`, `../import-export/file-io.js` (`findSkeletonMismatch`),
 `./connect/backend-picker.js`, `./connect/remote-training.js`, `../pose/connect/remote-training-plan.js`,
 `../pose/connect/store.js` (`configureConnect`: the YAML parser for `withYamlRunName`),
-`../pose/connect/timestamp.js`, `../pose/training-metrics.js`, `./training-monitor.js`; the importmap's `yaml` (dynamic). **Imported by.**
-`pose/initialization.js` (dynamic). **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/panel-rail.mjs`.
+`../pose/connect/timestamp.js`, `../pose/training-metrics.js`, `./training-monitor.js`, `../pose/training-local-progress.js`,
+`../pose/training-handoff.js`, `./inference-panel.js`; the importmap's `yaml` (dynamic). **Imported by.**
+`pose/initialization.js` (dynamic). **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/desktop-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/panel-rail.mjs`.
 
 ### ui/training-monitor.js
 

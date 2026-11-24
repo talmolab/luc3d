@@ -9041,6 +9041,11 @@ div.track-summary-steps { padding-left: 0; }
 .trn-dry-rows { display: flex; flex-direction: column; gap: 4px; }
 .trn-dry-row { display: flex; align-items: center; gap: 6px; }
 .trn-dry-err { color: var(--error-color); }
+/* Post-training inference (sleap-app's postTrainingInference box) */
+.trn-post-opts { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.trn-post-msg { font-size: 10px; color: var(--text-muted); overflow-wrap: anywhere; }
+.trn-post.trn-post-error { border-color: rgba(231, 76, 60, 0.35); background: rgba(231, 76, 60, 0.06); }
+.trn-post.trn-post-error .trn-post-msg { color: var(--error-color); }
 
 /* ============================================
    Connect panel (ui/connect/*) — sleap-app's ConnectPanel.tsx look:
