@@ -62,6 +62,7 @@ group('cropRuleDiffers: an older package on a skeleton the rules cut differently
     eq(M.cropRuleDiffers(2, T_TAIL), false, 'rule 2 on it: the same');
     eq(M.cropRuleDiffers(1, SLAP), false, 'rule 1 on a skeleton whose tail is named tail…: the same crops');
     eq(M.cropRuleDiffers(1, []), false, 'no skeleton: nothing to say');
+    eq(M.cropRuleDiffers(3, SLAP), true, 'a newer rule than this LUCID\'s: taken to differ on any skeleton');
 }
 
 group('packageBaseUrl');
