@@ -18,6 +18,10 @@ __pycache__/
 # Tiny (48 KB) fragmented 60 fps barcode clip for tests/e2e/fragmented-mp4-load.mjs —
 # regenerate with tests/fixtures/fragmented-60/make_fixture.sh.
 !tests/fixtures/fragmented-60/fragmented-60.mp4
+# Two 36 KB clips of two bright "mice" for tests/e2e/animal-outlines.mjs
+# (tests/fixtures/outline-mice/make_fixture.sh).
+!tests/fixtures/outline-mice/cam0.mp4
+!tests/fixtures/outline-mice/cam1.mp4
 # The demo session (File > Load Demo Session, 1.2 MB) — also read by four e2e tests.
 !sample_session/*.mp4
 *.avi

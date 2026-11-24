@@ -16,8 +16,9 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=88c28524ee0f';
-import { jacobiEigen } from './plane-fit.js?v=88c28524ee0f';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=6956c56df814';
+import { jacobiEigen } from './plane-fit.js?v=6956c56df814';
+import { checkChains, SKELETON_CHECK_DEFAULTS } from './skeleton-check.js?v=6956c56df814';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -1779,6 +1780,12 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     }
     let points3d = triangulateFrom(allObservations);
 
+    // The skeleton check (opt-in: `options.skeleton`, measured chains from pose/skeleton-check.js) offers re-solves
+    // from groups of cameras that agree: it needs every detection, before the threshold rule below drops any.
+    const skeleton = options && options.skeleton && options.skeleton.chains && options.skeleton.chains.length
+        ? options.skeleton : null;
+    const skObs = skeleton ? allObservations.map(function (row) { return row.slice(); }) : null;
+
     // Robust triangulation (opt-in via the Tracking Wizard's "Reprojection error
     // threshold (px)"): iteratively drop any 2D node whose reprojection error in a
     // view exceeds the threshold, then re-triangulate that node from the remaining
@@ -1836,9 +1843,27 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         }
     }
 
+    // Skeleton check: a chain (a tail point, the ears, ...) whose bones break their usual lengths gets the fewest
+    // point changes that make it plausible, each to a re-solve from a group of cameras that agree, or kept; a point is
+    // never dropped, since nothing independent says which end of a bad bone is wrong (July 13 frame 105,413 lost a
+    // right nose that was right), and a point every camera agrees on is never changed (pose/skeleton-check.js).
+    let skeletonInfo = null;
+    if (skeleton) {
+        const px = skeleton.subsetPx != null ? skeleton.subsetPx : SKELETON_CHECK_DEFAULTS.subsetPx;
+        const maxC = skeleton.maxCandidates != null ? skeleton.maxCandidates : SKELETON_CHECK_DEFAULTS.maxCandidates;
+        const sk = checkChains(points3d, skeleton.chains, function (k) {
+            return subsetCandidates(k, points3d, skObs, allObservationsRaw, included, projMatrices,
+                cameraNames.map(function (n) { return cameraMap[n]; }), px, maxC);
+        }, { allowDrop: false });   // a point is re-solved or kept, never dropped
+        skeletonInfo = { chainsRepaired: sk.chains, chainsPartial: sk.partial, nodesResolved: sk.changed.subset || 0,
+            nodesDropped: sk.dropped };
+    }
+
     // Fast path: skip reprojections/errors when only 3D points are needed (bulk ops)
     if (options && options.triangulateOnly) {
-        return { points3d: points3d, reprojections: {}, errors: {}, meanError: null, method: method };
+        const fast = { points3d: points3d, reprojections: {}, errors: {}, meanError: null, method: method };
+        if (skeletonInfo) fast.skeleton = skeletonInfo;
+        return fast;
     }
 
     // Steps 3-5: reproject into every camera and score (`_reprojectAndScore`,
@@ -1846,7 +1871,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     // already-solved 3D).
     const scored = _reprojectAndScore(instanceGroup, cameraNames, cameraMap, projMatrices,
         points3d, allObservations, numKeypoints);
-    return {
+    const out = {
         points3d: points3d,
         reprojections: scored.reprojections,
         errors: scored.errors,
@@ -1855,6 +1880,54 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         meanErrorUndistorted: scored.meanErrorUndistorted,
         method: method
     };
+    if (skeletonInfo) out.skeleton = skeletonInfo;   // only when asked: plain results stay as they were
+    return out;
+}
+
+/**
+ * The skeleton check's candidates for node k (pose/skeleton-check.js `checkChains`): re-solves from GROUPS OF
+ * CAMERAS THAT AGREE. Every pair of the cameras that see the node is triangulated (DLT); the cameras whose detection
+ * lies within `px` of that point's reprojection form its group; each group of 2+ cameras is re-solved from its own
+ * detections. The `maxC` largest groups are offered (`support` = their size). The node is LOCKED when the current
+ * point (`P`) is seen by 3+ cameras and every one of them agrees with it: nothing disputes it.
+ * `obs`: undistorted detections per node and camera (all of them, before the threshold rule); `obsRaw`: the same in
+ * native pixels; `cams`: camera objects index-parallel to `projMatrices`.
+ */
+function subsetCandidates(k, P, obs, obsRaw, included, projMatrices, cams, px, maxC) {
+    const views = [];
+    for (let c = 0; c < cams.length; c++) if (included[c] && obs[k][c] != null && obsRaw[k][c] != null) views.push(c);
+    if (views.length < 2) return { locked: false, cands: [] };
+    const agree = function (X, c) {
+        const r = reprojectPointCamera(X, cams[c]);
+        if (!r) return false;
+        const e = Math.hypot(r[0] - obsRaw[k][c][0], r[1] - obsRaw[k][c][1]);
+        return e <= px;
+    };
+    const cur = readPoint3d(P, k, [0, 0, 0]);
+    if (cur && views.length >= 3 && views.every(function (c) { return agree(cur, c); })) return { locked: true, cands: [] };
+    const solveFrom = function (cs) {
+        const row = obs[k].map(function (o, c) { return cs.indexOf(c) >= 0 ? o : null; });
+        const X = triangulatePointDLT(row, projMatrices);
+        return X && Number.isFinite(X[0]) && Number.isFinite(X[1]) && Number.isFinite(X[2]) ? X : null;
+    };
+    const groups = new Map();
+    for (let i = 0; i < views.length; i++) {
+        for (let j = i + 1; j < views.length; j++) {
+            const X = solveFrom([views[i], views[j]]);
+            if (!X) continue;
+            const S = views.filter(function (c) { return agree(X, c); });
+            if (S.length < 2) continue;
+            const key = S.join(',');
+            if (!groups.has(key)) groups.set(key, S);
+        }
+    }
+    const cands = [];
+    for (const S of groups.values()) {
+        const X = solveFrom(S);
+        if (X) cands.push({ X: X, kind: 'subset', support: S.length });
+    }
+    cands.sort(function (a, b) { return b.support - a.support; });
+    return { locked: false, cands: cands.slice(0, maxC) };
 }
 
 /**

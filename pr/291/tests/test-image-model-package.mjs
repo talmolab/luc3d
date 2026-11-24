@@ -45,6 +45,23 @@ group('parseModelManifest');
     bad({ sha256: { 'onnx/model.onnx': 'abc' } }, null, 'a malformed hash');
     ok(!M.parseModelManifest('{', 160).ok, 'bad JSON is refused');
     ok(M.validModelInput(192) && M.validModelInput(224) && M.validModelInput(168) && !M.validModelInput(100), 'validModelInput');
+    bad({ cropRule: 0 }, null, 'crop rule 0');
+    bad({ cropRule: 1.5 }, null, 'a fractional crop rule');
+    eq(r.manifest.cropRule, 1, 'no cropRule: rule 1 (written before the field)');
+    eq(M.parseModelManifest(Object.assign({}, BASE, { cropRule: 2 }), 160).manifest.cropRule, 2, 'cropRule kept');
+    eq(M.modelKeyMaterial(M.parseModelManifest(Object.assign({}, BASE, { cropRule: 2 }), 160).manifest, {}),
+        M.modelKeyMaterial(r.manifest, {}), 'cropRule is not part of the model key (adding it to an old manifest keeps its key)');
+}
+
+group('cropRuleDiffers: an older package on a skeleton the rules cut differently');
+{
+    const T_TAIL = ['nose', 'head', 'ear_left', 'ear_right', 'trunk', 'tti', 'tail_tip', 't0', 't1', 't2', 'neck'];
+    const SLAP = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2'];
+    eq(M.CROP_RULE, 2, 'this LUCID cuts by rule 2');
+    eq(M.cropRuleDiffers(1, T_TAIL), true, 'rule 1 on a skeleton naming tail segments t0, t1…: different crops');
+    eq(M.cropRuleDiffers(2, T_TAIL), false, 'rule 2 on it: the same');
+    eq(M.cropRuleDiffers(1, SLAP), false, 'rule 1 on a skeleton whose tail is named tail…: the same crops');
+    eq(M.cropRuleDiffers(1, []), false, 'no skeleton: nothing to say');
 }
 
 group('packageBaseUrl');

@@ -52,12 +52,12 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=88c28524ee0f';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode, isTailNode } from '../pose/id-switch-check.js?v=88c28524ee0f';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=88c28524ee0f';
-import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=88c28524ee0f';
-import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=88c28524ee0f';
-import { installModelPackageFetch, withPackageCachePolicy, modelPackageTransfer, checkCachedPackageFiles } from './image-model-package.js?v=88c28524ee0f';
+import { state } from './app-state.js?v=6956c56df814';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode, isTailNode } from '../pose/id-switch-check.js?v=6956c56df814';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=6956c56df814';
+import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=6956c56df814';
+import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=6956c56df814';
+import { installModelPackageFetch, withPackageCachePolicy, modelPackageTransfer, checkCachedPackageFiles } from './image-model-package.js?v=6956c56df814';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -338,7 +338,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=88c28524ee0f', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=6956c56df814', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -1299,7 +1299,7 @@ export function createCropPool(clock, maxCpuPct) {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=88c28524ee0f', import.meta.url), { type: 'module' }),
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=6956c56df814', import.meta.url), { type: 'module' }),
                         load: 0, idle: null, dead: false, from: 0 };
             w.worker.onmessage = function (e) {
                 if (e.data.want) { wanting.push(w); grantNext(); return; }

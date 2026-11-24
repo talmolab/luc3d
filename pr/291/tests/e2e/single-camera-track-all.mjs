@@ -274,6 +274,24 @@ try {
     await page.click(rowSel + ' .id-switch-line1');
     await page.click(rowSel + ' .id-switch-undo');
     check(JSON.stringify(await page.evaluate(() => window.__tracks())) === JSON.stringify(planted), 'Undo puts the planted swap back exactly');
+    // An identity edited apart from its track inside the range: the Fix can swap identities only, and says so before and after.
+    const edit = await page.evaluate((f) => { const S = window.__lucid.state.session, was = S.getIdentityIdForTrack('mouse_video', 0, f);
+        S.setFrameIdentity(f, 'mouse_video', 0, 2); return { f, was }; }, cur + 10);
+    await page.evaluate(async (f) => { const I = await import('/pose/initialization.js'); I.navigateToFrame(f); }, cur);
+    await page.click(rowSel + ' .id-switch-line1');
+    await page.evaluate(async (f) => { const I = await import('/pose/initialization.js'); I.navigateToFrame(f); }, cur);
+    await page.click(rowSel + ' .id-switch-fix');
+    const dlgIds = await page.evaluate(() => { const d = document.querySelector('.id-switch-fix-modal'), w = d && d.querySelector('#idSwitchFixIdsOnly');
+        return { text: d ? d.textContent : '', warn: !!w && getComputedStyle(w).display !== 'none' }; });
+    check(/\(their identities only\)/.test(dlgIds.text) && dlgIds.warn && /SLEAP will not carry the fix/.test(dlgIds.text),
+        'an identity edited apart from its track: the dialog says the Fix swaps identities only, and that SLEAP will not see it');
+    await page.click('#idSwitchFixOk');
+    const stIds = await page.evaluate(() => ({ text: document.getElementById('statusText').textContent, tr: window.__tracks() }));
+    check(/^Fixed the identities only/.test(stIds.text) && /SLEAP will not carry this fix/.test(stIds.text) &&
+        JSON.stringify(stIds.tr) === JSON.stringify(planted), '…the status says so too, and no track moved: ' + stIds.text.slice(0, 80));
+    await page.click(rowSel + ' .id-switch-line1');
+    await page.click(rowSel + ' .id-switch-undo');
+    await page.evaluate((e) => { window.__lucid.state.session.setFrameIdentity(e.f, 'mouse_video', 0, e.was); }, edit);
 
     console.log('\n4. A switch away from every encounter, found at a candidate moment');
     const cand = await page.evaluate(() => Array.isArray(window.__lucid.state.session._idSwitchCandidates));
@@ -529,7 +547,22 @@ try {
             for (let f = 0; f < N; f++) out.push(S.frameGroups.get(f).getUnlinkedInstances('lone_video').map(u => u.instance.trackIdx));
             return out; };
     });
+    // Its tracks are named (t0, t1, t2: not SLEAP's track_<n>), as a proofread file's are, so Track All asks before
+    // replacing them (ui/retrack-warning.js): Esc keeps them; Replace tracks goes on.
+    const lone0 = await page.evaluate(() => JSON.stringify(window.__lone()));
     await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
+    await page.waitForSelector('.retrack-warning-modal', { timeout: 10000 });
+    const ask = await page.evaluate(() => ({ text: document.querySelector('.retrack-warning-modal').textContent,
+        focus: document.activeElement && document.activeElement.id }));
+    check(/tracks named t0, t1, t2 \([\d,]+ detections\)/.test(ask.text) && ask.focus === 'retrackWarnCancel',
+        'named tracks: Track All asks before replacing them, lists them, and focuses Cancel: ' + ask.text);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.retrack-warning-modal') &&
+        /Track All cancelled/.test(document.getElementById('statusText').textContent), { timeout: 10000 });
+    check(await page.evaluate(() => JSON.stringify(window.__lone())) === lone0, 'Esc cancels it: every track is as it was');
+    await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
+    await page.waitForSelector('.retrack-warning-modal', { timeout: 10000 });
+    await page.click('#retrackWarnOk');
     await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
     const st8 = await status();
     const rv = await page.evaluate(() => {
@@ -732,7 +765,7 @@ try {
             Tail_0: [-65, 0], Tail_1: [-88, 0], Tail_2: [-110, 0], TailTip: [-132, 0] };
         const at = (cx, cy, h) => NODES.map(n => { const [x, y] = T[n], c = Math.cos(h), si = Math.sin(h); return [cx + c * x - si * y, cy + si * x + c * y]; });
         const N = 900, cam = new pd.Camera('meet_video', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [1280, 960]);
-        const s = new pd.Session([cam], new pd.Skeleton('mouse', NODES, []), ['t0', 't1'], 'meet');
+        const s = new pd.Session([cam], new pd.Skeleton('mouse', NODES, []), ['track_0', 'track_1'], 'meet');   // SLEAP's own names: Track All asks nothing
         for (let f = 0; f < N; f++) for (let a = 0; a < 2; a++) {
             const t = f / 30, d = 300 * Math.abs(Math.cos(Math.PI * ((t % 10) / 10)));
             s.addUnlinkedInstance(f, cam.name, new pd.Instance(at(640 + (a ? d : -d), 400 + 60 * a, a ? Math.PI : 0), a, 'predicted', 0.9));
@@ -823,7 +856,7 @@ try {
             Tail_0: [-65, 0], Tail_1: [-88, 0], Tail_2: [-110, 0], TailTip: [-132, 0] };
         const at = (cx, cy, h) => NODES.map(n => { const [x, y] = T[n], c = Math.cos(h), si = Math.sin(h); return [cx + c * x - si * y, cy + si * x + c * y]; });
         const N = 2250, cam = new pd.Camera('look_video', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [1280, 960]);
-        const s = new pd.Session([cam], new pd.Skeleton('mouse', NODES, []), ['t0', 't1'], 'look');
+        const s = new pd.Session([cam], new pd.Skeleton('mouse', NODES, []), ['track_0', 'track_1'], 'look');   // SLEAP's own names: Track All asks nothing
         for (let f = 0; f < N; f++) for (let a = 0; a < 2; a++) {
             const t = f / 30, d = 300 * Math.abs(Math.cos(Math.PI * ((t % 10) / 10)));
             s.addUnlinkedInstance(f, cam.name, new pd.Instance(at(640 + (a ? d : -d), 400 + 60 * a, a ? Math.PI : 0), a, 'predicted', 0.9));

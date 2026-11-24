@@ -246,6 +246,48 @@ group('3. A fix swaps the TRACKS; the same call undoes it; else the identity lay
     eq(i0.trackIdx, 0, '…and leaves the tracks alone');
 }
 
+group('3a. The Fix dialog knows beforehand whether a Fix swaps tracks or only identities');
+{
+    const t = build();
+    t.identities = []; t.frameIdentityMap = new Map();
+    await SCT.trackSingleCamera(t, cfg);
+    eq(SCT.singleCameraFixSwapsTracks(t, 300, 599, 0, 1), true, 'right after Track All: the tracks');
+    const before = instancesAt(t, 450).map(i => i.trackIdx);
+    eq(JSON.stringify(instancesAt(t, 450).map(i => i.trackIdx)), JSON.stringify(before), '…and asking changes nothing');
+    t.setFrameIdentity(450, CAM, 0, 2);
+    eq(SCT.singleCameraFixSwapsTracks(t, 300, 599, 0, 1), false, 'an identity edited apart from its track: identities only');
+    eq(SCT.singleCameraFixSwapsTracks(t, 300, 599, 0, 1), SCT.swapSingleCameraIdentities(t, 300, 599, 0, 1).tracks, '…as the Fix itself then does');
+}
+
+group('3b. What a new Track All would replace that a person made');
+{
+    const raw = build();
+    raw.addUnlinkedInstance(5, CAM, new PD.Instance(pose(0, 5), null, 'user', 1));   // a hand label with no track: nothing to lose
+    const u = SCT.retrackLosses(raw);
+    eq(u.names.length, 0, 'SLEAP\'s own track_<n> names are not a person\'s');
+    eq(u.user, 1, 'the one hand-labelled instance on a track is counted (not the trackless one)');
+    ok(u.any, '…so Track All asks');
+    const plain = build();
+    plain.frameGroups.get(900).getUnlinkedInstances(CAM).forEach(x => { if (x.instance.type === 'user') x.instance.type = 'predicted'; });
+    const p = SCT.retrackLosses(plain);
+    ok(!p.any && p.user === 0 && p.fixes === 0 && p.reviewed === 0, 'raw predictions with track_<n> names: nothing to lose, no question');
+    plain.tracks[1] = 'subject'; plain.tracks[2] = 'partner';
+    const n = SCT.retrackLosses(plain);
+    eq(n.names.slice().sort().join(','), 'partner,subject', 'named tracks are a person\'s (a proofread file)');
+    let onNamed = 0;
+    for (let f = 0; f < FRAMES; f++) instancesAt(plain, f).forEach(i => { if (i.trackIdx === 1 || i.trackIdx === 2) onNamed++; });
+    eq(n.namedDetections, onNamed, '…with every detection on them counted');
+    ok(n.any, '…so Track All asks');
+    const r = build();
+    r.frameGroups.get(900).getUnlinkedInstances(CAM).forEach(x => { x.instance.type = 'predicted'; });
+    r._idSwitch = { results: {}, reviewed: new Set(['a', 'b']), fixes: [{ key: 'a' }] };
+    const w = SCT.retrackLosses(r);
+    ok(w.fixes === 1 && w.reviewed === 2 && w.any, 'the ID Switches tab\'s fixes and ticked rows are counted');
+    const two = new PD.Session([new PD.Camera('a', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]),
+        new PD.Camera('b', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10])], new PD.Skeleton('m', NODES, []), [], 'two');
+    eq(SCT.retrackLosses(two), null, 'not single-camera: null');
+}
+
 group('4. Not single-camera, or lazy');
 {
     const two = new PD.Session([new PD.Camera('a', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]),
@@ -383,7 +425,7 @@ group('9. The review list: handovers, rows, Fix plan, saved checklist');
     frames = []; out = [];
     for (let f = 0; f < 60; f++) { frames.push(fr(f, [f < 30 ? [100, 100] : [500, 400]])); out.push([f < 30 ? 0 : 1]); }
     eq(SCT.handoverCandidates(frames, out, 30).length, 0, 'a track appearing far from the last detection is not a handover');
-    // (d) a lone animal undetected for 0.6 s that comes back nearby on the other track (sham_gdx R289): a handover —
+    // (d) a lone animal undetected for 0.6 s that comes back nearby on the other track: a handover —
     // the look-back is 1 s, not 0.5 — but not after a 1.5 s gap
     const gap = (missing) => { const fr2 = [], o2 = []; for (let f = 0; f < 90; f++) { if (f >= 30 && f < 30 + missing) continue;
         fr2.push(fr(f, [[300 + (f < 30 ? 0 : 20), 200]])); o2.push([f < 30 ? 0 : 1]); } return SCT.handoverCandidates(fr2, o2, 30); };

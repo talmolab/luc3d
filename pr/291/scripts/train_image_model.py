@@ -642,7 +642,7 @@ def main(argv=None):
     import make_image_model_package as mk
     args = [a.out, '--name', a.name or f'{os.path.basename(os.path.abspath(a.out))} (fine-tuned {a.base})', '--base', hf,
             '--license', lic, '--input', str(size), '--threshold', str(a.threshold if a.threshold is not None else base_thr),
-            '--training', json.dumps(training)]
+            '--crop-rule', str(CROP_RULE), '--training', json.dumps(training)]
     if validation:
         args += ['--validation', json.dumps(validation)]
     mk.main(args)

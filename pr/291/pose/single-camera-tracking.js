@@ -46,8 +46,8 @@
  * DOM-free. Depends on: pose/sleap-tracker.js, pose/detection-filter-stats.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=88c28524ee0f';
-import { passesDetectionFilter } from './detection-filter-stats.js?v=88c28524ee0f';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=6956c56df814';
+import { passesDetectionFilter } from './detection-filter-stats.js?v=6956c56df814';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
@@ -85,10 +85,8 @@ export function singleCameraTrackerConfig(numAnimals, s) {
  * Duplicate removal, opt-in (Tracking Wizard `scRemoveDuplicates`, default off).
  * SLEAP sometimes puts a SECOND instance on an animal it already detected —
  * often partial, scoring 0.4–0.9. With the animal count as the track cap that
- * copy takes a track, and a lone animal can hop onto it: on a proofread
- * two-mouse single-camera dataset (6 sessions, 40 fps) the subject, alone
- * before its partner entered, hopped tracks at its own duplicates in 2 of 6
- * sessions, and the partner then entered on its old track (96.95% correct).
+ * copy takes a track, and a lone animal can hop onto it, so the partner that
+ * enters later takes its old track.
  * sleap-nn's pre-cull cannot help: it acts only on a frame with MORE detections
  * than the animal count, and a lone animal plus its copy is not.
  *
@@ -98,13 +96,9 @@ export function singleCameraTrackerConfig(numAnimals, s) {
  * alone two look-alike poses side by side. The OKS reads the WEAKER detection's
  * nodes (a copy is often partial) against the stronger one, scaled by the
  * stronger one's box (sleap-nn's `compute_oks`, cocoeval normalisation, stddev
- * `oksStddev`). Measured 2026-10-12: on that dataset every IoU 0.3–0.7 × OKS
- * 0.5–0.8 removes both hops (99.98%, no swaps; at the defaults 91 detections,
- * none a real animal). On 87 proofread SLAP top/mid views (2–4 mice, 3.78M
- * detections) it is about neutral: 88.52% -> 88.73% correct, swaps 276 -> 257,
- * 8 views better and 8 worse — removing junk re-routes the tracker either way,
- * which is why it is not on by default. It removed 1,231 detections there, 74
- * of them a real second animal.
+ * `oksStddev`). Off by default: about neutral on proofread SLAP (88.52% ->
+ * 88.73% correct on 87 views, 8 better and 8 worse), since removing junk
+ * re-routes the tracker either way, and some of what it removes are real animals.
  */
 export const DUPLICATE_DEFAULTS = {
     iou: 0.5,        // box IoU with the stronger detection at least this...
@@ -344,7 +338,7 @@ export async function trackSingleCamera(session, cfg, opts) {
  *     `trackletGapFrames`: two independent trackers disagreeing about which
  *     animal this is. Only when the input had tracks.
  * On 35 proofread 10-min SLAP videos the two together put a candidate within
- * 3 s of 44 of the 59 real switches (the contact episodes alone: see MODULES.md).
+ * 3 s of 44 of the 59 real switches.
  */
 export const CANDIDATE_DEFAULTS = {
     ambiguityMargin: 0.1,
@@ -412,9 +406,8 @@ export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps,
 /** The handover look: a lone detection whose nearest detection in the last `lookSeconds` lay within
  *  `nearBody` body lengths and wore another track. "Lone" = no other detection within one body length.
  *  1 s, not 0.5: a mouse often drops out of detection for over half a second and comes back on the other
- *  track (sham_gdx R289: 0.6 s); on proofread data 1 s put 225 of 232 SLAP held-out switches on the list
- *  (0.5 s: 222) at 1.06 places a minute (0.97), and the review fixed 95 of 108 erroneous sham_gdx videos to
- *  >= 99.9% (92); 2 s added places without catching more. */
+ *  track; 1 s put 225 of 232 held-out SLAP switches on the list (0.5 s: 222), and 2 s added places
+ *  without catching more. */
 export const HANDOVER_DEFAULTS = { lookSeconds: 1, nearBody: 0.5 };
 
 /** Mean of the present nodes of tracker points, or null. */
@@ -499,19 +492,13 @@ function bodyLengthOf(frames) {
  * before the cluster wore; every other detection before then loses its track. A
  * lone phase shorter than `holdSeconds` after the first detection changes nothing.
  *
- * Measured 2026-11-07 on proofread data (Track All, then the review list played by
- * the simulated reviewer; MODULES.md): Mae's intact two-mouse set (725 videos, held
- * out) 99.877% -> 99.9245%, videos >= 99.9% 600 -> 614, review rows 6,113 -> 4,416;
- * sham_gdx (207) 99.975% -> 99.981%; SLAP (83 views) and SLAP-2M (163), where
- * every animal is in view from the start, unchanged to within 1 detection on 2
- * views. Ending the lone phase at the arrival itself instead (the first version)
- * gave intact 99.905%: the follower jumped to the newcomer in 10 videos (2,478
- * detections, one video 100% -> 88.9%). Without the arrival row the simulated
- * reviewer met the mice later, sometimes already swapped (intact 99.31%); at 0.5
- * body lengths huddled SLAP mice read as one animal. Left: one-frame blips where
- * the follower takes the copy of a resting animal the proofreader deleted (138
- * intact videos, a median of 2 detections each) — nothing in the detections tells
- * the copies apart.
+ * On 725 proofread two-mouse videos where the subject starts alone, with a
+ * simulated reviewer: 99.877% -> 99.925% correct after review, with 28% fewer
+ * review rows; on SLAP, where every animal is in view from the start, unchanged.
+ * Ending the lone phase at the arrival itself let the follower jump to the
+ * newcomer; at 0.5 body lengths huddled mice read as one animal. It can make a
+ * video slightly worse: one-frame blips where the follower takes the copy of a
+ * resting animal (nothing in the detections tells the copies apart).
  *
  * Rewrites `out` in place (DOM-free; reads only the detections and the tracker's
  * output).
@@ -611,7 +598,7 @@ export const RETURN_DEFAULTS = { gapSeconds: 1 };
  * frame a was last seen, so the check reads the labels before the animal went
  * out of sight against the labels after it came back (`testMoments`). Read from
  * the tracker's output only. Not on the review list as such: one place per return
- * would double it (measured, MODULES.md); the list takes only the returns
+ * would double it; the list takes only the returns
  * `reviewReturnCandidates` picks.
  * @returns {Array<{frame, startFrame, identityA, identityB, cues: string[]}>}
  */
@@ -647,11 +634,9 @@ export const REVIEW_RETURN_DEFAULTS = { gapSeconds: 1, otherAwaySeconds: 0.5 };
  * both out of sight (both hidden in the bedding, both lifted out), the first one
  * back can take either. As candidates `{f, a, b, cue: 'return'}` (final ids) for
  * `candidateMoments`' `extra`, which clusters them with the other places.
- * Measured 2026-11-07 on proofread data (MODULES.md), with a reviewer who watches
- * only 2 s before to 5 s after each row: +0.00–0.05 rows a minute; held-out intact
- * 99.825 -> 99.840% (one video 92.9 -> 100%), sham_gdx 99.939 -> 99.942%, SLAP
- * 99.423 -> 99.620%, SLAP-2M unchanged; no video worse. Every return as a row
- * gained more but added 0.2–1.4 rows a minute and cost one SLAP-2M view 25 points.
+ * With a simulated reviewer on proofread data: at most +0.05 rows a minute, SLAP
+ * 99.423 -> 99.620% after review, no video worse. Every return as a row gained
+ * more but added up to 1.4 rows a minute and cost one SLAP-2M view 25 points.
  * @returns {Array<{f: number, a: number, b: number, cue: 'return'}>}
  */
 export function reviewReturnCandidates(frames, out, fps, opts) {
@@ -697,11 +682,9 @@ export const VIDEO_END_DEFAULTS = { clearSeconds: 5, pairSeconds: 2 };
  * (`pairEncounters`) to where it began. Its pair is the two tracks seen most in
  * the last `pairSeconds` (else the two seen last); with more tracks the Fix
  * dialog picks the pair. Null with fewer than two tracks.
- * Measured 2026-11-09 on proofread data (MODULES.md), with a reviewer who watches
- * only 2 s before to 5 s after each row and steps back through encounters:
- * +0.08–0.16 rows a minute; held-out intact 99.840 -> 99.927%, sham_gdx 99.942 ->
- * 99.980%, SLAP 99.620 -> 99.923%, SLAP-2M 98.885 -> 99.550% (the row alone,
- * without stepping back, changes almost nothing).
+ * With a simulated reviewer that steps back through encounters: +0.08–0.16 rows
+ * a minute; SLAP 99.620 -> 99.923% and SLAP-2M 98.885 -> 99.550% after review
+ * (the row alone, without stepping back, changes almost nothing).
  * @returns {?{frame, startFrame, identityA, identityB, cues: ['videoEnd']}}
  */
 export function videoEndRow(frames, out, review, fps, opts) {
@@ -737,9 +720,8 @@ export const VIDEO_START_DEFAULTS = { clipBeforeSeconds: 2, clipAfterSeconds: 5 
  * animals the right way round before it; this row is that look. Its pair is the two lowest tracks in that frame
  * (with more tracks the Fix dialog picks the pair). Null with fewer than two tracks, or when they are never all
  * in view together.
- * Measured 2026-11-16 (MODULES.md) with the simulated reviewer, which learns who is who only from the rows it
- * watches, on top of every other row: SLAP-2M 99.551 -> 99.834% (3 of 163 views better, none worse),
- * +0.13 rows a minute; intact, sham_gdx and SLAP unchanged (+0.002, 0.002 and 0.08 rows a minute).
+ * With a simulated reviewer that learns who is who only from the rows it watches: SLAP-2M 99.551 -> 99.834%
+ * after review (3 of 163 views better, none worse), +0.13 rows a minute; the other sets unchanged.
  * @returns {?{frame, startFrame, identityA, identityB, cues: ['videoStart']}}
  */
 export function videoStartRow(frames, out, review, fps, opts) {
@@ -825,9 +807,9 @@ export function pairEncounters(session, idA, idB, from, to, opts) {
  * run of them no more than `clusterSeconds` apart. Rows are
  * change points with no score (0) and no far edge — a Fix swaps from the frame the
  * reviewer stopped on to the end of the video, and later rows fix their own
- * stretches in turn. Measured on 87 proofread SLAP views and 207 sham_gdx
- * conditions (MODULES.md): about one row a minute, within 2 s of 86–96% of the
- * real switches, under 10% of the video inside a row's window.
+ * stretches in turn. On proofread SLAP and two-mouse sets: about one row a
+ * minute, within 2 s of 86–96% of the real switches, under 10% of the video
+ * inside a row's window.
  * @returns {{ok: true, cue: 'review', flags: Array, changes: [], encounters: [], fps: number}}
  */
 export function reviewResult(moments, session, fps) {
@@ -928,10 +910,49 @@ export function singleCameraCheckSession(session, opts) {
  *
  * Done only when each identity is one track throughout the range — true after
  * a single-camera Track All. Otherwise (identities hand-edited apart from their
- * tracks) it swaps the identity layer alone, like a multi-camera fix, and says
- * so. Returns {frames, tracks: boolean}; null when the session is not single-camera.
+ * tracks) it swaps the identity layer alone, like a multi-camera fix, and
+ * returns `tracks: false`: the Fix dialog (`singleCameraFixSwapsTracks`) and the
+ * status after it say so, since a file opened in SLEAP will not carry that fix.
+ * Returns {frames, tracks: boolean}; null when the session is not single-camera.
  */
 export function swapSingleCameraIdentities(session, from, to, idA, idB) {
+    var p = singleCameraFixPlan(session, from, to, idA, idB);
+    if (!p) return null;
+    if (!p.tracks) {
+        var r = session.swapIdentitiesInRange(from, to, idA, idB);
+        return { frames: r.entries ? p.touched.length : 0, tracks: false };
+    }
+    var cam = p.cam, tA = p.tA, tB = p.tB, frames = 0;
+    for (var [f2, fg2] of session.frameGroups) {
+        if (f2 < from || f2 > to) continue;
+        var changed = false, L = instancesOf(fg2, cam);
+        for (var j = 0; j < L.length; j++) {
+            if (L[j].trackIdx === tA) { L[j].trackIdx = tB; changed = true; }
+            else if (L[j].trackIdx === tB) { L[j].trackIdx = tA; changed = true; }
+        }
+        if (changed) {
+            frames++;
+            // Make sure both keys exist on this frame (an animal absent here keeps whatever it had).
+            if (session.getIdentityIdForTrack(cam, tA, f2) == null) session.setFrameIdentity(f2, cam, tA, idA);
+            if (session.getIdentityIdForTrack(cam, tB, f2) == null) session.setFrameIdentity(f2, cam, tB, idB);
+        }
+    }
+    return { frames: frames, tracks: true };
+}
+
+/**
+ * Would a Fix of `idA` <-> `idB` on frames [from, to] swap their TRACKS (true), or
+ * only the identity layer (false: an identity was edited apart from its track, so
+ * a file opened in SLEAP would not carry the fix)? null when the session is not
+ * single-camera. The Fix dialog says which before the user confirms.
+ */
+export function singleCameraFixSwapsTracks(session, from, to, idA, idB) {
+    var p = singleCameraFixPlan(session, from, to, idA, idB);
+    return p ? p.tracks : null;
+}
+
+/** The tracks a single-camera Fix would swap, and whether it can: {cam, tA, tB, tracks, touched}, or null. */
+function singleCameraFixPlan(session, from, to, idA, idB) {
     var cam = singleCameraName(session);
     if (!cam || session.lazyLoader) return null;
     var trackOf = new Map(), consistent = true, touched = [];
@@ -957,24 +978,52 @@ export function swapSingleCameraIdentities(session, from, to, idA, idB) {
             if ((vA != null && vA !== idA) || (vB != null && vB !== idB)) consistent = false;
         }
     } else consistent = false;
-    if (!consistent) {
-        var r = session.swapIdentitiesInRange(from, to, idA, idB);
-        return { frames: r.entries ? touched.length : 0, tracks: false };
-    }
-    var frames = 0;
-    for (var [f2, fg2] of session.frameGroups) {
-        if (f2 < from || f2 > to) continue;
-        var changed = false, L = instancesOf(fg2, cam);
-        for (var j = 0; j < L.length; j++) {
-            if (L[j].trackIdx === tA) { L[j].trackIdx = tB; changed = true; }
-            else if (L[j].trackIdx === tB) { L[j].trackIdx = tA; changed = true; }
+    return { cam: cam, tA: tA, tB: tB, tracks: consistent, touched: touched };
+}
+
+/** The names SLEAP, sleap-nn and this module give the tracks they make. Any other name was given by a person. */
+var AUTO_TRACK_NAME = /^track_\d+$/;
+
+/**
+ * What a single-camera Track All would throw away that a person made. Track All
+ * tracks every detection again and replaces `session.tracks` (and a new run
+ * clears the ID Switches tab), so before it runs the user is asked when any of
+ * these is there (`ui/retrack-warning.js`):
+ *   - `names`: tracks named by a person (anything but `track_<n>`, e.g. a
+ *     proofread file's subject / partner), on `namedDetections` detections;
+ *   - `user`: hand-labelled instances that are on a track;
+ *   - `fixes` / `reviewed`: the ID Switches tab's fixes and ticked rows
+ *     (`session._idSwitch`, saved with the project).
+ * Not seen: tracks proofread in SLEAP that kept SLEAP's `track_<n>` names on
+ * predicted instances; nothing in the file tells them from raw predictions,
+ * and asking on every raw predictions file would teach users to click through.
+ * Returns {names, namedDetections, user, fixes, reviewed, any}; null when the
+ * session is not single-camera.
+ */
+export function retrackLosses(session) {
+    var cam = singleCameraName(session);
+    if (!cam) return null;
+    var tracks = session.tracks || [], onTrack = new Map(), user = 0;   // track index -> detections on it
+    if (session.frameGroups) session.frameGroups.forEach(function (fg) {
+        var list = instancesOf(fg, cam);
+        for (var q = 0; q < list.length; q++) {
+            var t = list[q].trackIdx;
+            if (t == null || t < 0) continue;
+            if (list[q].type === 'user') user++;
+            var name = tracks[t];
+            if (name != null && !AUTO_TRACK_NAME.test(String(name))) onTrack.set(t, (onTrack.get(t) || 0) + 1);
         }
-        if (changed) {
-            frames++;
-            // Make sure both keys exist on this frame (an animal absent here keeps whatever it had).
-            if (session.getIdentityIdForTrack(cam, tA, f2) == null) session.setFrameIdentity(f2, cam, tA, idA);
-            if (session.getIdentityIdForTrack(cam, tB, f2) == null) session.setFrameIdentity(f2, cam, tB, idB);
-        }
-    }
-    return { frames: frames, tracks: true };
+    });
+    var named = new Map();   // name -> detections, in the file's track order
+    Array.from(onTrack.keys()).sort(function (a, b) { return a - b; }).forEach(function (t) {
+        var nm = String(tracks[t]);
+        named.set(nm, (named.get(nm) || 0) + onTrack.get(t));
+    });
+    var st = session._idSwitch;
+    var fixes = st && Array.isArray(st.fixes) ? st.fixes.length : 0;
+    var reviewed = st && st.reviewed ? (st.reviewed.size != null ? st.reviewed.size : st.reviewed.length || 0) : 0;
+    var namedDetections = 0;
+    named.forEach(function (n) { namedDetections += n; });
+    return { names: Array.from(named.keys()), namedDetections: namedDetections, user: user, fixes: fixes, reviewed: reviewed,
+             any: named.size > 0 || user > 0 || fixes > 0 || reviewed > 0 };
 }

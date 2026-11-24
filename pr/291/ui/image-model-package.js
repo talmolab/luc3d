@@ -31,8 +31,8 @@
 import {
     parseModelManifest, modelKeyMaterial, hexOf, packageBaseUrl,
     MODEL_MANIFEST_NAME, MODEL_FP32_PATH, MODEL_FP16_PATH, MODEL_CONFIG_PATH,
-} from '../pose/image-model-manifest.js?v=88c28524ee0f';
-import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=88c28524ee0f';
+} from '../pose/image-model-manifest.js?v=6956c56df814';
+import { readBlobArrayBuffer } from '../loading/cold-read-guard.js?v=6956c56df814';
 
 /** Repo-id prefix of packages, as transformers.js sees them. */
 export const PACKAGE_REPO_PREFIX = 'lucid-pkg/';
@@ -88,7 +88,7 @@ function makePackage(manifest, key, source, sizes) {
     return {
         key: key, id: modelRepoId(key), builtin: false,
         name: manifest.name, base: manifest.base, license: manifest.license,
-        input: manifest.input, threshold: manifest.threshold, fp16: manifest.fp16,
+        input: manifest.input, threshold: manifest.threshold, fp16: manifest.fp16, cropRule: manifest.cropRule,
         // download / memory size in MB per dtype, for the status lines (0 = unknown, a URL package before download)
         mb: { fp32: Math.round(fp32 / 1e6), fp16: Math.round(fp16 / 1e6) },
         manifest: manifest, source: source,
