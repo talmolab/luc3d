@@ -40,12 +40,13 @@ const THRESHOLD_DEFAULTS = {
     scWindowSize: 5,
     scOksStddev: 0.1,
     scConnectBreaks: 1,
+    scLoneAnimal: 1,
     scRemoveDuplicates: 0,
     scDuplicateIou: 0.5,
     scDuplicateOks: 0.6,
     autoSwitchCheck: 1,
     autoImageSwitchCheck: 0,
-    imageChangeThreshold: -0.8,
+    imageChangeThreshold: -1.2,
     imageCheckHz: 2,
     imageCheckBackgroundHz: 0.1,
     imageCheckMaxViews: 3,
@@ -55,6 +56,7 @@ const THRESHOLD_DEFAULTS = {
     autoBrightnessSwitchCheck: 1,
     brightnessCheckThreshold: -800,
     brightnessCheckHz: 4,
+    reprojErrorThreshold: 0,
 };
 
 const SETTINGS_STUB = `
