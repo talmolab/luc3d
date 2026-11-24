@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=29f895d644eb';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=b53b974f94f0';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -381,12 +381,12 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'scWindowSize', label: 'Single camera: candidate window (frames)', default: 5,
         min: 1, max: 100, step: 1,
-        desc: 'Single-camera Track All runs SLEAP\'s tracker (sleap-nn track, local queues): each animal is matched against its last this-many detections. sleap-nn\'s default is 5. On 35 proofread 10-min videos 10 was about the same and 30 much worse (old detections from before a crossing outvote new ones).',
+        desc: 'Single-camera Track All runs SLEAP\'s tracker (sleap-nn track, local queues): each animal is matched against its last this-many detections. sleap-nn\'s default is 5; much larger windows let old detections from before a crossing outvote new ones.',
     },
     {
         id: 'scOksStddev', label: 'Single camera: OKS tolerance', default: 0.1,
         min: 0.005, max: 1, step: 0.005,
-        desc: 'Keypoint spread of the OKS match score (sleap-nn --oks_stddev). sleap-nn\'s default 0.025 is strict: two poses more than ~1.5 body lengths apart score exactly 0, so after a fast move or a gap every animal scores 0 and the assignment is a coin flip. On 35 proofread videos 0.1 cut lasting swaps from 156 to 102 (accuracy 85.8% -> 93.6%); 0.2 and above get worse again.',
+        desc: 'Keypoint spread of the OKS match score (sleap-nn --oks_stddev). sleap-nn\'s default 0.025 is strict: two poses more than ~1.5 body lengths apart score exactly 0, so after a fast move or a gap the assignment comes down to tie-breaking. 0.1 cut lasting swaps by about a third on proofread videos; 0.2 and above get worse again.',
     },
     {
         id: 'scConnectBreaks', label: 'Single camera: connect single breaks', default: 1,
@@ -396,12 +396,12 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'scRemoveDuplicates', label: 'Single camera: remove duplicate detections', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'Before tracking, leave out a detection that duplicates a stronger one in the same frame — box IoU and OKS both at least the two values below. SLEAP sometimes puts a second instance on an animal it already detected; that copy takes a track, and a lone animal can hop onto it. Removed detections keep no track and stay in the project. On a proofread two-mouse dataset where a lone animal hopped tracks at its duplicates, this fixed both hops (96.95% -> 99.98% correct); on 87 proofread SLAP videos it was about neutral (88.52% -> 88.73%, fewer swaps but some videos worse), hence off by default.',
+        desc: 'Before tracking, leave out a detection that duplicates a stronger one in the same frame — box IoU and OKS both at least the two values below. SLEAP sometimes puts a second instance on an animal it already detected; that copy takes a track, and a lone animal can hop onto it. Removed detections keep no track and stay in the project. Off by default: it stops those hops, but elsewhere it changes little and sometimes removes a real animal.',
     },
     {
         id: 'scLoneAnimal', label: 'Single camera: one track while one animal is in view', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'Until two animals are in view together, the one animal there keeps one track, and the review list gets a row where the second arrives. When an animal starts alone (a subject before its partner is put in), the tracker otherwise moves it between tracks: a hand carries it, it comes back at the edge, a stray detection takes its track. On 725 proofread two-mouse videos this cut the review list by about 28% and helped more videos than it hurt (222 against 147, which lost a few detections each); with every animal in view from the start (SLAP) it almost never acts.',
+        desc: 'Until two animals are in view together, the one animal there keeps one track, and the review list gets a row where the second arrives. When an animal starts alone (a subject before its partner is put in), the tracker otherwise moves it between tracks: a hand carries it, it comes back at the edge, a stray detection takes its track. Where one animal starts alone it shortens the review list by about a quarter and helps more videos than it hurts; with every animal in view from the start it almost never acts.',
     },
     {
         id: 'scDuplicateIou', label: 'Single camera: duplicate box IoU', default: 0.5,
@@ -481,12 +481,12 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoBrightnessSwitchCheck', label: 'Check ID switches after single-camera tracking (coat brightness)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All on a single-camera session, check for switches by how bright each animal\'s coat is (Tracks ▸ Check ID Switches (Coat Brightness)). Reads the video, but needs no model or GPU. On 35 proofread single-camera videos of mice with different coat colours, every switch it flagged was real. Not run automatically on multi-camera sessions, where it is not calibrated.',
+        desc: 'After Track All on a single-camera session, check for switches by how bright each animal\'s coat is (Tracks ▸ Check ID Switches (Coat Brightness)). Reads the video, but needs no model or GPU. It helps when the animals differ in brightness at their body keypoints: different coat colours, and possibly a dark head implant on one of two light mice (not yet measured). Where they look alike it rarely flags anything. Not run automatically on multi-camera sessions, where it is not calibrated.',
     },
     {
         id: 'brightnessCheckThreshold', label: 'Coat brightness check: flag threshold', default: -800,
         min: -5000, max: 0, step: 50,
-        desc: 'An encounter starts a possible coat-brightness switch when its score falls below this. Strict on purpose: on one camera the encounters scored by brightness were mostly false alarms (-200 flagged 37, 3 real), while the moments where the tracker nearly chose the swap (tested separately, at -200) caught 14 real switches and nothing else.',
+        desc: 'An encounter starts a possible coat-brightness switch when its score falls below this. Strict on purpose: on one camera most encounters it flagged at a looser threshold were false alarms, while the moments where the tracker nearly chose the swap (tested separately) found the real switches.',
     },
     {
         id: 'brightnessCheckHz', label: 'Coat brightness check: samples per second', default: 4,

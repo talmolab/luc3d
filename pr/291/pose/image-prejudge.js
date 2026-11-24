@@ -37,7 +37,7 @@
  * `PREJUDGE_BUILTIN`: to it every pair looks alike (no pair below 0.7) and its
  * scores are ~6x smaller, so no gate and margin 0.2. In the app on the same
  * rows: 14 of 95 swaps called, 2 false alarms, about 3 rows in 4 unsure. The
- * About text quotes these.
+ * About text gives these in round numbers.
  *
  * Pure — no DOM, no app state, no imports.
  */
