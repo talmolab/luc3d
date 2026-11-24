@@ -21,7 +21,7 @@ import {
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-    slpVideoByCamera, camerasAlreadyInSession,
+    slpVideoByCamera, slpVideoFramesByCamera, camerasAlreadyInSession, camerasPerhapsInSession,
 } from './slp-merge.js';
 import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js';
 import {
@@ -71,6 +71,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+import { confirmDialog } from '../ui/confirm-dialog.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
 import { readOutlineFlagsMetadata } from './outline-flags-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
@@ -1207,6 +1208,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
         session.slpVideoByCamera = slpVideoByCamera(slpData.videos, videoIdxToCameraName);
+        session.slpVideoFramesByCamera = slpVideoFramesByCamera(slpData.videos, videoIdxToCameraName);
         // The file's provenance (e.g. campy-live-export's records), written back on save.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), slpSessIdx);
@@ -1868,6 +1870,29 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
 // Add SLP (Additive Merge)
 // ============================================
 
+/**
+ * Load SLP on a file whose camera matches one in the session by its video's file
+ * name only (`camerasPerhapsInSession`): the same video, or another camera's
+ * with the same name? Resolves true to add it as another camera, false to treat
+ * it as the video already there (nothing added again).
+ * @param {Array<{camera: string, have: string, incoming: string}>} list
+ * @returns {Promise<boolean>}
+ */
+function confirmSameNamedVideo(list) {
+    return confirmDialog({
+        title: 'The same video?',
+        intro: 'This file\'s video has the same name as one already in this session, so it may be that video again or ' +
+            'another camera\'s (campy names every video 0.mp4):',
+        items: list.map(function (x) {
+            return 'camera ' + x.camera + ': ' + x.incoming + (x.have && x.have !== x.incoming ? ' (here: ' + x.have + ')' : '');
+        }),
+        tip: 'Cancel if it is the same video: nothing is added twice.',
+        okLabel: 'Add as another camera',
+        className: 'same-video-modal',
+        idPrefix: 'sameVideo',
+    });
+}
+
 export async function handleAddSlp() {
     try {
         // TODO(slp-load): wire SLP-parse + per-cam decoder phases through
@@ -1981,7 +2006,20 @@ export async function handleAddSlp() {
         // without one): never add its camera a second time — the renamed copy
         // made a one-camera session a two-camera one. If that camera has no
         // video yet, only ask for it (below); its detections are already here.
-        var alreadyIn = camerasAlreadyInSession(state.session, slpVideoByCamera(slpData.videos, videoIdxToCameraName));
+        var incomingVideos = slpVideoByCamera(slpData.videos, videoIdxToCameraName);
+        var alreadyIn = camerasAlreadyInSession(state.session, incomingVideos);
+        // A camera whose video matches only by its file name (a saved project keeps a video as picked, often just
+        // its name; campy names every video 0.mp4) may be the same video or another camera's: ask, never guess.
+        var perhaps = camerasPerhapsInSession(state.session, incomingVideos,
+            slpVideoFramesByCamera(slpData.videos, videoIdxToCameraName)).filter(function (c) { return alreadyIn.indexOf(c) < 0; });
+        if (perhaps.length) {
+            hideLoading();
+            var addAnyway = await confirmSameNamedVideo(perhaps.map(function (c) {
+                return { camera: c, have: (state.session.slpVideoByCamera || {})[c] || '', incoming: incomingVideos[c] };
+            }));
+            if (!addAnyway) alreadyIn = alreadyIn.concat(perhaps);
+            showLoading('Merging into session...');
+        }
         var hasViewFor = function (camName) {
             return state.views.some(function (v) { return (v.cameraName || v.name) === camName; });
         };
@@ -2046,6 +2084,8 @@ export async function handleAddSlp() {
             }
             state.session.slpVideoByCamera = Object.assign(state.session.slpVideoByCamera || {},
                 slpVideoByCamera(slpData.videos, videoIdxToCameraName));
+            state.session.slpVideoFramesByCamera = Object.assign(state.session.slpVideoFramesByCamera || {},
+                slpVideoFramesByCamera(slpData.videos, videoIdxToCameraName));
 
             // Merge frames (with node reorder map if needed)
             affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);

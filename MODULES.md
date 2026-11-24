@@ -11480,6 +11480,21 @@ replaced).
 
 ---
 
+### ui/confirm-dialog.js
+
+**Purpose.** A small two-button question: `confirmDialog({title, intro, items,
+tip, okLabel, cancelLabel, className, idPrefix})` -> Promise<boolean>. Cancel is
+focused; Esc or a backdrop click cancels; every key stops at the dialog (capture
+phase) and Enter presses the focused button. All text goes in with `textContent`
+(items often hold names from a file).
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/retrack-warning.js`, `import-export/slp-import.js`
+(`handleAddSlp`'s "The same video?").
+
+---
+
 ### ui/retrack-warning.js
 
 **Purpose.** Asks before a single-camera Track All replaces tracks a person made.
@@ -11491,7 +11506,7 @@ and the ID Switches tab's fixes and ticked rows, with no undo. Title + one
 sentence + counts. Cancel is focused; Esc or a backdrop click cancels; every key
 stops at the dialog (capture phase), Enter presses the focused button.
 
-**Imports from project modules.** None.
+**Imports from project modules.** `ui/confirm-dialog.js` (`confirmDialog`).
 
 **Imported by.** `pose/tracker.js` (`runSingleCameraTrackAll`).
 
@@ -17835,7 +17850,12 @@ first track.
   copy turned a one-camera session into a two-camera one. If that camera has
   no view yet, it only asks for the video (Load SLP again after continuing
   without video); otherwise it changes nothing and says so. A same-named camera
-  from another video (campy's `0.mp4`) is still added as `<name>_2`. Its video prompt
+  from another video (campy's `0.mp4`) is still added as `<name>_2`. When the
+  videos match by file name alone (`camerasPerhapsInSession`: a reopened project
+  keeps a video as picked, often just its name) and their frame counts do not
+  tell them apart, it asks ("The same video?", `confirmSameNamedVideo` through
+  `ui/confirm-dialog.js`): Cancel treats it as the video already there, "Add as
+  another camera" adds it. Its video prompt
   (`forceVideoSelection` with `folder: true`) offers Select Session Folder.
   Test: `tests/e2e/load-slp-same-video-twice.mjs`.
 - **A folder pick's videos are placed by `assignFolderVideos`** in both
@@ -17991,6 +18011,7 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   `../loading/video-file-pick.js` (`preferNonCalibrationVideos`,
   `assignFolderVideos`, `isFolderPick`, `isVideoFileName`),
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
+  `../ui/confirm-dialog.js` (`confirmDialog`: "The same video?"),
   `../loading/cold-read-guard.js`
   (`readBlobArrayBuffer`: Load 3D Points reads its `.h5` into memory, outside
   h5wasm's guarded WORKERFS). Also spawns
@@ -18073,13 +18094,23 @@ compatibility check, track merging, frame merging, group rebuild.
 - `slpVideoByCamera(videos, videoIdxToCameraName)` — camera name → the video
   path the file gives (`sourceFilename`, else `filename`; '.' left out), kept
   on `Session.slpVideoByCamera`.
+- `slpVideoFramesByCamera(videos, videoIdxToCameraName)` — camera name → that
+  video's frame count (`shape[0]`, where given), kept on
+  `Session.slpVideoFramesByCamera`.
 - `camerasAlreadyInSession(session, incoming)` — the incoming cameras the
-  session already has: same name AND the same video (`sameVideoPath`).
-  `handleAddSlp` never adds these again. After a reopen the session's path is
-  the one the saved file wrote (the eager loader's `slpVideoByCamera`, or a lazy
-  project's `lazyLoader.videos`), often just the video's name.
-- `sameVideoPath(a, b)` — equal paths, or a shorter one that is the longer one's
-  tail folder by folder (`/` and `\` alike); empty never matches.
+  session certainly has: same name AND `videoPathMatch` 'path'. `handleAddSlp`
+  never adds these again. After a reopen the session's path is the one the saved
+  file wrote (the eager loader's `slpVideoByCamera`, or a lazy project's
+  `lazyLoader.videos`), often just the video's name.
+- `camerasPerhapsInSession(session, incoming, incomingFrames?)` — same name,
+  and only the file name matches (`videoPathMatch` 'name'), unless both frame
+  counts are known and differ. A saved short name looks like this, and so does
+  another campy camera's `0.mp4`, so `handleAddSlp` asks ("The same video?",
+  `ui/confirm-dialog.js`): Cancel treats it as the video already there, "Add as
+  another camera" adds it.
+- `videoPathMatch(a, b)` — 'path' when equal or the shorter one, with a folder,
+  is the longer one's tail folder by folder (`/` and `\` alike); 'name' when only
+  a bare file name ends the other; null otherwise or when either is empty.
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Instance`,
