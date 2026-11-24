@@ -5,8 +5,11 @@
  * One message = one camera view of one sampled frame:
  *   IN  {id, image: VideoFrame|ImageBitmap (transferred), crops: [{g, others}], input}
  *       where g = cropGeometry(...) and others = the other animals' hulls there
- *   OUT {id, tensors: [Float32Array(3 x input x input)] (transferred)} — one model
- *       input per crop, in order — or {id, error}
+ *   OUT {id, tensors: [Float32Array(3 x input x input)] (transferred), cpuMs} — one
+ *       model input per crop, in order — or {id, error, cpuMs}. `cpuMs` is the
+ *       job's compute (createSyncTimer, ui/load-graph.js: cutting and writing the
+ *       inputs), NOT the time it waited in this worker's queue or for the read
+ *       token — what the pool adds to the check's CPU load.
  * The worker owns and closes the image. It runs the very same `cutCrop` /
  * `writeInputTensor` the main thread would, so its output is identical.
  *
@@ -23,11 +26,13 @@
  * everywhere.)
  */
 
-import { cutCrop, writeInputTensor, CROP, BUILTIN_INPUT } from './image-embedder.js?v=5611a1bb19c2';
+import { cutCrop, writeInputTensor, CROP, BUILTIN_INPUT } from './image-embedder.js?v=7690799bebe1';
+import { createSyncTimer } from './load-graph.js?v=7690799bebe1';
 
 let canvas = null;
 const jobs = [];
 let busy = false, granted = null;
+const timer = createSyncTimer();   // this job's compute, reported as cpuMs
 
 self.onmessage = function (e) {
     if (e.data && e.data.grant) { const g = granted; granted = null; if (g) g(); return; }
@@ -39,7 +44,7 @@ self.onmessage = function (e) {
 async function cutAll(id, image, crops) {
     await new Promise(function (resolve) { granted = resolve; self.postMessage({ want: id }); });
     try {
-        return crops.map(function (c) { return cutCrop(image, c.g, c.others, canvas); });
+        return timer.time(function () { return crops.map(function (c) { return cutCrop(image, c.g, c.others, canvas); }); });
     } finally {
         self.postMessage({ release: id });
     }
@@ -54,14 +59,16 @@ async function run() {
             canvas = canvas || new OffscreenCanvas(CROP, CROP);
             let grey;
             try { grey = await cutAll(id, image, crops); } finally { try { if (image && image.close) image.close(); } catch (err) { /* ignore */ } }
-            const tensors = grey.map(function (px) {
-                const t = new Float32Array(3 * side * side);
-                writeInputTensor(px, t, 0, side);
-                return t;
+            const tensors = timer.time(function () {
+                return grey.map(function (px) {
+                    const t = new Float32Array(3 * side * side);
+                    writeInputTensor(px, t, 0, side);
+                    return t;
+                });
             });
-            self.postMessage({ id: id, tensors: tensors }, tensors.map(function (t) { return t.buffer; }));
+            self.postMessage({ id: id, tensors: tensors, cpuMs: timer.take() }, tensors.map(function (t) { return t.buffer; }));
         } catch (err) {
-            self.postMessage({ id: id, error: String((err && err.message) || err) });
+            self.postMessage({ id: id, error: String((err && err.message) || err), cpuMs: timer.take() });
         }
     }
     busy = false;

@@ -6417,21 +6417,41 @@ the image check's progress dialog (`ui/id-switch-modal.js`: CPU and GPU lines,
 both series) and the loading overlay (`ui/loading-overlay.js` `setLoadingCpu`:
 the CPU alone — Triangulate All and Track All). No browser API reports the CPU's or a GPU's
 utilisation, so every load is the operation's OWN busy time as a share of the
-hardware, and each line's tooltip says other apps are not in it.
+hardware, and each line's tooltip says other apps are not in it. Busy means
+COMPUTING: a lane must not stay open across an await on the decoder, the GPU, a
+queue or a lock (the image check's crop workers once read 8 of 32 cores where the
+OS saw Chrome use 1.3-2.3); a worker that also waits times its own synchronous
+sections and reports them. The machine's own CPU pressure (Compute Pressure API)
+can go beside the load where the browser has it.
 
 **Key exports.**
 - `LOAD_WINDOW_MS` (5000); `createLoadMeter(windowMs)` -> `(now, busyMs) ->
   pct|null` (moved here from `ui/image-embedder.js`, which re-exports it) — the
   share of the window spent busy; for the CPU, feed thread-ms / cores.
-- `createBusyClock(now?)` -> `{begin(lane), end(lane), close(lane?), ms()}` —
-  busy time summed over lanes (threads); nested per lane (a crop worker holds
-  several queued jobs; a pool's `'main'` is reopened by a reply handled while it
-  waits); open spans count up to now; `close()` with no argument closes every lane.
-- `formatCpuLoad(cores, load, counts)` -> `{text, title, load}` — "CPU: 12 cores ·
-  load 7%" (`cores` = `navigator.hardwareConcurrency`, logical processors; one
-  saturated thread on 12 cores reads 8%); the tooltip is "The share of the CPU's
-  12 cores kept busy over the last 5 s by " + `counts` + ". Browsers do not report
-  the CPU's total load, so other apps are not included." `cpuCores()`.
+- `createBusyClock(now?)` -> `{begin(lane), end(lane), close(lane?), add(ms), ms()}` —
+  busy time summed over lanes (threads); nested per lane (a CPU model worker holds
+  several queued runs, all pure compute; a pool's `'main'` is reopened by a reply
+  handled while it waits); open spans count up to now; `close()` with no argument
+  closes every lane; `add(ms)` adds compute a thread timed itself (ignores
+  negative/NaN). Open a lane only around work that keeps the thread computing.
+- `createSyncTimer(now?)` -> `{time(fn), take()}` — a worker's own compute:
+  `time` runs a SYNCHRONOUS `fn` and adds its duration (also when it throws),
+  `take` returns the sum since the last take. Used by `ui/image-crop-worker.js`,
+  which waits for the read token between its sections.
+- `PRESSURE_STATES` (`nominal`, `fair`, `serious`, `critical`);
+  `createPressureWatch(onChange?, Observer?)` -> `{state(), stop()}` — the
+  Compute Pressure API's `'cpu'` source (once a second): the latest state, or null
+  with no `PressureObserver` (Firefox, Safari), when `observe` is refused, or
+  before the first reading. Never throws.
+- `formatCpuLoad(cores, load, counts, pressure?)` -> `{text, title, load}` —
+  "CPU: 12 cores · load 7%" (`cores` = `navigator.hardwareConcurrency`, logical
+  processors; one saturated thread on 12 cores reads 8%), plus " · fair"
+  when `pressure` is a known state; the tooltip is "The share of the CPU's 12
+  cores kept busy over the last 5 s by " + `counts` + ". Busy means computing:
+  time a thread spends waiting (for the video decoder, the GPU or another thread)
+  is not counted. Browsers do not report the CPU's total load, so other apps are
+  not included." and, with a pressure, a sentence saying the system state is the
+  whole machine's, other apps included. `cpuCores()`.
 - `LOAD_GRAPH_SPAN_MS` (60 s); `loadGraphPath(samples, now, spanMs, w, h)` -> SVG
   path data, placed by TIME (ticks are uneven: long work blocks the 1 s timer),
   broken at nulls, a lone point as a zero-length segment (a dot under the round cap).
@@ -6461,7 +6481,7 @@ against the plot's `#1a1a1a` (CVD dE 26.8).
 `ui/image-embedder.js` imports it and is also loaded by the crop and model workers.
 
 **Imported by.** `ui/image-embedder.js`, `ui/id-switch-modal.js`,
-`ui/loading-overlay.js`, `pose/triangulation-pool.js`, `pose/tracker-pool.js`.
+`ui/loading-overlay.js`, `pose/triangulation-pool.js`, `pose/tracker-pool.js`, `ui/image-crop-worker.js` (`createSyncTimer`).
 
 **Coverage.** `tests/test-load-graph.mjs`;
 `tests/e2e/fixtures/load-graph-axes.js` (labels and ticks, in all three places
@@ -9757,8 +9777,14 @@ and a graph of both loads to their right (`hardware(cpu, gpu)` /
   The fit is timed HERE: it runs synchronously between `progress('fit', …)`
   calls, so the time from the end of one callback's `yieldToPaint` to the start
   of the next is fitting (`fitMs`; the first camera's interval is the wait for
-  the last embeddings and is not counted). Video decoding is not in it, and its
-  tooltip says so.
+  the last embeddings and is not counted). `cpuBusyMs()` counts compute only
+  (no waits on the decoder, the GPU or the crop workers' read token), so on a
+  GPU machine the line follows the OS's CPU reading for Chrome; video decoding
+  is not in it, and its tooltip says so. Where the browser has the Compute
+  Pressure API, the line ends with the whole machine's state ("· fair";
+  `createPressureWatch`, started with the dialog and stopped when it closes;
+  `inject.createPressureWatch` stands in for it in tests); without it, nothing
+  is shown.
 - **The device line**: GPU name, backend and dtype, with a load refreshed every
   second (`createLoadMeter` over `busyMs()`); with no GPU, "No GPU: running on
   the CPU (N workers) — slow" in the warning colour and no load.
@@ -9885,7 +9911,7 @@ one — and refuses, with the reason, when the session's model is a folder packa
 loaded on the page; the result carries `imageModel: {key, name, threshold}` (null for
 the built-in model), named in "About these flags"; the tab shows the model with
 Change…; the progress dialog's sample crop resizes to the model's input side),
-`ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`),
+`ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`, `createPressureWatch`),
 `ui/browser-hints.js` (`renderBraveFingerprintingHint`: in Brave with its fingerprinting
 protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
@@ -10286,8 +10312,14 @@ and precision that ran ("· WebGPU fp16" — fp32 where the GPU lacks
 **Live, in the progress dialog** (`device()` / `busyMs()` -> `formatEmbedDevice`
 + `createLoadMeter`; `cpuBusyMs()` -> `formatEmbedCpu`). `cpuBusyMs()` is one
 `createBusyClock` (`ui/load-graph.js`) shared by the crop pool, the CPU model
-pool and inline crops (a lane per worker, busy while it HOLDS a job); it
-outlives the pools (the crop pool is re-made after `releaseFrames`).
+pool and inline crops, counting COMPUTE only: each crop job adds the `cpuMs` its
+worker timed (cutting + writing the inputs; not its wait in the worker's queue or
+for the read token, which made 8 workers holding jobs read as 8 busy cores while
+one cut), a CPU model worker is a lane while it has a run (WebAssembly, pure
+compute), inline crops a `'main'` span; the GPU model's runs and the decoder are
+never in it. It outlives the pools (the crop pool is re-made after `releaseFrames`).
+`formatEmbedCpu(cores, load, pressure?)` passes the dialog's Compute Pressure
+state through to `formatCpuLoad`.
 `gpuAdapterInfo(device, adapter)` names the GPU from the model's own
 `GPUDevice.adapterInfo` (onnxruntime's `env.webgpu.adapter` is undefined in this
 build) and reads `isFallbackAdapter`: a SOFTWARE adapter is WebGPU on the CPU,
@@ -10427,7 +10459,7 @@ because on the CPU frames arrive in bursts); `opts.device` ('auto' | 'webgpu' |
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
 Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?, maxCpuPct?)` -> `{broken, run(image, crops), terminate()}` | null
-(`clock`: a `createBusyClock`, ui/load-graph.js; `maxCpuPct`: the CPU cap, each worker's duty cycle);
+(`clock`: a `createBusyClock`, ui/load-graph.js, given each job's `cpuMs` via `add`; `maxCpuPct`: the CPU cap, each worker's duty cycle);
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
 `importTransformers()` (the runtime, imported once; re-imported under a new fragment
 after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
@@ -10445,8 +10477,8 @@ the compute caps `capPct(pct)`, `paceRestMs(runMs, pct)`, `restTimer(ms, fn)` ->
 `LOAD_WINDOW_MS`; the CPU line's window too),
 `formatEmbedDevice(device, load)` -> `{text, warn, title, metered, load}` (`metered`: the line has a series in
 the load graph — not for the CPU workers or a software adapter; `load`: what it shows, null when none),
-`formatEmbedCpu(cores, load)` -> `{text, title, load}` (`formatCpuLoad` with this check's "counts": cropping,
-the CPU model, fitting — not video decoding); `inputTensorToPixels(tensor, rgba)`
+`formatEmbedCpu(cores, load, pressure?)` -> `{text, title, load}` (`formatCpuLoad` with this check's "counts": cropping,
+the CPU model, fitting — not video decoding; `pressure` the Compute Pressure state, " · fair"); `inputTensorToPixels(tensor, rgba)`
 (a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
 `SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` also
 records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
@@ -10586,8 +10618,8 @@ importmap). Spawns `ui/image-crop-worker.js` and `ui/image-model-worker.js`.
 `formatEmbedTiming`'s keyframe line and the dialog's lines in
 `tests/test-id-switch-check.mjs` (the shared load helpers:
 `tests/test-load-graph.mjs`); `frameCropGeometry` on a released member in
-`tests/test-lazy-residency.mjs`; the crop pool and its busy clock in
-`tests/e2e/image-crop-worker.mjs`; `cpuBusyMs()` over the real CPU model workers
+`tests/test-lazy-residency.mjs`; the crop pool and its busy clock (= the jobs' reported
+compute, less than the time they held a worker) in `tests/e2e/image-crop-worker.mjs`; `cpuBusyMs()` over the real CPU model workers
 in `tests/e2e/image-check-cpu.mjs`; keyframe sampling on generated H.264 and AV1
 in `tests/e2e/image-keyframe-sampling.mjs`; a failed download in
 `tests/test-image-model-download.mjs` and `tests/e2e/image-check-offline.mjs`
@@ -10615,8 +10647,10 @@ bit-identical (asserted).
 **Messages.** IN `{id, image: VideoFrame|ImageBitmap (transferred), crops:
 [{g: cropGeometry, others: [hull]}], input}` — one camera view of one frame, `input`
 the active model's input side (default `BUILTIN_INPUT`); OUT `{id,
-tensors: [Float32Array(3 x input x input)]}` (transferred, one per crop, in order) or
-`{id, error}`. The worker owns the image and closes it.
+tensors: [Float32Array(3 x input x input)], cpuMs}` (transferred, one per crop, in order) or
+`{id, error, cpuMs}`. The worker owns the image and closes it. `cpuMs` is the job's
+compute (`createSyncTimer`: the cut under the token and the input writes), never its
+wait in the queue or for the token; the pool adds it to the CPU load's busy clock.
 
 **Read token.** Cutting is serialised across the pool; turning crops into model inputs
 is not. A job posts `{want: id}`, waits for the pool's `{grant: true}`, cuts all its
@@ -10635,7 +10669,7 @@ vs anti-aliased edge), and for a software-made VideoFrame every pixel can differ
 `writeInputTensor`, `CROP`, `BUILTIN_INPUT`; that module's static imports —
 `ui/app-state.js`, `pose/id-switch-check.js`, `pose/lazy-residency.js`,
 `ui/load-graph.js` — must stay worker-safe, which is why it imports
-`mediabunny` lazily).
+`mediabunny` lazily); `ui/load-graph.js` (`createSyncTimer`).
 
 **Spawned by.** `ui/image-embedder.js` (`createCropPool`).
 

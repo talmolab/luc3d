@@ -53,13 +53,13 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=5611a1bb19c2';
-import { points3dNodeCount } from '../pose/pose-data.js?v=5611a1bb19c2';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=5611a1bb19c2';
-import { writeOutlineFlagsMetadata } from './outline-flags-metadata.js?v=5611a1bb19c2';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=5611a1bb19c2';
-import { writePlaneMetadata } from './plane-metadata.js?v=5611a1bb19c2';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=5611a1bb19c2';
+import { _buildSioPoints } from './file-io.js?v=7690799bebe1';
+import { points3dNodeCount } from '../pose/pose-data.js?v=7690799bebe1';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=7690799bebe1';
+import { writeOutlineFlagsMetadata } from './outline-flags-metadata.js?v=7690799bebe1';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=7690799bebe1';
+import { writePlaneMetadata } from './plane-metadata.js?v=7690799bebe1';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=7690799bebe1';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;

@@ -9,7 +9,15 @@
  *
  * No browser API reports the CPU's or a GPU's utilisation, so every load here is
  * the operation's OWN busy time — the threads it can clock — as a share of the
- * hardware. Other apps are never in it, and each line's tooltip says so.
+ * hardware. Other apps are never in it, and each line's tooltip says so. A CPU
+ * load counts only time a thread spends COMPUTING: a span of the busy clock must
+ * not stay open across an await on the video decoder, the GPU, a queue or a lock,
+ * or the line counts a waiting thread as a busy core (the image check's crop
+ * workers once read 8 cores on a 32-core machine where the OS saw Chrome use
+ * 1.3-2.3). A worker that waits as well as computes times its own synchronous
+ * sections (`createSyncTimer`) and reports them (`clock.add`). The Compute
+ * Pressure API's state of the whole machine (`createPressureWatch`) can go on
+ * the line beside it, where the browser has it.
  *
  * No imports, and nothing touches the DOM at load time: ui/image-embedder.js
  * imports this, and that module is also loaded by the crop and model workers.
@@ -37,10 +45,15 @@ export function createLoadMeter(windowMs) {
  * Busy time summed over several threads, for a CPU load: `begin(lane)` when a
  * thread gets work and `end(lane)` when one piece of it is done — they nest per
  * lane, since a worker can hold several queued jobs — `close(lane)` for a thread
- * that is gone (all lanes with no argument), and `ms()` the total so far. Spans
- * still open count up to now, so a seconds-long run shows while it runs, not all
- * at once when it ends. A lane is any key (a worker's record, 'main'). `now` is
- * injectable for tests.
+ * that is gone (all lanes with no argument), `add(ms)` for compute a thread timed
+ * itself (a worker's `createSyncTimer`, added when it reports), and `ms()` the
+ * total so far. Spans still open count up to now, so a seconds-long run shows
+ * while it runs, not all at once when it ends. A lane is any key (a worker's
+ * record, 'main'). Open a lane only around work that keeps its thread computing:
+ * a worker that queues jobs behind pure CPU work (the CPU model's) may hold one
+ * open while it has any; a thread that awaits the decoder, the GPU or a lock in
+ * between must close its span across the wait, or time itself and `add`. `now`
+ * is injectable for tests.
  */
 export function createBusyClock(now) {
     const clock = now || function () { return performance.now(); }, open = new Map();
@@ -53,23 +66,78 @@ export function createBusyClock(now) {
             if (arguments.length) { const o = open.get(lane); if (o) stop(lane, o); }
             else open.forEach(function (o, l) { stop(l, o); });
         },
+        add: function (ms) { if (ms > 0 && isFinite(ms)) done += ms; },
         ms: function () { const t = clock(); let s = done; open.forEach(function (o) { s += t - o.since; }); return s; },
     };
 }
 
 /**
+ * A thread's own compute time, for a worker that also waits (on a lock, the
+ * decoder, the GPU): `time(fn)` runs the SYNCHRONOUS `fn`, adds how long it took
+ * and returns its result; `take()` returns the time added since the last take
+ * and starts again — what the worker reports with each job, for the owner's
+ * `clock.add`. Awaits between `time` calls are not counted: wrap only code with
+ * no await in it. `now` is injectable for tests.
+ */
+export function createSyncTimer(now) {
+    const clock = now || function () { return performance.now(); };
+    let ms = 0;
+    return {
+        time: function (fn) { const t = clock(); try { return fn(); } finally { ms += clock() - t; } },
+        take: function () { const m = ms; ms = 0; return m; },
+    };
+}
+
+/** The Compute Pressure API's CPU states, lowest first. */
+export const PRESSURE_STATES = ['nominal', 'fair', 'serious', 'critical'];
+
+/**
+ * The whole machine's CPU pressure as the browser reports it (the Compute
+ * Pressure API, `PressureObserver` source 'cpu': other apps included, unlike the
+ * load): `state()` is the latest of PRESSURE_STATES, or null — no API (Firefox,
+ * Safari), not allowed (permissions policy), or no reading yet; `stop()` ends it.
+ * `onChange(state)` (optional) hears each new state. Never throws: without the
+ * API it simply stays null. `Observer` is injectable for tests.
+ */
+export function createPressureWatch(onChange, Observer) {
+    const PO = Observer || (typeof globalThis !== 'undefined' ? globalThis.PressureObserver : undefined);
+    let current = null, obs = null, stopped = false;
+    const stop = function () { stopped = true; if (obs) { try { obs.disconnect(); } catch (e) { /* ignore */ } } obs = null; };
+    if (typeof PO !== 'function') return { state: function () { return null; }, stop: stop };
+    try {
+        obs = new PO(function (records) {
+            const r = records && records[records.length - 1];
+            if (stopped || !r || PRESSURE_STATES.indexOf(r.state) < 0 || r.state === current) return;
+            current = r.state;
+            if (onChange) onChange(current);
+        });
+        Promise.resolve(obs.observe('cpu', { sampleInterval: 1000 })).catch(function () { current = null; stop(); });
+    } catch (e) { stop(); }
+    return { state: function () { return current; }, stop: stop };
+}
+
+/**
  * A CPU line: `{text, title, load}`. "CPU: 12 cores · load 7%" — `cores` is
  * `navigator.hardwareConcurrency` (logical processors), `load` (null: not
- * measured yet) the share of ALL of them kept busy over the last LOAD_WINDOW_MS,
- * so one saturated thread on 12 cores reads 8%. `counts` completes the tooltip's
- * "kept busy over the last 5 s by …": what the operation can clock.
+ * measured yet) the share of ALL of them kept busy computing over the last
+ * LOAD_WINDOW_MS, so one saturated thread on 12 cores reads 8%. `counts`
+ * completes the tooltip's "kept busy over the last 5 s by …": what the
+ * operation can clock (its waits are not counted, and the tooltip says so). `pressure` (optional, one of PRESSURE_STATES —
+ * createPressureWatch) adds the whole machine's state: "· fair" (the bare word,
+ * so "CPU: 64 cores · load 100% · critical" still fits the image check's dialog —
+ * at 100+ threads that line wraps; the tooltip says what the word is).
  */
-export function formatCpuLoad(cores, load, counts) {
+export function formatCpuLoad(cores, load, counts, pressure) {
     const n = cores > 0 ? Math.round(cores) : 0, shown = load == null ? null : load;
+    const p = PRESSURE_STATES.indexOf(pressure) >= 0 ? pressure : null;
     return {
-        text: 'CPU' + (n ? ': ' + n + ' core' + (n === 1 ? '' : 's') : '') + (shown == null ? '' : ' · load ' + Math.round(shown) + '%'),
-        title: shown == null ? '' : 'The share of the CPU' + (n ? '\'s ' + n + ' cores' : '') + ' kept busy over the last ' +
-            Math.round(LOAD_WINDOW_MS / 1000) + ' s by ' + counts + '. Browsers do not report the CPU\'s total load, so other apps are not included.',
+        text: 'CPU' + (n ? ': ' + n + ' core' + (n === 1 ? '' : 's') : '') + (shown == null ? '' : ' · load ' + Math.round(shown) + '%') +
+            (p ? ' · ' + p : ''),
+        title: (shown == null ? '' : 'The share of the CPU' + (n ? '\'s ' + n + ' cores' : '') + ' kept busy over the last ' +
+            Math.round(LOAD_WINDOW_MS / 1000) + ' s by ' + counts + '. Busy means computing: time a thread spends waiting (for the ' +
+            'video decoder, the GPU or another thread) is not counted. Browsers do not report the CPU\'s total load, so other apps are not included.') +
+            (p ? (shown == null ? '' : ' ') + '"' + p + '": the whole machine\'s CPU pressure as the browser reports it (nominal, fair, ' +
+                'serious, critical), other apps included.' : ''),
         load: shown,
     };
 }

@@ -11,9 +11,12 @@
  *  2. Several views in flight at once come back to the right callers.
  *  3. A bad job rejects (with the worker's message) without breaking the pool.
  *  4. `LUCID_CROP_WORKERS = 0` turns the pool off (the caller crops inline).
- *  5. The pool's busy clock (`createBusyClock`, the progress dialog's CPU load):
- *     while jobs are in flight it grows at least as fast as the wall clock and at
- *     most workers x as fast, and it stops when they are done and on terminate.
+ *  5. The pool's busy clock (`createBusyClock`, the progress dialog's CPU load)
+ *     gets only each job's compute, as its worker timed it (`cpuMs`: cutting and
+ *     writing the inputs): exactly the sum of the jobs' `cpuMs`, each no longer
+ *     than the job was out, and in all less than the time the jobs held a worker
+ *     (the waits in a worker's queue and for the read token are left out) — at
+ *     most workers x the wall clock; it does not grow while idle or terminated.
  *  6. The read token: no two workers ever cut crops from a frame at once (every
  *     grant is handed back before the next), one grant per job; a job whose crops
  *     reach past the frame's border is bit-identical to inline crops too.
@@ -66,9 +69,23 @@ try {
         // watch the read token: grants the pool posts, releases the workers post
         const tok = { holders: 0, max: 0, grants: 0, releases: 0 };
         const post = Worker.prototype.postMessage;
-        Worker.prototype.postMessage = function (m, t) { if (m && m.grant) { tok.grants++; tok.max = Math.max(tok.max, ++tok.holders); } return post.call(this, m, t); };
+        // and each job: when it went out, when it came back, and the compute its worker reported (cpuMs)
+        const jobT = new Map();
+        Worker.prototype.postMessage = function (m, t) {
+            if (m && m.grant) { tok.grants++; tok.max = Math.max(tok.max, ++tok.holders); }
+            if (m && m.id != null && m.crops) jobT.set(m.id, { out: performance.now() });
+            return post.call(this, m, t);
+        };
         const NativeWorker = window.Worker;
-        window.Worker = function (url, o) { const w = new NativeWorker(url, o); w.addEventListener('message', (e) => { if (e.data && e.data.release) { tok.releases++; tok.holders--; } }); return w; };
+        window.Worker = function (url, o) {
+            const w = new NativeWorker(url, o);
+            w.addEventListener('message', (e) => {
+                if (e.data && e.data.release) { tok.releases++; tok.holders--; }
+                const j = e.data && e.data.id != null && !e.data.want && !e.data.release ? jobT.get(e.data.id) : null;
+                if (j) { j.back = performance.now(); j.cpuMs = e.data.cpuMs; }
+            });
+            return w;
+        };
         window.Worker.prototype = NativeWorker.prototype;
         window.LUCID_CROP_WORKERS = 3;
         const clock = (await import('/ui/load-graph.js')).createBusyClock(), pool = E.createCropPool(clock);
@@ -80,9 +97,12 @@ try {
         const fromBitmap = await pool.run(await createImageBitmap(bm), crops);
         // several in flight: each a different subset, so a mix-up shows
         const subsets = [[0], [1, 2], [2], [0, 1, 2], [1]];
-        const busy0 = clock.ms(), t0 = performance.now();
+        const busy0 = clock.ms(), t0 = performance.now(), ids0 = new Set(jobT.keys());
         const many = await Promise.all(subsets.map(ix => pool.run(vf0.clone(), ix.map(i => crops[i]))));
         const manyWall = performance.now() - t0, manyBusy = clock.ms() - busy0;
+        const manyJobs = [...jobT].filter(([id]) => !ids0.has(id)).map(([, j]) => j);
+        const manyCpu = manyJobs.reduce((a, j) => a + j.cpuMs, 0), manyHeld = manyJobs.reduce((a, j) => a + (j.back - j.out), 0);
+        const eachOk = manyJobs.length === subsets.length && manyJobs.every(j => j.cpuMs > 0 && j.cpuMs <= j.back - j.out + 0.5);
         const manyOk = many.every((ts, k) => same(ts, subsets[k].map(i => inline[i])));
         // the border: the corner animal's crop and the others in one job
         const edgeCrops = [{ g: edgeGeo, others: geos.map(x => x.hull) }].concat(crops);
@@ -106,7 +126,7 @@ try {
         vf0.close();
         Worker.prototype.postMessage = post;
         return { tok, jobsSoFar, edgeOk, edgeOutside, othersInside, nonBlank, frameOk: same(fromFrame, inline), bitmapOk: same(fromBitmap, inlineBm), manyOk,
-                 badMsg, afterBadOk: same(afterBad, inline), broken, off, manyWall, manyBusy, idleGrew, closedGrew };
+                 badMsg, afterBadOk: same(afterBad, inline), broken, off, manyWall, manyBusy, manyCpu, manyHeld, eachOk, idleGrew, closedGrew };
     });
     check(r.nonBlank, 'fixture crops have real content (masking/resampling are exercised)');
     check(r.frameOk, 'worker crops from a transferred VideoFrame are bit-identical to inline crops');
@@ -114,8 +134,10 @@ try {
     check(r.manyOk, 'five views in flight at once each come back to their caller');
     check(r.badMsg && r.afterBadOk && !r.broken, `a bad job rejects ("${r.badMsg}") and the pool keeps working`);
     check(r.off === null, 'LUCID_CROP_WORKERS = 0 → no pool (inline cropping)');
-    check(r.manyBusy >= 0.5 * r.manyWall && r.manyBusy <= 3 * r.manyWall + 1,
-          `busy clock: ${r.manyBusy.toFixed(1)} thread-ms over ${r.manyWall.toFixed(1)} ms of five jobs on 3 workers (at least ~1x, at most 3x)`);
+    check(r.eachOk && Math.abs(r.manyBusy - r.manyCpu) < 1e-6,
+          `busy clock = the jobs' reported compute: ${r.manyBusy.toFixed(1)} vs ${r.manyCpu.toFixed(1)} ms, each job's no longer than it was out`);
+    check(r.manyBusy > 0 && r.manyBusy < r.manyHeld && r.manyBusy <= 3 * r.manyWall + 1,
+          `…which leaves out the waits: ${r.manyBusy.toFixed(1)} ms of compute, where the jobs held a worker ${r.manyHeld.toFixed(1)} ms, over ${r.manyWall.toFixed(1)} ms on 3 workers`);
     check(r.idleGrew === 0 && r.closedGrew === 0, `…and it stops when the workers are idle (+${r.idleGrew}) and once terminated mid-job (+${r.closedGrew})`);
     check(r.edgeOutside && r.othersInside, 'precondition: one crop reaches past the frame\'s border, the other three lie inside it');
     check(r.edgeOk, 'a job with a crop reaching past the frame\'s border is bit-identical to inline crops');

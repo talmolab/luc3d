@@ -26,9 +26,9 @@
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=5611a1bb19c2';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=5611a1bb19c2';
-import { keyframeIndices } from './image-embedder.js?v=5611a1bb19c2';
+import { state } from './app-state.js?v=7690799bebe1';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=7690799bebe1';
+import { keyframeIndices } from './image-embedder.js?v=7690799bebe1';
 
 /**
  * Frame `frame` of `view` for drawing, and whether the caller must close it:
