@@ -72,6 +72,7 @@
   "mesh-object-export.mjs": 2.6,
   "mesh-object-roundtrip.mjs": 2.1,
   "move-video-lazy-members.mjs": 4.1,
+  "multi-camera-review-list.mjs": 5.9,
   "multi-session-calibration-notice.mjs": 2.5,
   "multi-session-save-store-edits.mjs": 6.5,
   "multi-session-save-streaming.mjs": 4.2,
