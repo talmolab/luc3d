@@ -5,7 +5,7 @@
  * Used by index.html for the additive merge path in handleAddSlp().
  */
 
-import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } from '../pose/pose-data.js?v=c023de85ffab';
+import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } from '../pose/pose-data.js?v=e0c5253a4e00';
 
 /**
  * Validate that incoming skeleton is compatible with existing session skeleton.
@@ -77,59 +77,100 @@ export function slpVideoByCamera(videos, videoIdxToCameraName) {
 }
 
 /**
- * The incoming cameras the session already has: the same camera name AND the
- * same video (`sameVideoPath`) as when that camera came from an SLP. Load SLP
- * on the same video again (e.g. to attach the video after continuing without
- * one) must not add its camera a second time: the renamed copy (`<name>_2`)
- * turned a one-camera session into a two-camera one, so Track All and the ID
- * Switches tab took the multi-camera path. Two different videos with the same
- * stem (campy names every video 0.mp4) differ in their full paths and are still
- * added; a camera the session did not get from an SLP has no path and is never
- * matched.
- *
- * After a reopen the session's path is the one the saved project wrote: the
- * eager loader reads it from the file's videos (`slpVideoByCamera`), and a lazy
- * project's loader holds it (`lazyLoader.videos`). A save writes the video as it
- * was picked, often just its name, so a shorter path matches the tail of a
- * longer one (`sameVideoPath`).
+ * cameraName -> the frame count of the video the SLP gave for that camera
+ * (`shape[0]`), for the cameras whose count it knows. Kept beside
+ * `slpVideoByCamera` (`Session.slpVideoFramesByCamera`).
+ * @param {Array<{shape?: number[]}>} videos
+ * @param {Object<number, string>} videoIdxToCameraName
+ * @returns {Object<string, number>}
+ */
+export function slpVideoFramesByCamera(videos, videoIdxToCameraName) {
+    var out = {};
+    for (var k in videoIdxToCameraName) {
+        var v = videos && videos[k], n = v && v.shape && Number(v.shape[0]);
+        if (n > 0) out[videoIdxToCameraName[k]] = n;
+    }
+    return out;
+}
+
+/** The video path and frame count the session holds for camera `cam`, from an SLP or a lazy project's loader. */
+function sessionVideoOf(session, cam) {
+    var path = session.slpVideoByCamera && session.slpVideoByCamera[cam];
+    var frames = session.slpVideoFramesByCamera && session.slpVideoFramesByCamera[cam];
+    var lazyVideos = session.lazyLoader && session.lazyLoader.videos;
+    if (lazyVideos && typeof lazyVideos.get === 'function') {
+        var rec = lazyVideos.get(cam);
+        if (!path) path = rec && rec.filename;
+        if (!frames && rec && rec.shape) frames = Number(rec.shape[0]);
+    }
+    return { path: path, frames: frames > 0 ? frames : null };
+}
+
+/**
+ * The incoming cameras the session certainly already has: the same camera name
+ * AND the same video (`videoPathMatch` 'path'). Load SLP on the same video again
+ * (e.g. to attach the video after continuing without one) must not add its
+ * camera a second time: the renamed copy (`<name>_2`) turned a one-camera
+ * session into a two-camera one, so Track All and the ID Switches tab took the
+ * multi-camera path. A camera the session did not get from an SLP has no path
+ * and is never matched. Cameras that match by file name alone are
+ * `camerasPerhapsInSession`'s, for the user to decide.
  * @param {Session} session
  * @param {Object<string, string>} incoming - `slpVideoByCamera` of the new file
  * @returns {string[]} camera names
  */
 export function camerasAlreadyInSession(session, incoming) {
-    var known = (session && session.slpVideoByCamera) || {};
-    var lazyVideos = session && session.lazyLoader && session.lazyLoader.videos;
     var names = ((session && session.cameras) || []).map(function (c) { return c.name; });
     return Object.keys(incoming).filter(function (cam) {
-        if (names.indexOf(cam) < 0) return false;
-        var have = known[cam];
-        if (!have && lazyVideos && typeof lazyVideos.get === 'function') {
-            var rec = lazyVideos.get(cam);
-            have = rec && rec.filename;
-        }
-        return sameVideoPath(have, incoming[cam]);
+        return names.indexOf(cam) >= 0 && videoPathMatch(sessionVideoOf(session, cam).path, incoming[cam]) === 'path';
     });
 }
 
 /**
- * Do two video paths name the same file? Equal paths do; so does a shorter path
- * that is the tail of a longer one, folder by folder (`top.mp4` and
- * `/data/rec_a/top.mp4`, `cam_a/0.mp4` and `D:\rec\cam_a\0.mp4`), since a saved
- * project keeps a video as it was picked. Two full paths must match to their
- * shorter one's first folder, so `/rec/cam_a/0.mp4` and `/rec/cam_b/0.mp4`
- * differ. Separators `/` and `\` are the same; empty paths never match.
+ * The incoming cameras that MAY be ones the session has: the same camera name,
+ * and one video path is a bare file name that ends the other
+ * (`videoPathMatch` 'name'). A saved project keeps a video as it was picked,
+ * often just its name, so after a reopen this is how the same video looks; but
+ * campy names every video `0.mp4`, and Load SLP names a camera after its video
+ * when the file names none, so another camera's video can look the same too.
+ * When both frame counts are known and differ the videos differ, and the camera
+ * is left out (it is added). Load SLP asks about the rest.
+ * @param {Session} session
+ * @param {Object<string, string>} incoming - `slpVideoByCamera` of the new file
+ * @param {Object<string, number>} [incomingFrames] - `slpVideoFramesByCamera` of the new file
+ * @returns {string[]} camera names
+ */
+export function camerasPerhapsInSession(session, incoming, incomingFrames) {
+    var names = ((session && session.cameras) || []).map(function (c) { return c.name; });
+    return Object.keys(incoming).filter(function (cam) {
+        if (names.indexOf(cam) < 0) return false;
+        var have = sessionVideoOf(session, cam);
+        if (videoPathMatch(have.path, incoming[cam]) !== 'name') return false;
+        var n = incomingFrames && incomingFrames[cam];
+        return !(have.frames && n > 0 && have.frames !== n);
+    });
+}
+
+/**
+ * How two video paths match: 'path' when they are equal, or when the shorter
+ * one, with at least one folder, is the tail of the longer one folder by folder
+ * (`rec_a/top.mp4` and `/data/rec_a/top.mp4`; `/` and `\` alike); 'name' when
+ * only a bare file name ends the other path (`top.mp4` and
+ * `/data/rec_a/top.mp4`: perhaps the same file, perhaps another folder's);
+ * null otherwise, or when either is empty.
  * @param {string} a
  * @param {string} b
- * @returns {boolean}
+ * @returns {'path'|'name'|null}
  */
-export function sameVideoPath(a, b) {
-    if (!a || !b) return false;
+export function videoPathMatch(a, b) {
+    if (!a || !b) return null;
+    if (a === b) return 'path';
     var parts = function (p) { return String(p).split(/[\\/]+/).filter(function (x) { return x && x !== '.'; }); };
     var pa = parts(a), pb = parts(b);
     var n = Math.min(pa.length, pb.length);
-    if (!n) return false;
-    for (var i = 1; i <= n; i++) if (pa[pa.length - i] !== pb[pb.length - i]) return false;
-    return true;
+    if (!n) return null;
+    for (var i = 1; i <= n; i++) if (pa[pa.length - i] !== pb[pb.length - i]) return null;
+    return n >= 2 ? 'path' : 'name';
 }
 
 /**

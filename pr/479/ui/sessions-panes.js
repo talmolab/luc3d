@@ -28,23 +28,23 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=c023de85ffab';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=c023de85ffab';
-import { setPageProject } from './page-title.js?v=c023de85ffab';
-import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=c023de85ffab';
+} from './app-state.js?v=e0c5253a4e00';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=e0c5253a4e00';
+import { setPageProject } from './page-title.js?v=e0c5253a4e00';
+import { hydrateFrameMembers2d, releaseFrameMembers2d, dropGroupDerivedReprojections } from '../pose/lazy-residency.js?v=e0c5253a4e00';
 import {
     triangulateAndReproject, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod, triangulationSettingsKey,
-} from '../pose/triangulation.js?v=c023de85ffab';
+} from '../pose/triangulation.js?v=e0c5253a4e00';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=c023de85ffab';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=c023de85ffab';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=c023de85ffab';
+} from '../loading/session-loader.js?v=e0c5253a4e00';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=e0c5253a4e00';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=e0c5253a4e00';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -52,24 +52,24 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=c023de85ffab';
+} from './video-filters.js?v=e0c5253a4e00';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=c023de85ffab';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=e0c5253a4e00';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=c023de85ffab';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=c023de85ffab';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=c023de85ffab';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=c023de85ffab';
-import { refreshOutlinePanel } from './outline-flags-panel.js?v=c023de85ffab';
+import { setSoloView } from './ui-wiring.js?v=e0c5253a4e00';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=e0c5253a4e00';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=e0c5253a4e00';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=e0c5253a4e00';
+import { refreshOutlinePanel } from './outline-flags-panel.js?v=e0c5253a4e00';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=c023de85ffab';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=c023de85ffab';
+import { setup3DViewport } from '../pose/initialization.js?v=e0c5253a4e00';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=e0c5253a4e00';
 
 // ============================================
 // Dockview Pane Manager
