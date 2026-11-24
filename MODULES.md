@@ -4793,7 +4793,7 @@ manifest keeps the key). `CROP_RULE` (2): how this app cuts crops, numbered — 
 left only tail… nodes out, 2 also t0, t1… (`isTailNode`); bump it with
 `scripts/train_image_model.py`'s whenever `cutCrop` changes what lands in a crop.
 `cropRuleDiffers(rule, nodeNames)`: whether a package of that rule sees other crops
-on this skeleton (only rule 1 on one naming t0, t1…).
+on this skeleton (rule 1 on one naming t0, t1…; a newer rule than the app's on any).
 `modelChoiceOf(pkg)` / `ingestModelChoice(raw)`: what a session saves
 (`metadata.lucid.imageModel`: key, name, input, threshold, url or folder) and its
 tolerant read (malformed -> null = built-in). `packageBaseUrl(input)`: a Hugging
@@ -11439,7 +11439,8 @@ FOLDER choice not loaded throws an Error whose message is the check's skip reaso
 `ui/image-model-package.js`, `pose/image-model-manifest.js` (`modelChoiceOf`,
 `cropRuleDiffers`, `CROP_RULE`), `import-export/save-load.js` (`markDirty`).
 
-The model line adds "(trained on older crops: retrain it)" when the loaded
+The model line adds "(trained on older crops: retrain it)", or "(trained on other
+crops: update LUCID)" for a newer rule, when the loaded
 package's `cropRule` cuts this session's skeleton differently (`cropRuleDiffers`).
 
 **Imported by.** `ui/id-switch-modal.js`.

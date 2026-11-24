@@ -481,7 +481,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoBrightnessSwitchCheck', label: 'Check ID switches after single-camera tracking (coat brightness)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All on a single-camera session, check for switches by how bright each animal\'s coat is (Tracks ▸ Check ID Switches (Coat Brightness)). Reads the video, but needs no model or GPU. It helps when the animals differ in brightness at their body keypoints: different coat colours, and possibly a dark head implant on one of two light mice (not yet measured). Where they look alike it rarely flags anything. Not run automatically on multi-camera sessions, where it is not calibrated.',
+        desc: 'After Track All on a single-camera session, check for switches by how bright each animal\'s coat is (Tracks ▸ Check ID Switches (Coat Brightness)). Reads the video, but needs no model or GPU. It helps when the animals differ in brightness at their body keypoints: different coat colours, and possibly a dark head implant on one of two light mice (not yet measured). Where they look alike it rarely flags anything (one false row in 193 videos of same-coated mice). Not run automatically on multi-camera sessions, where it is not calibrated.',
     },
     {
         id: 'brightnessCheckThreshold', label: 'Coat brightness check: flag threshold', default: -800,
