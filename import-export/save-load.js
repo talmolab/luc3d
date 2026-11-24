@@ -49,6 +49,7 @@ import {
 } from '../ui/loading-overlay.js';
 import { clearReadout } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
+import { writeOutlineFlagsMetadata, readOutlineFlagsMetadata } from './outline-flags-metadata.js';
 import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
@@ -1447,6 +1448,7 @@ export function saveProject() {
                 // JSON puts them at the session-dict level rather than under a
                 // `metadata.lucid`.
                 writeVisibilityMetadata(sessData, sess);
+                writeOutlineFlagsMetadata(sessData, sess);
                 writeSmoothingMetadata(sessData, sess);
                 // Define Planes state, at the same session-dict level and under
                 // the same keys the `.slp` writers use.
@@ -1495,6 +1497,7 @@ export function saveProject() {
     // Session-scoped Visibility-panel state (see the v3 branch above). `_restoreProjectV2`
     // reads these at this same level for both the v2 and v3 shapes.
     writeVisibilityMetadata(projectData, state.session);
+    writeOutlineFlagsMetadata(projectData, state.session);
     writeSmoothingMetadata(projectData, state.session);
     writePlaneMetadata(projectData, state.session);
 
@@ -2087,6 +2090,7 @@ function _restoreProjectV2(data) {
     // Session-scoped Visibility-panel state. Shared by the v2 (whole document)
     // and v3 (per-session dict) shapes — both put these keys at this level.
     readVisibilityMetadata(session, data);
+    readOutlineFlagsMetadata(session, data);
     readSmoothingMetadata(session, data);
     // Define Planes state. Project-scoped keys are ingested by whichever
     // session is read first; placements land on this one.
