@@ -1,7 +1,8 @@
 /**
  * Shared by the Training panel e2e tests: a two-view session (cam1, cam2; 12-frame mp4 each)
  * loaded with "Load session folder (per camera)", with a USER instance on frames 0-5 of each view
- * and a prediction on frame 7, then the Training panel's label analysis refreshed.
+ * and a prediction on frame 7, then the Training panel's label analysis refreshed. Under the
+ * desktop e2e's mock Tauri (`window.__mock`) the videos are also put on its disk under /rec.
  *
  * @param {import('playwright').Page} page
  * @returns {Promise<{views: string[]}>}
@@ -48,6 +49,13 @@ export function loadTrainingSession(page) {
                 videoWidth: W, videoHeight: H, frameCount: N }, cam + '.slp', null);
         }
         const v1 = await mp4(10), v2 = await mp4(200);
+        // Under the desktop e2e's mock Tauri: the same bytes on its "disk", in a folder the user picked
+        // in the page's own dialog (what pathOfFile finds them by).
+        if (window.__mock) {
+            window.__mock.put('/rec/cam1/cam1.mp4', new Uint8Array(await v1.arrayBuffer()));
+            window.__mock.put('/rec/cam2/cam2.mp4', new Uint8Array(await v2.arrayBuffer()));
+            window.__mock.inputPick('/rec', true);
+        }
         const files = [mkFile([toml], ROOT + '/calibration.toml', 'text/plain'),
             mkFile([v1], ROOT + '/cam1/cam1.mp4', 'video/mp4'), mkFile([v2], ROOT + '/cam2/cam2.mp4', 'video/mp4'),
             mkFile([await slp('cam1')], ROOT + '/cam1/cam1.slp'), mkFile([await slp('cam2')], ROOT + '/cam2/cam2.slp')];

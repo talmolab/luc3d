@@ -203,7 +203,7 @@ pub async fn detect_gpu() -> Result<String, String> {
 }
 
 #[cfg(feature = "sleap-nn")]
-mod imp {
+pub(crate) mod imp {
     use super::{
         ProcessEvent, RunningProcess, SleapNnInfo, UvInfo, DEFAULT_JOB, MAX_CONCURRENT_JOBS,
     };

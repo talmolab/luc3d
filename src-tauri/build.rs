@@ -50,6 +50,13 @@ const COMMANDS: &[&str] = &[
     "iroh_blob_open",
     "iroh_blob_read_range",
     "iroh_blob_close",
+    // Local training (training.rs): the runs folder and one sleap-nn run per model.
+    "pick_runs_directory",
+    "training_prepare",
+    "training_run",
+    "training_stop",
+    "training_cancel",
+    "training_release",
 ];
 
 fn main() {

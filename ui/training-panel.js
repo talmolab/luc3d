@@ -1,7 +1,7 @@
 /**
  * ui/training-panel.js — the Training panel: train sleap-nn models on the project's labelled
- * frames, across every camera view, on a paired SLEAP Connect worker (local sleap-nn on the
- * desktop app comes in a later update).
+ * frames, across every camera view, on this machine (the desktop app with sleap-nn in the build)
+ * or on a paired SLEAP Connect worker.
  *
  * A replica of sleap-app's Training panel (`src/components/panels/TrainingPanel.tsx` and the
  * training slice of `src/stores/trainingStore.ts` @ c97c6a5): the same sections in the same order
@@ -26,9 +26,15 @@
  *     `ui/connect/remote-training.js`); every video must already be on the worker (Locate on
  *     worker… as for remote inference); validation is sleap-nn's own random split there (the
  *     protocol takes a validation file only as a worker path), which the Data section says;
+ *   - local runs go through Rust (`src-tauri/src/training.rs`): the page sends each model's config
+ *     as JSON and the training / validation files as bytes; Rust checks the config against
+ *     sleap-nn's keys, owns every path and port, runs `sleap-nn train` and streams its progress. The
+ *     runs folder is picked once per app run and is read-only to the page (checkpoints are
+ *     pickles); each view's video is found on disk from the file the user opened. Locally the
+ *     validation split is LUCID's by moment (a separate validation file);
  *   - progress rows stay in the panel while the run goes (no RemoteRunCard / Watch Live); a row
- *     opens the Training Monitor (`ui/training-monitor.js`). Dry run, Full Configuration,
- *     post-training inference and local training come in later updates.
+ *     opens the Training Monitor (`ui/training-monitor.js`, with the validation images locally).
+ *     Full Configuration and post-training inference come in later updates.
  *
  * Loaded on every build: `pose/initialization.js` imports it after the Inference panel. It talks
  * to native code only through `window.lucidDesktop`, inside `setupTrainingPanel`.
@@ -57,6 +63,7 @@ import { configureConnect } from '../pose/connect/store.js';
 import { formatRunTimestamp, formatDuration } from '../pose/connect/timestamp.js';
 import { plateauSettings } from '../pose/training-metrics.js';
 import { openTrainingMonitor, trainingMonitor } from './training-monitor.js';
+import { rowWithLocalProgress } from '../pose/training-local-progress.js';
 
 export const TRAINING_TAB_ID = 'tabTraining';
 
@@ -64,11 +71,20 @@ const LOG_MAX = 5000;
 const LOG_TAIL = 12;
 const COUNT_TTL_MS = 15000;
 const ERROR_LINE_RE = /error|exception|traceback|failed/i;
+/** macOS prints duplicate-ObjC-class warnings for cv2/av on every sleap-nn start; never the cause. */
+function isNoise(line) { return /^objc\[\d+\]: Class /.test(line); }
 
 let pane = null;
 let YAML = null;                 // the importmap's `yaml` module, once loaded
 let remote = null;               // ui/connect/remote-training.js
-const backend = { remote: true };  // only remote in this build of the panel (local training: a later update)
+let sn = null;                   // window.lucidDesktop.sleapNn (with .training), desktop builds with sleap-nn
+let fsApi = null;                // window.lucidDesktop.fs
+// Backend: true = a paired SLEAP Connect worker; null = this build's default (local when it has sleap-nn).
+const backend = { remote: null };
+const env = { checked: false, sleapNn: null, gpu: null, error: null };
+// Local: the runs folder (a read-only model grant this app run), each (session, view)'s video on disk.
+const local = { runsRoot: null, existingRuns: 0, videos: new Map(), videoKey: '', resolving: false, token: null };
+const dry = { status: 'idle', rows: [], log: [], key: '', error: null };
 
 const cfg = {
     modelType: DEFAULT_MODEL_TYPE,
@@ -383,11 +399,94 @@ function whyNotStart() {
         if (w) return w;
         if (unplacedViews().length) return 'Locate each view’s video on the worker (Data).';
         if (!remote.outputDir()) return 'Choose an output folder on the worker (Data).';
+    } else {
+        if (!env.checked) return 'Checking for sleap-nn…';
+        if (!sleapNnAvailable()) return 'sleap-nn was not found on this machine (Remote: pick a worker instead).';
+        if (!local.runsRoot) return 'Choose a runs folder (Data).';
+        if (local.resolving) return 'Finding the videos on disk…';
+        if (missingLocalVideos().length) return 'Open each view’s video from its file so the app knows where it is on disk (' + missingLocalVideos()[0].cameraName + ').';
+        if (dry.status === 'running') return '';
     }
     return '';
 }
 
-function isRemoteRun() { return backend.remote === true; }
+function sleapNnAvailable() { return !!(sn && env.sleapNn && env.sleapNn.available); }
+/** Whether a run goes to a worker: the only choice without local sleap-nn, else the Backend picker's. */
+function isRemoteRun() { return !sn ? true : backend.remote === true; }
+
+// ---------------------------------------------------------------------------
+// Local: videos on disk, runs folder
+// ---------------------------------------------------------------------------
+
+function isAbsolutePath(p) { return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(String(p || '')); }
+
+/** Find each included (session, view)'s video on disk: the file the user opened, else the path the
+ *  .slp recorded (when the app may read it). Re-run when the views or their files change. */
+async function resolveLocalVideos() {
+    if (!fsApi || local.resolving) return;
+    const sels = includedSelections();
+    const key = sels.map(function (s) {
+        const f = s.videoFileInfo && s.videoFileInfo.file;
+        return viewKey(s.sessionIndex, s.cameraName) + '|' + (f ? f.name + ':' + f.size + ':' + (f.webkitRelativePath || '') : '') + '|' + (s.videoFileInfo.videoPath || '');
+    }).join('\u0001');
+    if (key === local.videoKey) return;
+    local.resolving = true;
+    try {
+        const found = new Map();
+        for (const s of sels) {
+            const vf = s.videoFileInfo || {};
+            const f = vf.file;
+            let hit = null;
+            if (f && typeof fsApi.pathOfFile === 'function') {
+                try { hit = await fsApi.pathOfFile(f); } catch (e) { hit = null; }
+            }
+            if (!hit && isAbsolutePath(vf.videoPath)) {
+                try {
+                    const st = await fsApi.stat(vf.videoPath);
+                    if (st && st.isFile && (!f || Number(st.size) === f.size)) hit = { path: vf.videoPath };
+                } catch (e) { /* not readable by the app */ }
+            }
+            if (hit && hit.path) found.set(viewKey(s.sessionIndex, s.cameraName), hit.path);
+        }
+        local.videos = found;
+        local.videoKey = key;
+    } finally {
+        local.resolving = false;
+        refresh();
+    }
+}
+
+function localVideo(sIdx, view) { return local.videos.get(viewKey(sIdx, view)) || null; }
+function missingLocalVideos() { return includedSelections().filter(function (s) { return !localVideo(s.sessionIndex, s.cameraName); }); }
+
+async function chooseRunsFolder() {
+    if (!sn || !sn.training) return;
+    try {
+        const r = await sn.training.pickRunsDirectory('Choose the folder trained models go to');
+        if (r && r.path) {
+            local.runsRoot = r.path;
+            local.existingRuns = r.existingRuns || 0;
+            try { localStorage.setItem('trainingRunsFolder', r.path); } catch (e) { /* best effort */ }
+            run.note = null;
+        }
+    } catch (e) {
+        run.note = String((e && e.message) || e).replace(/^TRAINING_NOT_ALLOWED: /, '');
+    }
+    refresh();
+}
+
+function lastRunsFolder() {
+    try { return localStorage.getItem('trainingRunsFolder') || ''; } catch (e) { return ''; }
+}
+
+async function detectEnvironment() {
+    if (!sn) { env.checked = true; refresh(); return; }
+    env.error = null;
+    try { env.sleapNn = await sn.detectSleapNn(); } catch (e) { env.sleapNn = null; env.error = e.message; }
+    try { env.gpu = await sn.detectGpu(); } catch (e) { env.gpu = null; }
+    env.checked = true;
+    refresh();
+}
 
 // ---------------------------------------------------------------------------
 // Run (remote)
@@ -399,7 +498,7 @@ function appendLog(line, progress) {
     if (progress && run.log.length && run._lastProgress) run.log[run.log.length - 1] = s;
     else run.log.push(s);
     run._lastProgress = !!progress;
-    if (!progress && ERROR_LINE_RE.test(s)) {
+    if (!progress && ERROR_LINE_RE.test(s) && !isNoise(s)) {
         run.errorTail.push(s);
         if (run.errorTail.length > 20) run.errorTail.shift();
     }
@@ -418,8 +517,235 @@ function groupSelections(group) {
         .map(function (s) { return Object.assign({}, s, { videoFilename: remote.workerVideo(s.sessionIndex, s.cameraName) }); });
 }
 
-async function startTraining() {
+function startTraining() {
     if (whyNotStart()) return;
+    if (isRemoteRun()) startRemoteTraining(); else startLocalTraining(false);
+}
+
+/** The progress-row plan of one group's models. */
+function groupModels(g, slots, runNames) {
+    return slots.map(function (s, i) {
+        const h = cfg.slots[s].head;
+        const pl = plateauSettings(cfg.slots[s].doc);
+        return { head: h, label: groupModelLabel(headLabel(h), g), maxEpochs: cfg.hp[s].maxEpochs, runName: runNames[i],
+            plateauPatience: pl.patience, plateauMinDelta: pl.minDelta };
+    });
+}
+
+/** The finished config (an object) of a slot for one run name. */
+function configObject(slot, runName) {
+    const hp = Object.assign({}, cfg.hp[slot]);
+    if (cfg.modelType === 'top_down' || cfg.modelType === 'top_down_id') hp.anchorPart = cfg.anchorPart || null;
+    return finalizeConfig(applyPanelSettings(cfg.slots[slot].doc, hp), { runName: runName });
+}
+
+/**
+ * Plan a local run: per group, the training and validation files (split by moment, videos named by
+ * placeholders), each video's disk path in table order, and each model's config.
+ */
+async function planLocal(stamp, dryRun) {
+    const slots = getConfigSlots(cfg.modelType);
+    const plans = [];
+    for (const g of groups()) {
+        const sels = includedSelections().filter(function (s) { return g.views.indexOf(s.cameraName) !== -1; })
+            // The file names each video by its disk path (what a reader of the file expects); Rust still
+            // passes the same grant-checked paths as --video-paths, which is what sleap-nn uses.
+            .map(function (s) { return Object.assign({}, s, { videoFilename: localVideo(s.sessionIndex, s.cameraName) }); });
+        const hp0 = cfg.hp[slots[0]];
+        const built = buildTrainingLabels(sels, { split: { fraction: hp0.validationFraction, seed: hp0.seed == null ? 0 : hp0.seed } });
+        const train = await trainingSlpBytes(built.train);
+        const val = built.split.sameAsTrain ? null : await trainingSlpBytes(built.val);
+        const runNames = slots.map(function (s) {
+            return trainingRunName({ timestamp: stamp, head: cfg.slots[s].head, group: g, mode: cfg.groupMode, nFrames: built.stats.frames }) + (dryRun ? '.dryrun' : '');
+        });
+        plans.push({
+            group: g, stats: built.stats, split: built.split,
+            args: {
+                runsRoot: local.runsRoot,
+                models: slots.map(function (s, i) { return { config: configObject(s, runNames[i]), runName: runNames[i] }; }),
+                trainSlp: bytesToBase64(train),
+                valSlp: val ? bytesToBase64(val) : null,
+                videoPaths: sels.map(function (s) { return localVideo(s.sessionIndex, s.cameraName); }),
+            },
+            models: groupModels(g, slots, runNames),
+        });
+    }
+    return plans;
+}
+
+/** Strip Rust's refusal prefixes for the panel. */
+function plainError(e) {
+    return String((e && e.message) || e).replace(/^(TRAINING_NOT_ALLOWED|CONFIG_NOT_ALLOWED|NOT_GRANTED): /, '');
+}
+
+/** One model of a prepared local run; resolves to the `finished` event's data. */
+function runLocalModel(token, index, k, dryRun, onLine) {
+    return new Promise(function (resolve) {
+        let fin = null;
+        sn.training.run(token, index, function (msg) {
+            const d = msg && msg.data;
+            if (!msg || !d) return;
+            if (msg.event === 'stdout' || msg.event === 'stderr') {
+                const line = String(d.line || '');
+                onLine(line.replace(/\r$/, ''), /\r$/.test(line), msg.event === 'stderr');
+            } else if (msg.event === 'progress' && k != null && run.rows[k]) {
+                run.rows[k] = rowWithLocalProgress(run.rows[k], d);
+                if (run.rows[k].status !== 'running') markRunning(k);
+                scheduleRefresh();
+            } else if (msg.event === 'finished') {
+                fin = d;
+            }
+        }, { dryRun: dryRun }).then(function () {
+            resolve(fin || { success: false, error: 'sleap-nn ended without a result' });
+        }, function (e) {
+            resolve({ success: false, error: plainError(e) });
+        });
+    });
+}
+
+async function startLocalTraining() {
+    const stamp = formatRunTimestamp();
+    run.status = 'running'; run.error = null; run.log = []; run.errorTail = []; run.modelDirs = [];
+    run.cancelled = false; run.stopRequested = false; run.startedAt = Date.now(); run.endedAt = null; run.note = null;
+    refresh();
+    let plans;
+    try {
+        plans = await planLocal(stamp, false);
+    } catch (e) {
+        run.status = 'error'; run.error = plainError(e); run.endedAt = Date.now();
+        refresh();
+        return;
+    }
+    run.rows = initialRows(plans);
+    let ri = 0;
+    plans.forEach(function (p) {
+        p.models.forEach(function (m) {
+            Object.assign(run.rows[ri], { plateauPatience: m.plateauPatience, plateauMinDelta: m.plateauMinDelta, runDir: joinRunDir(local.runsRoot, m.runName) });
+            ri++;
+        });
+        appendLog('$ Training: ' + p.group.name + ' — ' + p.stats.frames.toLocaleString('en-US') + ' labelled frames (' +
+            p.split.train.size.toLocaleString('en-US') + ' moments for training, ' + (p.split.sameAsTrain ? 'validated on the same frames' : p.split.val.size.toLocaleString('en-US') + ' for validation') +
+            '), ' + p.stats.videos + ' video' + (p.stats.videos === 1 ? '' : 's'));
+    });
+    startElapsed();
+    refresh();
+    let base = 0;
+    outer:
+    for (const p of plans) {
+        if (run.cancelled) break;
+        let token;
+        try {
+            token = await sn.training.prepare(p.args);
+        } catch (e) {
+            run.error = plainError(e);
+            break;
+        }
+        local.token = token;
+        for (let i = 0; i < p.models.length; i++) {
+            const k = base + i;
+            if (run.cancelled) break outer;
+            markRunning(k);
+            refresh();
+            const fin = await runLocalModel(token, i, k, false, function (line, progress, err) {
+                appendLog(line, progress);
+                if (err && !progress && !ERROR_LINE_RE.test(line) && line.trim() && !isNoise(line)) {
+                    run.errorTail.push(line);
+                    if (run.errorTail.length > 20) run.errorTail.shift();
+                }
+                scheduleRefresh();
+            });
+            if (fin.success) {
+                run.rows[k] = endRow(run.rows[k], { status: 'completed', modelDir: fin.modelDir });
+                if (fin.modelDir) run.modelDirs.push(fin.modelDir);
+            } else {
+                run.rows[k] = endRow(run.rows[k], { status: fin.cancelled || run.cancelled ? 'cancelled' : 'failed' });
+                if (!(fin.cancelled || run.cancelled)) {
+                    const last = run.errorTail.length ? run.errorTail[run.errorTail.length - 1] : '';
+                    run.error = 'Training ' + run.rows[k].label + ' failed' + (fin.error ? ': ' + fin.error : fin.code != null ? ' (exit code ' + fin.code + ')' : '') +
+                        (last && !fin.error ? ' — ' + last : '');
+                }
+                try { await sn.training.release(token); } catch (e) { /* already gone */ }
+                local.token = null;
+                break outer;
+            }
+        }
+        local.token = null;
+        base += p.models.length;
+    }
+    run.endedAt = Date.now();
+    if (run.cancelled) {
+        run.status = 'error';
+        run.error = 'Training cancelled';
+        run.rows.forEach(function (r, i) { if (r.status === 'running') run.rows[i] = endRow(r, { status: 'cancelled' }); });
+    } else {
+        run.status = run.error ? 'error' : 'completed';
+    }
+    stopElapsed();
+    refresh();
+}
+
+function joinRunDir(root, name) {
+    const sep = String(root).indexOf('\\') !== -1 && String(root).indexOf('/') === -1 ? '\\' : '/';
+    return String(root).replace(/[\\/]+$/, '') + sep + name;
+}
+
+/** The config + data a dry run checked, to say when it no longer matches. */
+function dryRunKey() {
+    return JSON.stringify([cfg.modelType, cfg.groupMode, getConfigSlots(cfg.modelType).map(function (s) { return [slotValue(s), cfg.hp[s]]; }),
+        cfg.anchorPart, includedSelections().map(function (s) { return viewKey(s.sessionIndex, s.cameraName); }), local.runsRoot]);
+}
+
+/** sleap-app's Dry run: setup plus one training and one validation batch per model, nothing kept. */
+async function startDryRun() {
+    if (whyNotStart() || isRemoteRun() || dry.status === 'running') return;
+    dry.status = 'running'; dry.rows = []; dry.log = []; dry.error = null; dry.key = dryRunKey();
+    refresh();
+    let plans;
+    try {
+        plans = await planLocal(formatRunTimestamp(), true);
+    } catch (e) {
+        dry.status = 'failed'; dry.error = plainError(e);
+        refresh();
+        return;
+    }
+    outer:
+    for (const p of plans) {
+        let token;
+        try { token = await sn.training.prepare(p.args); } catch (e) { dry.status = 'failed'; dry.error = plainError(e); break; }
+        local.token = token;
+        for (let i = 0; i < p.models.length; i++) {
+            if (dry.status === 'cancelled') {
+                try { await sn.training.release(token); } catch (e) { /* already gone */ }
+                local.token = null;
+                break outer;
+            }
+            const lines = [];
+            const fin = await runLocalModel(token, i, null, true, function (line) {
+                lines.push(line);
+                dry.log.push(line);
+                if (dry.log.length > LOG_MAX) dry.log.splice(0, dry.log.length - LOG_MAX);
+            });
+            const text = lines.join('\n');
+            if (/No such option:? .?--dry-run/i.test(text)) {
+                dry.status = 'unsupported';
+                try { await sn.training.release(token); } catch (e) { /* already gone */ }
+                local.token = null;
+                break outer;
+            }
+            const passed = !!fin.success;
+            dry.rows.push({ label: p.models[i].label, passed: passed,
+                summary: passed ? lines.filter(function (l) { return /dry run|samples|steps per epoch|device|run folder/i.test(l); }).slice(-6) : [],
+                errors: passed ? [] : lines.filter(function (l) { return ERROR_LINE_RE.test(l) || /^\s+File /.test(l); }).slice(-12) });
+            refresh();
+        }
+        try { await sn.training.release(token); } catch (e) { /* already gone */ }
+        local.token = null;
+    }
+    if (dry.status === 'running') dry.status = dry.rows.length && dry.rows.every(function (r) { return r.passed; }) ? 'passed' : 'failed';
+    refresh();
+}
+
+async function startRemoteTraining() {
     const gs = groups();
     const slots = getConfigSlots(cfg.modelType);
     const stamp = formatRunTimestamp();
@@ -556,6 +882,8 @@ function openMonitor(i) {
         errorLines: function () { return run.errorTail.slice(); },
         onStopEarly: stopEarly,
         onCancel: cancelTraining,
+        // Local runs: sleap-nn's per-epoch prediction images, read from the run folder (a model grant).
+        readFile: !isRemoteRun() && fsApi && typeof fsApi.readFile === 'function' ? function (path) { return fsApi.readFile(path); } : null,
     });
 }
 
@@ -567,18 +895,31 @@ function scheduleRefresh() {
 }
 
 async function stopEarly() {
-    if (!isRunning() || !remote) return;
+    if (!isRunning()) return;
     run.stopRequested = true;
     appendLog('Stop requested: the current model saves its checkpoint, then the run goes on.');
-    try { await remote.stopCurrent(); } catch (e) { appendLog('Stop Early failed: ' + ((e && e.message) || e)); }
+    try {
+        if (isRemoteRun()) { if (remote) await remote.stopCurrent(); }
+        else if (local.token) await sn.training.stop(local.token);
+    } catch (e) { appendLog('Stop Early failed: ' + plainError(e)); }
     refresh();
 }
 
 async function cancelTraining() {
-    if (!isRunning() || !remote) return;
+    if (!isRunning()) return;
     run.cancelled = true;
     appendLog('Cancel requested.');
-    try { await remote.cancelAll(); } catch (e) { appendLog('Cancel failed: ' + ((e && e.message) || e)); }
+    try {
+        if (isRemoteRun()) { if (remote) await remote.cancelAll(); }
+        else if (local.token) await sn.training.cancel(local.token);
+    } catch (e) { appendLog('Cancel failed: ' + plainError(e)); }
+    refresh();
+}
+
+async function cancelDryRun() {
+    if (dry.status !== 'running') return;
+    dry.status = 'cancelled';
+    if (local.token) { try { await sn.training.cancel(local.token); } catch (e) { /* ended */ } }
     refresh();
 }
 
@@ -754,8 +1095,9 @@ function buildDataSection(top) {
                 const file = vf && vf.file ? (vf.file.webkitRelativePath || vf.file.name) : (vf && vf.videoPath ? vf.videoPath : '');
                 rows.push({ s: s, view: view, c: c, file: file,
                     checked: !cfg.unchecked.has(viewKey(s.index, view)),
-                    worker: remote && remote.connected() ? remote.videoStatus(s.index, view) : '',
-                    locate: remote && remote.canLocate(s.index, view) && c.frames > 0 });
+                    worker: isRemoteRun() ? (remote && remote.connected() ? remote.videoStatus(s.index, view) : '')
+                        : (local.resolving && !localVideo(s.index, view) ? 'finding it on disk\u2026' : localVideo(s.index, view) || 'not found among the files you opened'),
+                    locate: isRemoteRun() && remote && remote.canLocate(s.index, view) && c.frames > 0 });
             }
         }
         const key = JSON.stringify(rows.map(function (r) { return r.head ? ['h', r.s.index, r.s.session.name, r.lazy] : [r.s.index, r.view, r.c.frames, r.c.instances, r.file, r.checked, r.worker, r.locate]; })) + isRunning();
@@ -864,6 +1206,30 @@ function buildDataSection(top) {
     outLine.appendChild(outChange);
     outRow.appendChild(outLine);
     sec.appendChild(form.shownIf(outRow, function () { return isRemoteRun() && !!remote && remote.connected(); }));
+
+    // Runs folder (local): picked once per app run; read-only to the app (checkpoints are pickles).
+    const runsRow = el('div', 'inf-block');
+    runsRow.id = 'trnRunsFolder';
+    runsRow.appendChild(form.fieldLabel('Runs folder', 'Where trained models go: one run folder per model. The app reads this folder but never writes in it ' +
+        '(only sleap-nn does), so pick a folder for models only, such as a models folder next to the project.'));
+    const runsLine = el('div', 'trn-pathrow');
+    const runsPath = el('span', 'trn-path');
+    runsLine.appendChild(runsPath);
+    const runsChoose = button('Choose\u2026', 'btn btn-sm inf-btn-outline');
+    runsChoose.id = 'trnRunsChoose';
+    runsChoose.addEventListener('click', chooseRunsFolder);
+    runsLine.appendChild(runsChoose);
+    runsRow.appendChild(runsLine);
+    const runsNote = el('p', 'inf-muted');
+    runsRow.appendChild(runsNote);
+    sec.appendChild(form.shownIf(runsRow, function () { return !isRemoteRun(); }));
+    form.onRefresh(function () {
+        runsPath.textContent = local.runsRoot || (lastRunsFolder() ? 'choose again: ' + lastRunsFolder() : 'none chosen');
+        runsChoose.disabled = isRunning();
+        runsNote.textContent = local.runsRoot && local.existingRuns
+            ? local.existingRuns.toLocaleString('en-US') + ' trained run' + (local.existingRuns === 1 ? '' : 's') + ' already there.' : '';
+        runsNote.hidden = !runsNote.textContent;
+    });
     form.onRefresh(function () {
         if (!remote) return;
         outPath.textContent = remote.outputChecking() ? 'Checking…' : (remote.outputDir() ? remote.outputDir() + '/models' : 'none: choose a folder');
@@ -917,27 +1283,51 @@ function buildHyperSection(top) {
 }
 
 function buildRemoteSection(top) {
-    const sec = form.section(top, 'Remote', true);
+    // sleap-app: collapsed on the desktop (Local is the default there); the only backend on the web.
+    const sec = form.section(top, 'Remote', !sn);
     const picker = createBackendPicker({
         jobLabel: 'training job',
-        localAvailable: function () { return false; },
+        localAvailable: function () { return !!sn; },
         localListed: function () { return typeof window !== 'undefined' && !!window.lucidDesktop; },
-        remoteEnabled: function () { return true; },
-        onRemoteEnabledChange: function () { backend.remote = true; refresh(); },
+        remoteEnabled: isRemoteRun,
+        onRemoteEnabledChange: function (on) { backend.remote = on; local.videoKey = ''; refresh(); },
         hintButton: form.hintBtn,
         idPrefix: 'trn',
     });
     sec.appendChild(picker.el);
     form.onRefresh(picker.refresh);
-    const localNote = el('p', 'inf-muted', 'Training on this machine comes in a later update; train on a paired SLEAP Connect worker.');
-    sec.appendChild(form.shownIf(localNote, function () { return typeof window !== 'undefined' && !!window.lucidDesktop; }));
+    const envLine = el('p', 'inf-muted');
+    envLine.id = 'trnEnvLine';
+    sec.appendChild(envLine);
+    form.onRefresh(function () {
+        envLine.hidden = !sn;
+        if (!sn) return;
+        envLine.textContent = !env.checked ? 'Checking for sleap-nn\u2026'
+            : sleapNnAvailable() ? 'sleap-nn ' + (env.sleapNn.version || '') + (env.gpu ? ' \u00b7 ' + String(env.gpu).toUpperCase() : '')
+                : 'sleap-nn not found' + (env.error ? ': ' + env.error : '');
+    });
 }
 
 function buildRunBlock(top) {
+    const startRow = el('div', 'trn-btns trn-start-row');
     const startBtn = button('Start Remote Training', 'btn btn-primary inf-run', 'upload');
     startBtn.id = 'trnStart';
+    const startLabel = startBtn.lastChild;
     startBtn.addEventListener('click', function () { startTraining(); });
-    top.appendChild(form.shownIf(startBtn, function () { return !isRunning() && !isDone(); }));
+    const dryBtn = button('Dry run', 'btn btn-sm inf-btn-outline trn-dry', 'flask-conical');
+    dryBtn.id = 'trnDryRun';
+    dryBtn.title = 'Check the config and data first, in seconds: setup plus one training and one validation batch per model, with your settings. Nothing is kept.';
+    dryBtn.addEventListener('click', function () { startDryRun(); });
+    startRow.appendChild(startBtn);
+    startRow.appendChild(dryBtn);
+    top.appendChild(form.shownIf(startRow, function () { return !isRunning() && !isDone(); }));
+    form.onRefresh(function () {
+        startLabel.textContent = ' ' + (isRemoteRun() ? 'Start Remote Training' : 'Start Training');
+        // sleap-nn's --dry-run runs here, on this machine; a worker has no way to run one.
+        dryBtn.hidden = isRemoteRun();
+        dryBtn.disabled = !!whyNotStart() || dry.status === 'running';
+    });
+    buildDryRunResult(top);
     const why = el('p', 'inf-muted trn-center');
     why.id = 'trnWhy';
     top.appendChild(why);
@@ -983,6 +1373,68 @@ function buildRunBlock(top) {
     fresh.addEventListener('click', function () { resetRun(false); });
     failRow.appendChild(retry); failRow.appendChild(fresh);
     top.appendChild(form.shownIf(failRow, function () { return run.status === 'error'; }));
+}
+
+/** sleap-app DryRunResult: a headline, one row per model, the error output and the log on demand. */
+function buildDryRunResult(top) {
+    const box = el('div', 'trn-dry-box');
+    box.id = 'trnDryResult';
+    const head = el('div', 'trn-dry-head');
+    const headIcon = el('span', 'inf-icon');
+    const headText = el('span');
+    const cancel = button('Cancel', 'btn btn-sm inf-btn-ghost');
+    cancel.addEventListener('click', cancelDryRun);
+    head.appendChild(headIcon); head.appendChild(headText); head.appendChild(cancel);
+    box.appendChild(head);
+    const stale = el('p', 'inf-muted', 'The config changed since this check; run it again to check the new one.');
+    box.appendChild(stale);
+    const rows = el('div', 'trn-dry-rows');
+    box.appendChild(rows);
+    const logBtns = el('div', 'trn-btns');
+    const showLog = button('Show log', 'btn btn-sm inf-btn-ghost');
+    const copyLog = button('Copy log', 'btn btn-sm inf-btn-ghost', 'copy');
+    logBtns.appendChild(showLog); logBtns.appendChild(copyLog);
+    box.appendChild(logBtns);
+    const logPre = el('pre', 'inf-log');
+    logPre.hidden = true;
+    box.appendChild(logPre);
+    showLog.addEventListener('click', function () { logPre.hidden = !logPre.hidden; showLog.textContent = logPre.hidden ? 'Show log' : 'Hide log'; });
+    copyLog.addEventListener('click', function () { copyText(dry.log.join('\n')); });
+    top.appendChild(form.shownIf(box, function () { return dry.status !== 'idle' && !isRemoteRun() && !isRunning(); }));
+    form.onRefresh(function () {
+        const S = {
+            running: ['loader-circle', 'Checking\u2026', 'inf-spin'],
+            passed: ['circle-check', 'Dry run passed. Ready to train.', 'inf-ok'],
+            failed: ['circle-x', 'Dry run failed. Fix this before training.', 'inf-bad'],
+            unsupported: ['circle-alert', 'This sleap-nn can\u2019t do a dry run. Training itself still works.', 'inf-warnc'],
+            cancelled: ['circle-alert', 'Dry run cancelled', 'inf-warnc'],
+        }[dry.status];
+        if (!S) return;
+        headIcon.className = 'inf-icon ' + S[2];
+        headIcon.innerHTML = railIconSvg(S[0]);
+        headText.textContent = dry.error ? 'Dry run failed: ' + dry.error : S[1];
+        cancel.hidden = dry.status !== 'running';
+        stale.hidden = dry.status === 'running' || dry.key === dryRunKey();
+        rows.textContent = '';
+        for (const r of dry.rows) {
+            const row = el('div', 'trn-dry-row ' + (r.passed ? 'trn-completed' : 'trn-failed'));
+            row.appendChild(icon(r.passed ? 'circle-check' : 'circle-x'));
+            row.appendChild(el('span', null, r.label));
+            rows.appendChild(row);
+            const detail = (r.passed ? r.summary : r.errors).join('\n');
+            if (detail) {
+                const pre = el('pre', 'inf-log' + (r.passed ? '' : ' trn-dry-err'), detail);
+                rows.appendChild(pre);
+                if (!r.passed) {
+                    const c = button('Copy', 'btn btn-sm inf-btn-ghost', 'copy');
+                    c.addEventListener('click', function () { copyText(detail); });
+                    rows.appendChild(c);
+                }
+            }
+        }
+        logBtns.hidden = dry.log.length === 0;
+        logPre.textContent = dry.log.slice(-200).join('\n');
+    });
 }
 
 function buildProgress(root) {
@@ -1140,6 +1592,7 @@ function buildPanel(root) {
 /** The panel's own refresh: re-read the project, then every control. */
 function panelRefresh() {
     analyze(false);
+    if (!isRemoteRun() && !isRunning()) resolveLocalVideos();
     // sleap-app auto-selects the recommendation for a project whose type the user has not picked.
     if (!cfg.modelTypeTouched && analysis.rec && analysis.rec.recommended !== cfg.modelType && !isRunning()) {
         const compat = skeletonCompatibility(skeletonOf());
@@ -1158,7 +1611,15 @@ function panelRefresh() {
  */
 export async function setupTrainingPanel() {
     if (pane) return false;
-    form = createPanelForm({ isBusy: isRunning, refresh: refresh });
+    // Local training: the desktop app with sleap-nn in the build (`lucidDesktop.sleapNn.training`).
+    const d = typeof window !== 'undefined' ? window.lucidDesktop : null;
+    if (d && d.sleapNn && d.sleapNn.training && d.fs) {
+        try {
+            const st = await d.sleapNn.status();
+            if (st && st.available) { sn = d.sleapNn; fsApi = d.fs; }
+        } catch (e) { /* remote only */ }
+    }
+    form = createPanelForm({ isBusy: function () { return isRunning() || dry.status === 'running'; }, refresh: refresh });
     remote = createRemoteTraining({
         sessions: projectSessions,
         viewDescriptors: viewDescriptors,
@@ -1183,6 +1644,7 @@ export async function setupTrainingPanel() {
         run.note = 'Could not load the training presets: ' + ((e && e.message) || e);
     }
     panelRefresh();
+    detectEnvironment();
     return true;
 }
 
@@ -1191,7 +1653,8 @@ export function showTrainingPanel() { return showPanelTab(TRAINING_TAB_ID); }
 
 /** For tests: the live config and run state (read-only use). */
 export function _trainingState() {
-    return { cfg: cfg, run: run, analysis: analysis, groups: groups(), selections: includedSelections(), remote: remote && remote._state(), monitorIndex: monitorIndex };
+    return { cfg: cfg, run: run, analysis: analysis, groups: groups(), selections: includedSelections(), remote: remote && remote._state(), monitorIndex: monitorIndex,
+        local: { runsRoot: local.runsRoot, videos: Object.fromEntries(local.videos), token: local.token }, dry: dry, backendRemote: isRemoteRun() };
 }
 /** For tests: recompute the label analysis now. */
 export function _trainingAnalyze() { analyze(true); panelRefresh(); }

@@ -9027,6 +9027,20 @@ div.track-summary-steps { padding-left: 0; }
 .trn-mon-runtime strong { color: var(--text-primary); font-weight: 700; }
 .trn-mon-foot { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-color); flex-shrink: 0; }
 .trn-mon-foot .btn { flex: 1; height: 32px; }
+.trn-mon-viz { display: flex; flex-direction: column; gap: 6px; }
+.trn-mon-vizhead { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); }
+.trn-mon-vizhead .trn-seg { width: 180px; }
+.trn-mon-vizimg { width: 100%; height: auto; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-primary); }
+.trn-mon-vizempty { font-size: 11px; color: var(--text-muted); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; text-align: center; }
+/* Dry run (sleap-app DryRunResult) */
+.trn-start-row .inf-run { flex: 1; }
+.trn-start-row .trn-dry { flex: none; height: 32px; padding: 0 10px; }
+.trn-dry-box { border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
+.trn-dry-head { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.trn-dry-head > span:nth-child(2) { flex: 1; min-width: 0; }
+.trn-dry-rows { display: flex; flex-direction: column; gap: 4px; }
+.trn-dry-row { display: flex; align-items: center; gap: 6px; }
+.trn-dry-err { color: var(--error-color); }
 
 /* ============================================
    Connect panel (ui/connect/*) — sleap-app's ConnectPanel.tsx look:

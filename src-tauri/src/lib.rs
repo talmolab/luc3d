@@ -16,8 +16,11 @@ mod localhost;
 mod native_menu;
 mod sleap_nn;
 mod sleap_nn_args;
+mod train_config;
+mod training;
 mod system;
 mod updates;
+mod zmtp;
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -112,6 +115,12 @@ fn lucid_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             iroh_client::iroh_blob_open,
             iroh_client::iroh_blob_read_range,
             iroh_client::iroh_blob_close,
+            training::pick_runs_directory,
+            training::training_prepare,
+            training::training_run,
+            training::training_stop,
+            training::training_cancel,
+            training::training_release,
         ])
         .build()
 }
@@ -167,6 +176,7 @@ pub fn run() {
         .manage(Arc::new(files::WriteSessions::default()))
         .manage(close_guard::CloseGuardState::default())
         .manage(sleap_nn::RunningProcess::default())
+        .manage(Arc::new(training::TrainingState::default()))
         .manage(iroh_client::IrohClients::default())
         .manage(native_menu::NativeMenuState::<tauri::Wry>::default())
         .on_window_event(|window, event| {
@@ -224,6 +234,8 @@ pub fn run() {
     }
 
     let builder = builder.setup(move |app| {
+        // A staging folder left by a crash or Dock ▸ Quit (no run is live at start).
+        training::sweep_stale_staging();
         app.manage(updates::UpdateState::load(app.handle()));
 
         // luc3d | Edit | Window until the page sends its own menus
@@ -324,7 +336,7 @@ mod tests {
             .map(|s| s.rsplit("::").next().unwrap())
             .collect();
 
-        assert_eq!(from_build.len(), 38);
+        assert_eq!(from_build.len(), 44);
         from_build.sort_unstable();
         from_lib.sort_unstable();
         assert_eq!(from_build, from_lib);

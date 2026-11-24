@@ -12,8 +12,9 @@
  *    viewer's), drawn in LUCID's colours rather than on sleap-app's white plot;
  *  - vanilla DOM card (Esc / ✕ / scrim close, Tab trapped, `data-shortcut-modal`); it redraws on
  *    the panel's refresh, at most every 250 ms;
- *  - the validation-image strip (`VizImageViewer`) comes with local training: a worker's viz
- *    folder is not reachable from the page.
+ *  - the validation / train images (`VizImageViewer`): local runs only (`readFile`), read from the
+ *    run folder's `viz/` while sleap-nn writes them (it deletes them when the run ends unless
+ *    `keep_viz`); a worker's run folder is not reachable from the page.
  */
 import { createLossPlot } from './connect/loss-plot.js';
 import { trapModal } from './connect/layers.js';
@@ -40,6 +41,7 @@ function titleLine(text) {
  *   isActive: () => boolean,        // the shown model is the one training now
  *   errorLines: () => string[],
  *   onStopEarly: () => void, onCancel: () => void,
+ *   readFile?: ((path: string) => Promise<Uint8Array>) | null,   // local runs: the viz images
  * }} o
  * @returns {{update: () => void, close: () => void}}
  */
@@ -67,6 +69,26 @@ export function openTrainingMonitor(o) {
     runtime.id = 'trnMonRuntime';
     const plotHost = el('div', 'trn-mon-plot');
     body.appendChild(errBox); body.appendChild(runtime); body.appendChild(plotHost);
+    // Validation / train prediction images (sleap-nn: <run>/viz/{validation,train}.NNNN.png, 0-based).
+    const viz = el('div', 'trn-mon-viz');
+    viz.id = 'trnMonViz';
+    const vizHead = el('div', 'trn-mon-vizhead');
+    const vizTabs = el('div', 'trn-seg');
+    let vizKind = 'validation';
+    [['validation', 'Validation'], ['train', 'Train']].forEach(function (k) {
+        const b = button(k[1], 'trn-seg-btn');
+        b.dataset.kind = k[0];
+        b.addEventListener('click', function () { vizKind = k[0]; vizShown = ''; paint(); });
+        vizTabs.appendChild(b);
+    });
+    const vizLabel = el('span', 'trn-mon-vizlabel');
+    vizHead.appendChild(vizTabs); vizHead.appendChild(vizLabel);
+    const vizImg = el('img', 'trn-mon-vizimg');
+    vizImg.alt = 'Sample predictions of the shown epoch';
+    const vizEmpty = el('div', 'trn-mon-vizempty');
+    viz.appendChild(vizHead); viz.appendChild(vizImg); viz.appendChild(vizEmpty);
+    body.appendChild(viz);
+    let vizShown = '', vizUrl = null, vizBusy = false;
     const foot = el('div', 'trn-mon-foot');
     const stop = button('Stop Early', 'btn btn-sm trn-stop');
     stop.id = 'trnMonStopEarly';
@@ -91,11 +113,40 @@ export function openTrainingMonitor(o) {
         runtime.textContent = '';
         if (r.epochSamples.length || r.status === 'running') rowRuntimeLines(r, Date.now()).forEach(function (l) { runtime.appendChild(titleLine(l)); });
         plot.update({ model: r, status: r.status === 'running' ? 'running' : st });
+        paintViz(r);
         const errs = st === 'error' ? o.errorLines() : [];
         errBox.hidden = errs.length === 0;
         errPre.textContent = errs.join('\n');
         foot.hidden = !o.isActive();
     }
+    function paintViz(r) {
+        viz.hidden = !o.readFile || !r.runDir;
+        if (viz.hidden) return;
+        for (const b of vizTabs.children) b.setAttribute('aria-pressed', b.dataset.kind === vizKind ? 'true' : 'false');
+        const last = r.epochSamples.length ? r.epochSamples[r.epochSamples.length - 1].epoch : null;
+        if (last == null) { vizLabel.textContent = ''; vizImg.hidden = true; vizEmpty.textContent = 'Images appear after the first epoch.'; vizEmpty.hidden = false; return; }
+        const name = vizKind + '.' + String(last).padStart(4, '0') + '.png';
+        vizLabel.textContent = name;
+        if (name === vizShown || vizBusy) return;
+        vizBusy = true;
+        const sep = String(r.runDir).indexOf('\\') !== -1 && String(r.runDir).indexOf('/') === -1 ? '\\' : '/';
+        o.readFile(r.runDir + sep + 'viz' + sep + name).then(function (bytes) {
+            if (closed) return;
+            if (vizUrl) URL.revokeObjectURL(vizUrl);
+            vizUrl = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+            vizImg.src = vizUrl;
+            vizImg.hidden = false;
+            vizEmpty.hidden = true;
+            vizShown = name;
+        }, function () {
+            if (closed) return;
+            vizImg.hidden = true;
+            vizEmpty.textContent = 'No image for this epoch (sleap-nn removes them when a run ends, unless it keeps them).';
+            vizEmpty.hidden = false;
+            vizShown = name;
+        }).then(function () { vizBusy = false; });
+    }
+
     function update() {
         if (closed) return;
         const wait = 250 - (Date.now() - last);
@@ -109,6 +160,7 @@ export function openTrainingMonitor(o) {
         trap.release();
         trap.restoreFocus();
         plot.destroy();
+        if (vizUrl) URL.revokeObjectURL(vizUrl);
         scrim.remove();
         if (open === api) open = null;
     }

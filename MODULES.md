@@ -43,7 +43,8 @@ every build `init` dynamically imports `ui/inference-panel.js` (a literal
 Training panel (`ui/training-panel.js`, `setupTrainingPanel()`), then the
 Connect panel (`ui/connect/index.js`), in that order (rail order Inference,
 Training, Connect: sleap-app's). The Inference panel uses local sleap-nn only
-where the desktop shim has it; the Training panel is remote-only for now.
+where the desktop shim has it; the Training panel likewise trains locally only where
+`lucidDesktop.sleapNn.training` exists (else on a worker).
 
 **Key exports.**
 - `hideWelcomeOverlay()` — hides the dock empty-state overlay.
@@ -2846,6 +2847,17 @@ last / best validation loss as `toExponential(3)`). `rowRuntimeLines(row, now)` 
 `plateauSettings(doc)` reads a config's `early_stopping`. DOM-free. **Exports.** `computeRuntimeMetrics`,
 `mmss`, `formatRuntimeTitle`, `rowRuntimeLines`, `plateauSettings`. **Imports.** None. **Imported by.**
 `ui/training-monitor.js`, `ui/training-panel.js`. **Tests.** `tests/test-training-metrics.mjs`.
+
+### pose/training-local-progress.js
+
+**Purpose.** Fold a LOCAL run's progress messages (sleap-nn's ZMQ events as Rust forwards them:
+`{name, epoch, batch, logs, nan}`) into a progress row, port of sleap-app's ZMQ handler / `recordEpoch` /
+`recordBatches`: `epoch_begin` (epoch start time), `epoch_end` (epoch sample from `train/loss` or
+`loss` and `val/loss`, best validation loss, epochs done), `batch_end` (a batch sample at
+`epoch * epochSize + batch`, the newest 20,000 kept); a non-finite loss is skipped and flags `lossNaN`.
+DOM-free. **Exports.** `rowWithLocalProgress(row, msg, now)`, `MAX_BATCH_SAMPLES`. **Imports.** None.
+**Imported by.** `ui/training-panel.js`. **Tests.** `tests/test-training-local-progress.mjs`,
+`tests/e2e/desktop-training.mjs`.
 
 ### pose/training-recommend.js
 
@@ -13244,7 +13256,8 @@ overlays, info panel. On a lazy project the new instances pin their frames
 ### ui/training-panel.js
 
 **Purpose.** The Training panel (rail icon GraduationCap, between Inference and Connect, sleap-app's
-order): a replica of sleap-app's `TrainingPanel.tsx` (Model Type & Configs with the ★ recommendation and
+order), training on this machine (desktop with sleap-nn: Local, the default there) or a paired worker: a
+replica of sleap-app's `TrainingPanel.tsx` (Model Type & Configs with the ★ recommendation and
 auto-select, config slots with the presets / Browse / drop a YAML, Data, Hyperparameters with Anchor Part
 and per-model tabs, Remote = Backend picker, Start Remote Training, Stop Early / Cancel, one progress row
 per model, Log with Expand / Copy, Error output (sleap-nn), Complete / Failed blocks with Train Again,
@@ -13252,8 +13265,16 @@ Retry, New Training). LUCID changes (file header): Data is the project's session
 user-labelled counts (`import-export/training-slp.js` writes the training file from the current edits),
 "Models for views" (one for all views / one per view, `pose/training-groups.js`), identity checks for "+ ID"
 types, box types disabled, Top-Down + ID's second slot defaults to the Multi-Class Top-Down preset, every
-video must be on the worker (Locate on worker…), validation is sleap-nn's random split on a worker. Local
-training, Dry run, Full Configuration and post-training inference are later phases. A row with a chart
+video must be on the worker (Locate on worker…), validation is sleap-nn's random split on a worker.
+LOCAL runs go through `lucidDesktop.sleapNn.training` (Rust `src-tauri/src/training.rs`, see CLAUDE.md
+"Local training"): a Runs folder row (`pickRunsDirectory`, read-only model grant, picked once per app
+run), each view's video found on disk (`fs.pathOfFile`, else the recorded path), per group a training and
+a validation file split by moment (videos named by their disk paths, the same paths sent as
+`--video-paths`), each model's config as an OBJECT (`configObject`), `prepare` then `run` per model in
+order with progress folded by `pose/training-local-progress.js`; Stop Early / Cancel = `stop` / `cancel`
+of the running token; Dry run (sleap-app `DryRunResult` states, incl. "This sleap-nn can't do a dry run");
+`objc` noise kept out of the error output. Full Configuration and post-training inference are later
+phases. A row with a chart
 opens the Training Monitor (`ui/training-monitor.js`); rows keep their start / epoch / end times and the
 config's plateau settings for its runtime lines. The label counts walk every lazy store row, so they are recomputed when the project changes or
 every 15 s while the panel shows, not on each 2 s refresh. Loaded on every build by one literal dynamic
@@ -13275,9 +13296,10 @@ the Training panel, "Training Monitor — <model>", sleap-app's runtime lines (`
 numbers bold like `renderTitleLine`), the loss plot (`ui/connect/loss-plot.js`, LUCID colours), the error
 output of a failed run, Stop Early / Cancel pinned at the bottom while the shown model trains. One at a
 time; redraws on the panel's refresh at most every 250 ms; Esc / ✕ / scrim close, Tab trapped
-(`trapModal`), `data-shortcut-modal` (playback keys off). The validation-image strip comes with local
-training. **Exports.** `openTrainingMonitor({row, runStatus, isActive, errorLines, onStopEarly,
-onCancel})` → `{update, close, isOpen}`, `trainingMonitor()`. **Imports.** `./connect/loss-plot.js`,
+(`trapModal`), `data-shortcut-modal` (playback keys off). Local runs (`readFile` given): the validation /
+train prediction images of the latest epoch, read from `<run>/viz/` (a model grant) while sleap-nn writes
+them. **Exports.** `openTrainingMonitor({row, runStatus, isActive, errorLines, onStopEarly,
+onCancel, readFile})` → `{update, close, isOpen}`, `trainingMonitor()`. **Imports.** `./connect/loss-plot.js`,
 `./connect/layers.js`, `./panel-form.js`, `../pose/training-metrics.js`. **Imported by.**
 `ui/training-panel.js`. **Tests.** `tests/e2e/training-monitor.mjs`.
 
@@ -13314,7 +13336,7 @@ Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
 and the section headers' ChevronDown / ChevronRight / X (sleap-app's). The
 desktop Inference panel adds Zap (its rail icon, sleap-app's) and the glyphs its
 buttons and status use (Folder, FolderOpen, Play, LoaderCircle, CircleCheck,
-CircleX, CircleAlert, Download, Copy, Maximize2). The Connect panel adds Globe (its rail icon), Plug, Unplug, Trash2, ExternalLink and TriangleAlert. The Training panel adds GraduationCap (its rail icon, sleap-app's), Square, Ban, ChartLine, Lightbulb and Upload. Inline strings: no fetch, so offline mode and the version stamp are unaffected.
+CircleX, CircleAlert, Download, Copy, Maximize2). The Connect panel adds Globe (its rail icon), Plug, Unplug, Trash2, ExternalLink and TriangleAlert. The Training panel adds GraduationCap (its rail icon, sleap-app's), Square, Ban, ChartLine, Lightbulb, Upload and FlaskConical. Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 
 **Key exports.** `RAIL_ICONS` (Lucide name → SVG child markup),
 `railIconSvg(name)` (wraps it in Lucide's 24x24 stroke-2 currentColor `<svg>`;
