@@ -54,7 +54,7 @@
  * Depends on: pose/triangulation-core.js
  */
 
-import { projectAndJacobianCameraInto } from './triangulation-core.js?v=b53b974f94f0';
+import { projectAndJacobianCameraInto } from './triangulation-core.js?v=25b9e152ca16';
 
 /** Gate in standard deviations of the difference (ata3d's default). */
 export const ATA_DEFAULT_K = 3;
