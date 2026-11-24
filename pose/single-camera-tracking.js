@@ -50,7 +50,10 @@ import { runSleapTrackerAsync } from './sleap-tracker.js';
 import { passesDetectionFilter } from './detection-filter-stats.js';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
-export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
+/** Why a lazy single-camera project is refused, and what to do instead (shown after "Track All: " and by the checks). */
+export const SINGLE_CAMERA_LAZY_REASON = 'on one camera this needs every frame in memory, and a file over 150 MB opens lazily loaded ' +
+    '(a window of frames at a time). Split the file into shorter ones (for example with sleap-io) and open each, ' +
+    'or track it with sleap-nn track, the same tracker (--oks_stddev 0.1 matches this app\'s default)';
 
 /**
  * The camera of a single-camera session, or null. One `Camera` is what File ▸

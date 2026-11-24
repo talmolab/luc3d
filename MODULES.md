@@ -2768,8 +2768,9 @@ too late); `clearestEndLeads`, among 'end' rows within 5 s the clearest leads. T
 image and size checks score each contact label-free and take neither.
 
 **Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
-`SINGLE_CAMERA_LAZY_REASON`; Track Frame and Track Frame Range are refused on one
-camera (the tracker is temporal).
+`SINGLE_CAMERA_LAZY_REASON`, which says what to do instead (split the file, or
+track it with `sleap-nn track`); Track Frame and Track Frame Range are refused on
+one camera (the tracker is temporal).
 
 **Not adopted** (measured): sleap-nn's Kalman tracker; search-zone stitching after
 PrecisionTrack (Coulombe et al., 2025; mice come back far from where they left);
@@ -4716,7 +4717,7 @@ no gate, margin 0.2. In the app on the same rows it called 14 of 95 swaps with 2
 false alarms, about 3 rows in 4 unsure, and the tab prompts to train a model for
 the rig. About 4 rows in 10 (mostly arrivals and tracklet changes) have too few
 crops for any verdict: they show no image note and the summary line counts them.
-The tab's About text quotes these numbers.
+The tab's About text gives them in round numbers.
 
 **Imports from project modules.** None.
 
@@ -17961,8 +17962,12 @@ compatibility check, track merging, frame merging, group rebuild.
   path the file gives (`sourceFilename`, else `filename`; '.' left out), kept
   on `Session.slpVideoByCamera`.
 - `camerasAlreadyInSession(session, incoming)` — the incoming cameras the
-  session already has: same name AND same recorded video path. `handleAddSlp`
-  never adds these again.
+  session already has: same name AND the same video (`sameVideoPath`).
+  `handleAddSlp` never adds these again. After a reopen the session's path is
+  the one the saved file wrote (the eager loader's `slpVideoByCamera`, or a lazy
+  project's `lazyLoader.videos`), often just the video's name.
+- `sameVideoPath(a, b)` — equal paths, or a shorter one that is the longer one's
+  tail folder by folder (`/` and `\` alike); empty never matches.
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Instance`,

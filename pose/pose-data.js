@@ -1818,9 +1818,12 @@ export class Session {
         /**
          * @type {Object<string, string>} cameraName -> the video path the SLP
          * gave for that camera (File ▸ Load SLP, `slpVideoByCamera` in
-         * import-export/slp-merge.js). In memory only, never saved: it lets a
-         * second Load SLP of the same video be recognised instead of adding
-         * its camera again (`camerasAlreadyInSession`).
+         * import-export/slp-merge.js). Not saved as such: a reopened project
+         * gets it back from the saved file's videos (the eager loader), and a
+         * lazy one's loader holds the same paths. It lets a second Load SLP of
+         * the same video be recognised instead of adding its camera again
+         * (`camerasAlreadyInSession`, which also matches a saved short name to
+         * the full path, `sameVideoPath`).
          */
         this.slpVideoByCamera = {};
         /**
