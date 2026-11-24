@@ -40,6 +40,31 @@ describe('SLP Merge Helpers', function () {
             s.slpVideoByCamera = { side: '/data/rec_a/side.mp4' };
             assertDeepEqual(camerasAlreadyInSession(s, { side: '/data/rec_a/side.mp4' }), [], 'recorded, but the camera is gone');
         });
+
+        it('after a reopen, matches the short name a saved project keeps to the full path', function () {
+            var s = new Session([cam('top')], new Skeleton('s', ['A'], []), []);
+            s.slpVideoByCamera = { top: 'top.mp4' };           // what the saved file's videos say
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), ['top'], 'name = the full path\'s tail');
+            s.slpVideoByCamera = { top: 'rec_a/top.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { top: 'D:\\data\\rec_a\\top.mp4' }), ['top'], 'Windows separators too');
+            s.slpVideoByCamera = { top: 'rec_b/top.mp4' };
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), [], 'another folder: another video');
+        });
+
+        it('a lazy project reads the paths its loader holds', function () {
+            var s = new Session([cam('top')], new Skeleton('s', ['A'], []), []);
+            s.lazyLoader = { videos: new Map([['top', { filename: 'top.mp4' }]]) };
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/top.mp4' }), ['top']);
+            assertDeepEqual(camerasAlreadyInSession(s, { top: '/data/rec_a/other.mp4' }), [], 'another video');
+        });
+
+        it('sameVideoPath: equal, or the shorter is the longer\'s tail folder by folder', function () {
+            assertTrue(sameVideoPath('/a/b/c.mp4', '/a/b/c.mp4'), 'equal');
+            assertTrue(sameVideoPath('c.mp4', '/a/b/c.mp4'), 'a name and a full path');
+            assertTrue(!sameVideoPath('/rec/cam_a/0.mp4', '/rec/cam_b/0.mp4'), 'two full paths to different folders');
+            assertTrue(!sameVideoPath('', '/a/c.mp4') && !sameVideoPath(null, 'c.mp4'), 'no path never matches');
+            assertTrue(!sameVideoPath('bc.mp4', '/a/c.mp4') && !sameVideoPath('c.mp4', '/a/bc.mp4'), 'whole names only');
+        });
     });
 
     // --- validateSkeletonCompatibility ---

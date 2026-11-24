@@ -2780,8 +2780,9 @@ too late); `clearestEndLeads`, among 'end' rows within 5 s the clearest leads. T
 image and size checks score each contact label-free and take neither.
 
 **Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
-`SINGLE_CAMERA_LAZY_REASON`; Track Frame and Track Frame Range are refused on one
-camera (the tracker is temporal).
+`SINGLE_CAMERA_LAZY_REASON`, which says what to do instead (split the file, or
+track it with `sleap-nn track`); Track Frame and Track Frame Range are refused on
+one camera (the tracker is temporal).
 
 **Not adopted** (measured): sleap-nn's Kalman tracker; search-zone stitching after
 PrecisionTrack (Coulombe et al., 2025; mice come back far from where they left);
@@ -4802,7 +4803,7 @@ no gate, margin 0.2. In the app on the same rows it called 14 of 95 swaps with 2
 false alarms, about 3 rows in 4 unsure, and the tab prompts to train a model for
 the rig. About 4 rows in 10 (mostly arrivals and tracklet changes) have too few
 crops for any verdict: they show no image note and the summary line counts them.
-The tab's About text quotes these numbers.
+The tab's About text gives them in round numbers.
 
 **Imports from project modules.** None.
 
@@ -10285,12 +10286,12 @@ look at") and "About these flags" explains the list first.
 same rows after multi-camera Track All — where two animals' 3D paths nearly cross
 ('crossing', "their 3D paths nearly cross (the tracker could have paired them either
 way)") and the check rows where every animal is first in view and at the end. "About
-these flags" then explains the multi-camera list (a simulated reviewer's 88.2% -> 99.7%
-on 22 proofread 8-camera recordings, called an upper bound). A place's Fix swaps the two IDENTITIES in every view
+these flags" then explains the multi-camera list (a simulated reviewer's ~88% -> over 99%
+on proofread 8-camera recordings, called an upper bound). A place's Fix swaps the two IDENTITIES in every view
 (its buttons say so); Earlier encounter reads `pairEncounters3d`; the image pre-judge
 pools each animal's views at a sample first (`poolViews`; "About these flags" quotes
-its measurement on the same recordings, with "few swaps to go on" and "a lead, not the
-answer").
+its measurement in round numbers, about half the swaps with a rig's model and 1 in 4
+with the built-in one, with "few swaps to go on" and "a lead, not the answer").
 
 A check row at the same
 place and pair is ONE row, the check's, marked "on the review list" ('review' is
@@ -18073,8 +18074,12 @@ compatibility check, track merging, frame merging, group rebuild.
   path the file gives (`sourceFilename`, else `filename`; '.' left out), kept
   on `Session.slpVideoByCamera`.
 - `camerasAlreadyInSession(session, incoming)` — the incoming cameras the
-  session already has: same name AND same recorded video path. `handleAddSlp`
-  never adds these again.
+  session already has: same name AND the same video (`sameVideoPath`).
+  `handleAddSlp` never adds these again. After a reopen the session's path is
+  the one the saved file wrote (the eager loader's `slpVideoByCamera`, or a lazy
+  project's `lazyLoader.videos`), often just the video's name.
+- `sameVideoPath(a, b)` — equal paths, or a shorter one that is the longer one's
+  tail folder by folder (`/` and `\` alike); empty never matches.
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Instance`,

@@ -182,7 +182,7 @@ try {
         `verdicts from the three cameras' pooled views: 0:20 looks right, 0:40 looks swapped (${JSON.stringify(pj.verdicts)})`);
     check(/images: look right/.test(pj.at600) && /images: look swapped/.test(pj.at1200), 'the rows say so');
     check(!/images/.test(pj.atStart) && !/images/.test(pj.atEnd), 'the check rows get no pre-judge');
-    check(/across the cameras/.test(pj.about) && /On several cameras each animal's views at a moment are averaged first/.test(pj.about) && /4 of 16 swaps/.test(pj.about),
+    check(/across the cameras/.test(pj.about) && /On several cameras each animal's views at a moment are averaged first/.test(pj.about) && /about 1 swap in 4/.test(pj.about) && /a lead, not the answer/.test(pj.about),
         'About these flags: the multi-camera review list, how the cameras are combined, and what that measured (built-in model)');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
