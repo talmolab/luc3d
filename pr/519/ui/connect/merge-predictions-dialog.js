@@ -13,18 +13,18 @@
  *    waits), skeleton-checked first, Replace mode, then marked fetched;
  *  - no Open predictions; Download .slp goes through `downloadBytes`; Esc waits while merging.
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=df92c23b45e2';
-import { state } from '../app-state.js?v=df92c23b45e2';
-import { parseSlpForImport } from '../../import-export/slp-import.js?v=df92c23b45e2';
-import { validateSkeletonCompatibility } from '../../import-export/slp-merge.js?v=df92c23b45e2';
-import { downloadBytes } from '../../import-export/file-io.js?v=df92c23b45e2';
-import { mergeViewPredictions } from '../inference-merge.js?v=df92c23b45e2';
-import { fetchAndLoadJobs, fetchJobPredictions, openProjectInfo } from './remote-inference.js?v=df92c23b45e2';
-import { notify } from './notify.js?v=df92c23b45e2';
-import { railIconSvg } from '../panel-rail-icons.js?v=df92c23b45e2';
-import { trapModal } from './layers.js?v=df92c23b45e2';
-import { el, button, errMsg } from './dom.js?v=df92c23b45e2';
+import { useConnectStore } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=b06a5a85e413';
+import { state } from '../app-state.js?v=b06a5a85e413';
+import { parseSlpForImport } from '../../import-export/slp-import.js?v=b06a5a85e413';
+import { validateSkeletonCompatibility } from '../../import-export/slp-merge.js?v=b06a5a85e413';
+import { downloadBytes } from '../../import-export/file-io.js?v=b06a5a85e413';
+import { mergeViewPredictions } from '../inference-merge.js?v=b06a5a85e413';
+import { fetchAndLoadJobs, fetchJobPredictions, openProjectInfo } from './remote-inference.js?v=b06a5a85e413';
+import { notify } from './notify.js?v=b06a5a85e413';
+import { railIconSvg } from '../panel-rail-icons.js?v=b06a5a85e413';
+import { trapModal } from './layers.js?v=b06a5a85e413';
+import { el, button, errMsg } from './dom.js?v=b06a5a85e413';
 
 const DEFAULT_MODE = 'replace';
 const NONE = 'No predictions were found for this job.';

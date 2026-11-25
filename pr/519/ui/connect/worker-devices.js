@@ -10,11 +10,11 @@
  *    outside or the window closing close it;
  *  - each row says "Browser" / "Desktop app" + version; only THIS device names its client ("LUC3D <version>").
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { sortDevices, describeError, DEVICE_NAME_MAX, clientAgentLabel } from '../../pose/connect/worker-ui-helpers.js?v=df92c23b45e2';
-import { timeAgo } from '../../pose/connect/timestamp.js?v=df92c23b45e2';
-import { layerAbove } from './layers.js?v=df92c23b45e2';
-import { el, button, icon, releaseVersion } from './dom.js?v=df92c23b45e2';
+import { useConnectStore } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { sortDevices, describeError, DEVICE_NAME_MAX, clientAgentLabel } from '../../pose/connect/worker-ui-helpers.js?v=b06a5a85e413';
+import { timeAgo } from '../../pose/connect/timestamp.js?v=b06a5a85e413';
+import { layerAbove } from './layers.js?v=b06a5a85e413';
+import { el, button, icon, releaseVersion } from './dom.js?v=b06a5a85e413';
 
 /**
  * @param {HTMLElement} container

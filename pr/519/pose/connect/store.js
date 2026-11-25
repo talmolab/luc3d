@@ -25,18 +25,18 @@
  *  - The selection subscription is installed at creation, so a later `rehydrate()` writes the selection to sessionStorage.
  *  - Added `pairWithCode`, `agentInfo`, `configureConnect`, `installConnectStorageSync`, `__resetConnectState`.
  */
-import { createStore, persist } from "./mini-store.js?v=df92c23b45e2";
-import { mergeShared, sameShared } from "./connect-sync.js?v=df92c23b45e2";
-import { WorkerClient as DefaultWorkerClient } from "./client.js?v=df92c23b45e2";
-import { getClientIdentity as defaultGetClientIdentity } from "./identity.js?v=df92c23b45e2";
-import { defaultDeviceName, normalizeDeviceName } from "./device-name.js?v=df92c23b45e2";
-import { parseJobTelemetry } from "./job-telemetry.js?v=df92c23b45e2";
-import { ManagedConnection, isUnpairedError } from "./managed-connection.js?v=df92c23b45e2";
-import { WorkerProtocolError, FS_NOT_FOUND, FS_FORBIDDEN, AUTH_UNTRUSTED, CLIENT_CLOSED } from "./errors.js?v=df92c23b45e2";
-import { decodePairCode, isPairCode, PairCodeError } from "./pair-code.js?v=df92c23b45e2";
-import { readCodeInfo } from "./worker-ui-helpers.js?v=df92c23b45e2";
-import { NOT_A_CODE, planPairing } from "./pairing-plan.js?v=df92c23b45e2";
-import { loadSavedMappings } from "./path-mappings.js?v=df92c23b45e2";
+import { createStore, persist } from "./mini-store.js?v=b06a5a85e413";
+import { mergeShared, sameShared } from "./connect-sync.js?v=b06a5a85e413";
+import { WorkerClient as DefaultWorkerClient } from "./client.js?v=b06a5a85e413";
+import { getClientIdentity as defaultGetClientIdentity } from "./identity.js?v=b06a5a85e413";
+import { defaultDeviceName, normalizeDeviceName } from "./device-name.js?v=b06a5a85e413";
+import { parseJobTelemetry } from "./job-telemetry.js?v=b06a5a85e413";
+import { ManagedConnection, isUnpairedError } from "./managed-connection.js?v=b06a5a85e413";
+import { WorkerProtocolError, FS_NOT_FOUND, FS_FORBIDDEN, AUTH_UNTRUSTED, CLIENT_CLOSED } from "./errors.js?v=b06a5a85e413";
+import { decodePairCode, isPairCode, PairCodeError } from "./pair-code.js?v=b06a5a85e413";
+import { readCodeInfo } from "./worker-ui-helpers.js?v=b06a5a85e413";
+import { NOT_A_CODE, planPairing } from "./pairing-plan.js?v=b06a5a85e413";
+import { loadSavedMappings } from "./path-mappings.js?v=b06a5a85e413";
 import {
   getIrohSocketFactory,
   irohTransportAvailable,
@@ -45,7 +45,7 @@ import {
   toIrohDialTarget,
   encodeIrohDialUrl,
   transportLabel,
-} from "./transport.js?v=df92c23b45e2";
+} from "./transport.js?v=b06a5a85e413";
 import {
   TERMINAL_JOB_STATES,
   CONNECT_STORAGE_KEY,
@@ -70,7 +70,7 @@ import {
   toShared,
   readStoredShared,
   capShared,
-} from "./store-helpers.js?v=df92c23b45e2";
+} from "./store-helpers.js?v=b06a5a85e413";
 
 export {
   TERMINAL_JOB_STATES,
@@ -84,13 +84,13 @@ export {
   withYamlRunName,
 };
 
-/** @typedef {import("./client.js?v=df92c23b45e2").WorkerClient} WorkerClient */
-/** @typedef {import("./client.js?v=df92c23b45e2").WorkerEvent} WorkerEvent */
-/** @typedef {import("./transport.js?v=df92c23b45e2").TransportKind} TransportKind */
-/** @typedef {import("./transport.js?v=df92c23b45e2").IrohEndpointInfo} IrohEndpointInfo */
-/** @typedef {import("./path-mappings.js?v=df92c23b45e2").PathMapping} PathMapping */
-/** @typedef {import("./connect-sync.js?v=df92c23b45e2").SharedConnectState} SharedConnectState */
-/** @typedef {import("./store-helpers.js?v=df92c23b45e2").ConnectionStatus} ConnectionStatus */
+/** @typedef {import("./client.js?v=b06a5a85e413").WorkerClient} WorkerClient */
+/** @typedef {import("./client.js?v=b06a5a85e413").WorkerEvent} WorkerEvent */
+/** @typedef {import("./transport.js?v=b06a5a85e413").TransportKind} TransportKind */
+/** @typedef {import("./transport.js?v=b06a5a85e413").IrohEndpointInfo} IrohEndpointInfo */
+/** @typedef {import("./path-mappings.js?v=b06a5a85e413").PathMapping} PathMapping */
+/** @typedef {import("./connect-sync.js?v=b06a5a85e413").SharedConnectState} SharedConnectState */
+/** @typedef {import("./store-helpers.js?v=b06a5a85e413").ConnectionStatus} ConnectionStatus */
 
 /**
  * A worker this device has paired with — persisted, Syncthing/Plex-style.
@@ -490,7 +490,7 @@ function dropWorkerLocally(nodeId) {
 /**
  * `persist` storage: each save three-way merges into the stored copy, so a stale window can't undo
  * another's changes (#453); merged-in changes are applied here too.
- * @type {import("./mini-store.js?v=df92c23b45e2").PersistStorage<SharedConnectState>}
+ * @type {import("./mini-store.js?v=b06a5a85e413").PersistStorage<SharedConnectState>}
  */
 const sharedConnectStorage = {
   getItem: (name) => {
@@ -970,7 +970,7 @@ export { readCodeInfo };
 
 /**
  * The pairing form's live status line: `readCodeInfo` + `planPairing`; never throws (NOT_A_CODE).
- * @returns {Promise<import("./pairing-plan.js?v=df92c23b45e2").PairingPlan>}
+ * @returns {Promise<import("./pairing-plan.js?v=b06a5a85e413").PairingPlan>}
  */
 export async function planPairingForText(text, addrOverride) {
   try {

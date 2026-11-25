@@ -13,25 +13,25 @@
  *  - one job per view; another session's result is refused until that session is current;
  *  - the output folder must already exist (no mkdir in the protocol); a progress card shows the fetch.
  */
-import { useConnectStore, pathRulesFor } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { shallowEqual } from '../../pose/connect/mini-store.js?v=df92c23b45e2';
-import { createJobStream } from '../../pose/connect/job-stream.js?v=df92c23b45e2';
-import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=df92c23b45e2';
-import { defaultOutputDir } from '../../pose/connect/remote-output-dir.js?v=df92c23b45e2';
-import { formatRunTimestamp, formatDuration } from '../../pose/connect/timestamp.js?v=df92c23b45e2';
+import { useConnectStore, pathRulesFor } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { shallowEqual } from '../../pose/connect/mini-store.js?v=b06a5a85e413';
+import { createJobStream } from '../../pose/connect/job-stream.js?v=b06a5a85e413';
+import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=b06a5a85e413';
+import { defaultOutputDir } from '../../pose/connect/remote-output-dir.js?v=b06a5a85e413';
+import { formatRunTimestamp, formatDuration } from '../../pose/connect/timestamp.js?v=b06a5a85e413';
 import {
     VIDEO_EXTENSIONS, resolveViewVideos, describeViewStatus, inferLocateRule, planRemoteRun, pendingFetches,
     lastProgress, lastErrorLine, sessionRootOf, unresolvedViews, progressFromLine,
-} from '../../pose/connect/remote-inference-plan.js?v=df92c23b45e2';
-import { openRemoteFileBrowser } from './remote-file-browser.js?v=df92c23b45e2';
-import { state } from '../app-state.js?v=df92c23b45e2';
-import { mergeViewPredictions } from '../inference-merge.js?v=df92c23b45e2';
-import { railIconSvg } from '../panel-rail-icons.js?v=df92c23b45e2';
-import { noteProgress, resetProgress } from '../progress-delta.js?v=df92c23b45e2';
-import { formatEta } from '../inference-args.js?v=df92c23b45e2';
-import { showLoading, showLoadingProgress, hideLoading } from '../loading-overlay.js?v=df92c23b45e2';
-import { el, button, icon as baseIcon } from './dom.js?v=df92c23b45e2';
-import { createAssignment, modelOfView, perViewModelPaths } from '../inference-model-assignment.js?v=df92c23b45e2';
+} from '../../pose/connect/remote-inference-plan.js?v=b06a5a85e413';
+import { openRemoteFileBrowser } from './remote-file-browser.js?v=b06a5a85e413';
+import { state } from '../app-state.js?v=b06a5a85e413';
+import { mergeViewPredictions } from '../inference-merge.js?v=b06a5a85e413';
+import { railIconSvg } from '../panel-rail-icons.js?v=b06a5a85e413';
+import { noteProgress, resetProgress } from '../progress-delta.js?v=b06a5a85e413';
+import { formatEta } from '../inference-args.js?v=b06a5a85e413';
+import { showLoading, showLoadingProgress, hideLoading } from '../loading-overlay.js?v=b06a5a85e413';
+import { el, button, icon as baseIcon } from './dom.js?v=b06a5a85e413';
+import { createAssignment, modelOfView, perViewModelPaths } from '../inference-model-assignment.js?v=b06a5a85e413';
 
 function icon(name, cls) { return baseIcon(name, cls, 'inf-icon'); }
 function basename(p) { return String(p).split(/[\\/]/).pop(); }

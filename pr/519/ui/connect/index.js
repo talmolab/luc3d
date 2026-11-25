@@ -9,14 +9,14 @@
  */
 import {
     useConnectStore, configureConnect, installConnectStorageSync,
-} from '../../pose/connect/store.js?v=df92c23b45e2';
-import { registerPanelRailPanel, showPanelTab } from '../panel-rail.js?v=df92c23b45e2';
-import { notify } from './notify.js?v=df92c23b45e2';
-import { createConnectPanel } from './connect-panel.js?v=df92c23b45e2';
-import { registerIrohSocketFactory, registerIrohBlobFetcher } from '../../pose/connect/transport.js?v=df92c23b45e2';
-import { createIrohSocketFactory } from '../../pose/connect/iroh-socket.js?v=df92c23b45e2';
-import { fetchBlobOverIroh } from '../../pose/connect/iroh-blob.js?v=df92c23b45e2';
-import { releaseVersion } from './dom.js?v=df92c23b45e2';
+} from '../../pose/connect/store.js?v=b06a5a85e413';
+import { registerPanelRailPanel, showPanelTab } from '../panel-rail.js?v=b06a5a85e413';
+import { notify } from './notify.js?v=b06a5a85e413';
+import { createConnectPanel } from './connect-panel.js?v=b06a5a85e413';
+import { registerIrohSocketFactory, registerIrohBlobFetcher } from '../../pose/connect/transport.js?v=b06a5a85e413';
+import { createIrohSocketFactory } from '../../pose/connect/iroh-socket.js?v=b06a5a85e413';
+import { fetchBlobOverIroh } from '../../pose/connect/iroh-blob.js?v=b06a5a85e413';
+import { releaseVersion } from './dom.js?v=b06a5a85e413';
 
 const CONNECT_TAB_ID = 'tabConnect';
 
@@ -56,7 +56,7 @@ export function setConnectWindowOpener(fn) {
  * @param {{workerId?: string}} [opts]
  */
 function openConnectWindowLazy(opts) {
-    return import('./connect-window.js?v=df92c23b45e2').then(
+    return import('./connect-window.js?v=b06a5a85e413').then(
         function (m) { m.openConnectWindow(opts); },
         function (err) { console.warn('[connect] could not open the Connect window:', err); focusConnectPanel(); });
 }

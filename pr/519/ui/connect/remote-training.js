@@ -16,11 +16,11 @@
  *    on with the next model, as locally); Cancel sends `mode:"cancel"` to every active train job
  *    of this run.
  */
-import { useConnectStore, pathRulesFor } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=df92c23b45e2';
-import { defaultOutputDir } from '../../pose/connect/remote-output-dir.js?v=df92c23b45e2';
-import { VIDEO_EXTENSIONS, resolveViewVideos, describeViewStatus, inferLocateRule, sessionRootOf } from '../../pose/connect/remote-inference-plan.js?v=df92c23b45e2';
-import { openRemoteFileBrowser } from './remote-file-browser.js?v=df92c23b45e2';
+import { useConnectStore, pathRulesFor } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=b06a5a85e413';
+import { defaultOutputDir } from '../../pose/connect/remote-output-dir.js?v=b06a5a85e413';
+import { VIDEO_EXTENSIONS, resolveViewVideos, describeViewStatus, inferLocateRule, sessionRootOf } from '../../pose/connect/remote-inference-plan.js?v=b06a5a85e413';
+import { openRemoteFileBrowser } from './remote-file-browser.js?v=b06a5a85e413';
 
 function S() { return useConnectStore.getState(); }
 

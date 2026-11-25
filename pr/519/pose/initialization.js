@@ -10,42 +10,42 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
-         hasRealVideo, isViewDocked, VIEW_NAMES } from '../ui/app-state.js?v=df92c23b45e2';
-import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=df92c23b45e2';
+         hasRealVideo, isViewDocked, VIEW_NAMES } from '../ui/app-state.js?v=b06a5a85e413';
+import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=b06a5a85e413';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
     reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
-} from './triangulation.js?v=df92c23b45e2';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=df92c23b45e2';
-import { rebuildVideoController } from '../loading/session-loader.js?v=df92c23b45e2';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=df92c23b45e2';
-import { resetPlaneState } from '../import-export/plane-metadata.js?v=df92c23b45e2';
-import { createDemoSession } from '../demo-data.js?v=df92c23b45e2';
-import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel } from '../ui/ui-wiring.js?v=df92c23b45e2';
-import { setupPanelRail } from '../ui/panel-rail.js?v=df92c23b45e2';
-import { installInfoTips } from '../ui/info-tip.js?v=df92c23b45e2';
-import { installNodeTooltip } from '../ui/node-tooltip.js?v=df92c23b45e2';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=df92c23b45e2';
-import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=df92c23b45e2';
-import { setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=df92c23b45e2';
-import { setupRecordingInfo } from '../ui/recording-info.js?v=df92c23b45e2';
+} from './triangulation.js?v=b06a5a85e413';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=b06a5a85e413';
+import { rebuildVideoController } from '../loading/session-loader.js?v=b06a5a85e413';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=b06a5a85e413';
+import { resetPlaneState } from '../import-export/plane-metadata.js?v=b06a5a85e413';
+import { createDemoSession } from '../demo-data.js?v=b06a5a85e413';
+import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData, toggleInfoPanel } from '../ui/ui-wiring.js?v=b06a5a85e413';
+import { setupPanelRail } from '../ui/panel-rail.js?v=b06a5a85e413';
+import { installInfoTips } from '../ui/info-tip.js?v=b06a5a85e413';
+import { installNodeTooltip } from '../ui/node-tooltip.js?v=b06a5a85e413';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=b06a5a85e413';
+import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=b06a5a85e413';
+import { setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=b06a5a85e413';
+import { setupRecordingInfo } from '../ui/recording-info.js?v=b06a5a85e413';
 import {
     setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
-} from '../ui/plane-definition.js?v=df92c23b45e2';
-import { setupSplitHandles } from '../ui/layout-controls.js?v=df92c23b45e2';
-import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=df92c23b45e2';
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=df92c23b45e2';
+} from '../ui/plane-definition.js?v=b06a5a85e413';
+import { setupSplitHandles } from '../ui/layout-controls.js?v=b06a5a85e413';
+import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=b06a5a85e413';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=b06a5a85e413';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
     editGroupState, cancelEditGroup, finishEditGroup, updateEditGroupToast,
     purgeTriangulationDataForGroup,
-} from '../ui/identity-assignment.js?v=df92c23b45e2';
-import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=df92c23b45e2';
-import { Viewport3D } from '../ui/viewport3d.js?v=df92c23b45e2';
-import { viewport3DDisplayOptions } from '../ui/viewport3d-options.js?v=df92c23b45e2';
-import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=df92c23b45e2';
-import { Timeline } from '../ui/timeline.js?v=df92c23b45e2';
-import { InteractionManager } from '../ui/interaction.js?v=df92c23b45e2';
+} from '../ui/identity-assignment.js?v=b06a5a85e413';
+import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=b06a5a85e413';
+import { Viewport3D } from '../ui/viewport3d.js?v=b06a5a85e413';
+import { viewport3DDisplayOptions } from '../ui/viewport3d-options.js?v=b06a5a85e413';
+import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=b06a5a85e413';
+import { Timeline } from '../ui/timeline.js?v=b06a5a85e413';
+import { InteractionManager } from '../ui/interaction.js?v=b06a5a85e413';
 
 // ============================================
 // Logging
@@ -89,20 +89,20 @@ async function init() {
         // paired SLEAP Connect worker everywhere (the only backend on the web). A literal dynamic
         // import after the rail exists, so cold start is unchanged; it touches `window.lucidDesktop`
         // only inside its own desktop checks.
-        const inferencePanelDone = import('../ui/inference-panel.js?v=df92c23b45e2')
+        const inferencePanelDone = import('../ui/inference-panel.js?v=b06a5a85e413')
             .then(function (m) { return m.setupInferencePanel(); })
             .catch(function (e) { console.warn('[inference] panel not added:', e); });
         // The Training panel (sleap-app's order: right after Inference): training on a paired
         // SLEAP Connect worker everywhere. Same literal dynamic import, after the Inference panel
         // settles so the rail order is always the same; failing to load it changes nothing else.
-        const trainingPanelDone = inferencePanelDone.then(function () { return import('../ui/training-panel.js?v=df92c23b45e2'); })
+        const trainingPanelDone = inferencePanelDone.then(function () { return import('../ui/training-panel.js?v=b06a5a85e413'); })
             .then(function (m) { return m.setupTrainingPanel(); })
             .catch(function (e) { console.warn('[training] panel not added:', e); });
         // SLEAP Connect (remote GPU workers): the rail's Connect panel, in the
         // web app and the desktop app. Fetched after the rail exists; failing
         // to load it leaves the rest of the app untouched. Added after the
         // Inference and Training panels settle so the rail order is always the same.
-        trainingPanelDone.then(function () { return import('../ui/connect/index.js?v=df92c23b45e2'); })
+        trainingPanelDone.then(function () { return import('../ui/connect/index.js?v=b06a5a85e413'); })
             .then(function (m) { return m.setupConnect(); })
             .catch(function (e) { console.warn('[connect] panel not added:', e); });
 

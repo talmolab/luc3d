@@ -14,16 +14,16 @@
  *  - z-index under the toasts, the dialogs it opens, a progress card and the ask dialogs (see styles.css);
  *  - confirms go through `ui/ask.js` (outside the desktop shell: `window.confirm`, without sleap-app's titles).
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { shallowEqual } from '../../pose/connect/mini-store.js?v=df92c23b45e2';
-import { createWorkerList } from './worker-list.js?v=df92c23b45e2';
-import { createSidebarQueue } from './sidebar-queue.js?v=df92c23b45e2';
-import { createWorkerDevicesButton } from './worker-devices.js?v=df92c23b45e2';
-import { createWorkerJobs } from './worker-jobs.js?v=df92c23b45e2';
-import { createWorkerDataAccess } from './worker-data-access.js?v=df92c23b45e2';
-import { forgetWorkerWithConfirm } from './connect-panel.js?v=df92c23b45e2';
-import { trapModal } from './layers.js?v=df92c23b45e2';
-import { el, button, icon } from './dom.js?v=df92c23b45e2';
+import { useConnectStore } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { shallowEqual } from '../../pose/connect/mini-store.js?v=b06a5a85e413';
+import { createWorkerList } from './worker-list.js?v=b06a5a85e413';
+import { createSidebarQueue } from './sidebar-queue.js?v=b06a5a85e413';
+import { createWorkerDevicesButton } from './worker-devices.js?v=b06a5a85e413';
+import { createWorkerJobs } from './worker-jobs.js?v=b06a5a85e413';
+import { createWorkerDataAccess } from './worker-data-access.js?v=b06a5a85e413';
+import { forgetWorkerWithConfirm } from './connect-panel.js?v=b06a5a85e413';
+import { trapModal } from './layers.js?v=b06a5a85e413';
+import { el, button, icon } from './dom.js?v=b06a5a85e413';
 
 let current = null;
 

@@ -18,18 +18,18 @@
  *  - `clientDisplayName`/`clientAgentLabel` name a device's client by its hello agent (sleap-app hardcodes `sleap-app <version>`).
  *  - Tailwind class strings kept verbatim; LUCID's CSS keys off `bucket` / the status.
  *
- * @typedef {import("./job-groups.js?v=df92c23b45e2").JobSummary} JobSummary
- * @typedef {import("./remote-visibility.js?v=df92c23b45e2").VideoVisibility} VideoVisibility
+ * @typedef {import("./job-groups.js?v=b06a5a85e413").JobSummary} JobSummary
+ * @typedef {import("./remote-visibility.js?v=b06a5a85e413").VideoVisibility} VideoVisibility
  * @typedef {{ title: string, message: string, confirmLabel: string, cancelLabel?: string, destructive?: boolean }} ConfirmRequest
  * @typedef {"idle" | "busy" | "offline"} WorkerStatusBucket
  * @typedef {{ bucket: WorkerStatusBucket, dotClass: string, label: string, identityMismatch: boolean, unpaired?: boolean }} WorkerStatusInfo
  */
-import { WorkerProtocolError, PROTO_UNKNOWN_METHOD } from "./errors.js?v=df92c23b45e2";
-import { DEVICE_NAME_MAX } from "./device-name.js?v=df92c23b45e2";
-import { classifyVisibility } from "./remote-visibility.js?v=df92c23b45e2";
-import { modelRunTimestamp, timeAgo } from "./timestamp.js?v=df92c23b45e2";
-import { decodePairCode, isPairCode } from "./pair-code.js?v=df92c23b45e2";
-import { parseTicketIroh } from "./transport.js?v=df92c23b45e2";
+import { WorkerProtocolError, PROTO_UNKNOWN_METHOD } from "./errors.js?v=b06a5a85e413";
+import { DEVICE_NAME_MAX } from "./device-name.js?v=b06a5a85e413";
+import { classifyVisibility } from "./remote-visibility.js?v=b06a5a85e413";
+import { modelRunTimestamp, timeAgo } from "./timestamp.js?v=b06a5a85e413";
+import { decodePairCode, isPairCode } from "./pair-code.js?v=b06a5a85e413";
+import { parseTicketIroh } from "./transport.js?v=b06a5a85e413";
 
 export { DEVICE_NAME_MAX };
 

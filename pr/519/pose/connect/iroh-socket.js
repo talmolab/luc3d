@@ -34,7 +34,7 @@
  * Registered at startup by `ui/connect/index.js`:
  * `registerIrohSocketFactory(createIrohSocketFactory(() => window.lucidDesktop.iroh))`.
  */
-import { decodeIrohDialUrl, encodeIrohDialUrl } from "./transport.js?v=df92c23b45e2";
+import { decodeIrohDialUrl, encodeIrohDialUrl } from "./transport.js?v=b06a5a85e413";
 
 export { encodeIrohDialUrl };
 

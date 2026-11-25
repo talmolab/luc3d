@@ -38,9 +38,9 @@
  *
  * Imports only inside `pose/connect/` (Node tests: tests/test-connect-remote-inference-plan.mjs).
  */
-import { isWorkerPath, translatePath } from "./path-mappings.js?v=df92c23b45e2";
-import { checkVideoVisibility, inferRuleFromLocate } from "./remote-visibility.js?v=df92c23b45e2";
-import { buildRemoteTrackSpecs } from "./remote-track-spec.js?v=df92c23b45e2";
+import { isWorkerPath, translatePath } from "./path-mappings.js?v=b06a5a85e413";
+import { checkVideoVisibility, inferRuleFromLocate } from "./remote-visibility.js?v=b06a5a85e413";
+import { buildRemoteTrackSpecs } from "./remote-track-spec.js?v=b06a5a85e413";
 
 export const VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv", ".m4v"];
 

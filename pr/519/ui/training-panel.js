@@ -44,37 +44,37 @@
  * Loaded on every build: `pose/initialization.js` imports it after the Inference panel. It talks
  * to native code only through `window.lucidDesktop`, inside `setupTrainingPanel`.
  */
-import { state } from './app-state.js?v=df92c23b45e2';
-import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=df92c23b45e2';
-import { railIconSvg } from './panel-rail-icons.js?v=df92c23b45e2';
-import { noteProgress, resetProgress } from './progress-delta.js?v=df92c23b45e2';
-import { askConfirm } from './ask.js?v=df92c23b45e2';
-import { createPanelForm, el, icon, button } from './panel-form.js?v=df92c23b45e2';
+import { state } from './app-state.js?v=b06a5a85e413';
+import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=b06a5a85e413';
+import { railIconSvg } from './panel-rail-icons.js?v=b06a5a85e413';
+import { noteProgress, resetProgress } from './progress-delta.js?v=b06a5a85e413';
+import { askConfirm } from './ask.js?v=b06a5a85e413';
+import { createPanelForm, el, icon, button } from './panel-form.js?v=b06a5a85e413';
 import {
     MODEL_TYPE_OPTIONS, MODEL_TYPE_HINT, DEFAULT_MODEL_TYPE, getConfigSlots, getSlotLabel, slotToHeadType, headLabel,
     profilesForHead, defaultProfile, detectHeadType, hyperparamsFromConfig, applyPanelSettings, finalizeConfig,
     anchorChoices, ROTATION_OPTIONS, MAX_EPOCHS_HINT, BATCH_SIZE_HINT, ROTATION_HINT, SCALE_HINT, ANCHOR_HINT,
     detectTrainingMode, applyTrainingMode, checkpointProblem, pickCheckpointFile,
-} from './training-args.js?v=df92c23b45e2';
-import { BASELINE_PROFILES } from '../lib/sleap-app-profiles/profiles.js?v=df92c23b45e2';
-import { trainingGroups, groupModelLabel, trainingRunName, DEFAULT_GROUP_MODE } from '../pose/training-groups.js?v=df92c23b45e2';
-import { idModelProblem, interpolationProblem, isIdModelType, isBoxModelType } from '../pose/training-data.js?v=df92c23b45e2';
-import { recommendPipeline, skeletonCompatibility, arborescenceProblems, arborescenceMessage } from '../pose/training-recommend.js?v=df92c23b45e2';
-import { countUserLabels, collectGroupLabels, buildTrainingLabels, trainingSlpBytes } from '../import-export/training-slp.js?v=df92c23b45e2';
-import { findSkeletonMismatch } from '../import-export/file-io.js?v=df92c23b45e2';
-import { createBackendPicker } from './connect/backend-picker.js?v=df92c23b45e2';
-import { createRemoteTraining } from './connect/remote-training.js?v=df92c23b45e2';
-import { bytesToBase64, payloadCheck, buildTrainSpec, initialRows, rowWithTelemetry, finishRow, rowText } from '../pose/connect/remote-training-plan.js?v=df92c23b45e2';
-import { configureConnect } from '../pose/connect/store.js?v=df92c23b45e2';
-import { formatRunTimestamp, formatDuration } from '../pose/connect/timestamp.js?v=df92c23b45e2';
-import { plateauSettings } from '../pose/training-metrics.js?v=df92c23b45e2';
-import { openTrainingMonitor, trainingMonitor } from './training-monitor.js?v=df92c23b45e2';
-import { rowWithLocalProgress } from '../pose/training-local-progress.js?v=df92c23b45e2';
+} from './training-args.js?v=b06a5a85e413';
+import { BASELINE_PROFILES } from '../lib/sleap-app-profiles/profiles.js?v=b06a5a85e413';
+import { trainingGroups, groupModelLabel, trainingRunName, DEFAULT_GROUP_MODE } from '../pose/training-groups.js?v=b06a5a85e413';
+import { idModelProblem, interpolationProblem, isIdModelType, isBoxModelType } from '../pose/training-data.js?v=b06a5a85e413';
+import { recommendPipeline, skeletonCompatibility, arborescenceProblems, arborescenceMessage } from '../pose/training-recommend.js?v=b06a5a85e413';
+import { countUserLabels, collectGroupLabels, buildTrainingLabels, trainingSlpBytes } from '../import-export/training-slp.js?v=b06a5a85e413';
+import { findSkeletonMismatch } from '../import-export/file-io.js?v=b06a5a85e413';
+import { createBackendPicker } from './connect/backend-picker.js?v=b06a5a85e413';
+import { createRemoteTraining } from './connect/remote-training.js?v=b06a5a85e413';
+import { bytesToBase64, payloadCheck, buildTrainSpec, initialRows, rowWithTelemetry, finishRow, rowText } from '../pose/connect/remote-training-plan.js?v=b06a5a85e413';
+import { configureConnect } from '../pose/connect/store.js?v=b06a5a85e413';
+import { formatRunTimestamp, formatDuration } from '../pose/connect/timestamp.js?v=b06a5a85e413';
+import { plateauSettings } from '../pose/training-metrics.js?v=b06a5a85e413';
+import { openTrainingMonitor, trainingMonitor } from './training-monitor.js?v=b06a5a85e413';
+import { rowWithLocalProgress } from '../pose/training-local-progress.js?v=b06a5a85e413';
 import { POST_TRAINING_TARGETS, POST_TRAINING_DEFAULTS, POST_TRAINING_TARGET_HINT, inferencePipelineFor, trainedModels,
-    skeletonChangeProblem } from '../pose/training-handoff.js?v=df92c23b45e2';
-import { runTrainedModels, showInferencePanel } from './inference-panel.js?v=df92c23b45e2';
-import { openTrainingConfigDialog, trainingConfigDialog } from './training-config-dialog.js?v=df92c23b45e2';
-import { openTrainingMetricsDialog } from './training-metrics-dialog.js?v=df92c23b45e2';
+    skeletonChangeProblem } from '../pose/training-handoff.js?v=b06a5a85e413';
+import { runTrainedModels, showInferencePanel } from './inference-panel.js?v=b06a5a85e413';
+import { openTrainingConfigDialog, trainingConfigDialog } from './training-config-dialog.js?v=b06a5a85e413';
+import { openTrainingMetricsDialog } from './training-metrics-dialog.js?v=b06a5a85e413';
 
 export const TRAINING_TAB_ID = 'tabTraining';
 

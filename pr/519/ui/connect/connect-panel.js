@@ -10,15 +10,15 @@
  *    standing in for sleap-app's unmount whenever it is hidden;
  *  - the Open button calls the `openConnectWindow` handed in; Forget confirms through `ui/ask.js`.
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { forgetWorkerConfirm } from '../../pose/connect/worker-ui-helpers.js?v=df92c23b45e2';
-import { preferredTransport } from '../../pose/connect/pairing-plan.js?v=df92c23b45e2';
-import { irohTransportAvailable, transportLabel } from '../../pose/connect/transport.js?v=df92c23b45e2';
-import { shallowEqual } from '../../pose/connect/mini-store.js?v=df92c23b45e2';
-import { getClientIdentity } from '../../pose/connect/identity.js?v=df92c23b45e2';
-import { askConfirm } from '../ask.js?v=df92c23b45e2';
-import { createPairWorkerForm } from './pair-worker-form.js?v=df92c23b45e2';
-import { el, button, icon } from './dom.js?v=df92c23b45e2';
+import { useConnectStore } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { forgetWorkerConfirm } from '../../pose/connect/worker-ui-helpers.js?v=b06a5a85e413';
+import { preferredTransport } from '../../pose/connect/pairing-plan.js?v=b06a5a85e413';
+import { irohTransportAvailable, transportLabel } from '../../pose/connect/transport.js?v=b06a5a85e413';
+import { shallowEqual } from '../../pose/connect/mini-store.js?v=b06a5a85e413';
+import { getClientIdentity } from '../../pose/connect/identity.js?v=b06a5a85e413';
+import { askConfirm } from '../ask.js?v=b06a5a85e413';
+import { createPairWorkerForm } from './pair-worker-form.js?v=b06a5a85e413';
+import { el, button, icon } from './dom.js?v=b06a5a85e413';
 
 /** Forget after the user confirms (forgetWorker.ts `forgetWorkerWithConfirm`). Resolves whether it was forgotten. */
 const forgetting = new Set();

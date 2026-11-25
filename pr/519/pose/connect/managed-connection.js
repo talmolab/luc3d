@@ -21,7 +21,7 @@
  * registered).
  */
 
-import { AUTH_UNTRUSTED, CLIENT_CLOSED, WorkerProtocolError } from "./errors.js?v=df92c23b45e2";
+import { AUTH_UNTRUSTED, CLIENT_CLOSED, WorkerProtocolError } from "./errors.js?v=b06a5a85e413";
 
 /**
  * `unpaired`: the worker refused this device (`auth.untrusted`) — it was
@@ -30,9 +30,9 @@ import { AUTH_UNTRUSTED, CLIENT_CLOSED, WorkerProtocolError } from "./errors.js?
  * @typedef {"connecting" | "connected" | "reconnecting" | "offline" | "stopped" | "unpaired"} LinkStatus
  */
 
-/** @typedef {import("./transport.js?v=df92c23b45e2").TransportKind} TransportKind */
-/** @typedef {import("./client.js?v=df92c23b45e2").WorkerClient} WorkerClient */
-/** @typedef {import("./client.js?v=df92c23b45e2").CloseInfo} CloseInfo */
+/** @typedef {import("./transport.js?v=b06a5a85e413").TransportKind} TransportKind */
+/** @typedef {import("./client.js?v=b06a5a85e413").WorkerClient} WorkerClient */
+/** @typedef {import("./client.js?v=b06a5a85e413").CloseInfo} CloseInfo */
 
 /**
  * @typedef {object} ManagedConnectionDeps

@@ -11,9 +11,9 @@
  * `data-shortcut-modal`, one scroller each); "Add Trained Model(s)…" only where a folder can be picked
  * (desktop); the boxplot is drawn with the theme's colours.
  */
-import { buildModelMetricsRow, labeledMetrics, computeNodeBoxplots, distanceAxisMax, runDirName } from '../pose/training-model-metrics.js?v=df92c23b45e2';
-import { trapModal } from './connect/layers.js?v=df92c23b45e2';
-import { el, button } from './panel-form.js?v=df92c23b45e2';
+import { buildModelMetricsRow, labeledMetrics, computeNodeBoxplots, distanceAxisMax, runDirName } from '../pose/training-model-metrics.js?v=b06a5a85e413';
+import { trapModal } from './connect/layers.js?v=b06a5a85e413';
+import { el, button } from './panel-form.js?v=b06a5a85e413';
 
 const COLUMNS = ['Path', 'Timestamp', 'Model Type', 'Architecture', 'OKS mAP', 'Vis Precision', 'Vis Recall', 'Dist 95%', 'Dist 75%', 'Dist Avg'];
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -150,8 +150,10 @@ function openDetail(row) {
     const m = row.metrics;
     if (!m) k.body.appendChild(el('p', 'tmd-empty', 'This run has no metrics file (metrics.val.0.json). sleap-nn writes it when training ends.'));
     if (m && m.distance && m.distance.dists.length) {
-        k.body.appendChild(el('h3', 'tmd-h3', 'Distance between ground truth and prediction, per node (px)'));
-        k.body.appendChild(boxplotSvg(computeNodeBoxplots(m.distance.dists, row.nodeNames), distanceAxisMax(m.distance.dists)));
+        const perNode = m.distance.perNode !== false;
+        k.body.appendChild(el('h3', 'tmd-h3', perNode ? 'Distance between ground truth and prediction, per node (px)'
+            : 'Distance between ground truth and predicted centroids (px)'));
+        k.body.appendChild(boxplotSvg(computeNodeBoxplots(m.distance.dists, perNode ? row.nodeNames : ['centroid']), distanceAxisMax(m.distance.dists)));
     }
     const list = labeledMetrics(m);
     if (list.length) {

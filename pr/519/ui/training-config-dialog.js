@@ -18,11 +18,11 @@
  * Vanilla DOM card: Esc / Done / scrim close, Tab trapped, `data-shortcut-modal`. One scroller (the
  * content column).
  */
-import { CONFIG_FIELDS, SECTIONS, searchFields, coerce } from './training-config-fields.js?v=df92c23b45e2';
-import { trapModal } from './connect/layers.js?v=df92c23b45e2';
-import { el, button, createPanelForm } from './panel-form.js?v=df92c23b45e2';
-import { askConfirm } from './ask.js?v=df92c23b45e2';
-import { TRAINING_MODES } from './training-args.js?v=df92c23b45e2';
+import { CONFIG_FIELDS, SECTIONS, searchFields, coerce } from './training-config-fields.js?v=b06a5a85e413';
+import { trapModal } from './connect/layers.js?v=b06a5a85e413';
+import { el, button, createPanelForm } from './panel-form.js?v=b06a5a85e413';
+import { askConfirm } from './ask.js?v=b06a5a85e413';
+import { TRAINING_MODES } from './training-args.js?v=b06a5a85e413';
 
 let open = null;
 

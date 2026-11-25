@@ -13,21 +13,21 @@
  *  - a worker .slp is not read (no summary, no Random sample): that needs SharedArrayBuffer;
  *  - vanilla DOM modal (Esc closes, Tab trapped, `data-shortcut-modal`).
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=df92c23b45e2';
+import { useConnectStore } from '../../pose/connect/store.js?v=b06a5a85e413';
 import {
     WORKER_FILE_INFERENCE_TARGETS, basename, groupCompletedRuns, labelPastRuns,
-} from '../../pose/connect/worker-ui-helpers.js?v=df92c23b45e2';
-import { timeAgo } from '../../pose/connect/timestamp.js?v=df92c23b45e2';
+} from '../../pose/connect/worker-ui-helpers.js?v=b06a5a85e413';
+import { timeAgo } from '../../pose/connect/timestamp.js?v=b06a5a85e413';
 import {
     VIDEO_EXTENSIONS, buildWorkerFileSpecs, fileSourceBlocker, inferenceTargetsFor,
     seedWizardFromRun, workerFileKind,
-} from '../../pose/connect/new-job-plan.js?v=df92c23b45e2';
-import { INFERENCE_DEFAULTS } from '../inference-args.js?v=df92c23b45e2';
-import { state as appState } from '../app-state.js?v=df92c23b45e2';
-import { openRemoteFileBrowser } from './remote-file-browser.js?v=df92c23b45e2';
-import { notify } from './notify.js?v=df92c23b45e2';
-import { trapModal } from './layers.js?v=df92c23b45e2';
-import { el, button } from './dom.js?v=df92c23b45e2';
+} from '../../pose/connect/new-job-plan.js?v=b06a5a85e413';
+import { INFERENCE_DEFAULTS } from '../inference-args.js?v=b06a5a85e413';
+import { state as appState } from '../app-state.js?v=b06a5a85e413';
+import { openRemoteFileBrowser } from './remote-file-browser.js?v=b06a5a85e413';
+import { notify } from './notify.js?v=b06a5a85e413';
+import { trapModal } from './layers.js?v=b06a5a85e413';
+import { el, button } from './dom.js?v=b06a5a85e413';
 
 export { seedWizardFromRun, groupCompletedRuns, labelPastRuns, WORKER_FILE_INFERENCE_TARGETS };
 
@@ -357,7 +357,7 @@ export function openNewJobWizard(opts) {
                 if (now.selectedWorkerId !== workerId || now.connectionStatus !== 'connected') {
                     throw new Error('Connect to ' + workerLabel + ' first.');
                 }
-                const mod = await import('../inference-panel.js?v=df92c23b45e2');
+                const mod = await import('../inference-panel.js?v=b06a5a85e413');
                 r = await mod.runRemoteInferenceWithModels(st.modelDirs.slice());
             } finally {
                 if (prev && prev !== workerId) {

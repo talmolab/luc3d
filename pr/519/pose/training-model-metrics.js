@@ -11,7 +11,9 @@
  * (tests/test-training-model-metrics.mjs).
  *
  * LUCID changes: the YAML parser is injected too (`parseYaml`, the importmap's `yaml`); `voc_metrics` is read
- * both as sleap-nn's flat keys (`"oks_voc.mAP"`) and nested (`oks_voc: {mAP}`).
+ * both as sleap-nn's flat keys (`"oks_voc.mAP"`) and nested (`oks_voc: {mAP}`); a centroid model's metrics are
+ * shown too: `detection_metrics` (precision / recall / F1 / counts) and its distances, one per matched animal
+ * (`distance.perNode === false`), as ONE "centroid" box (sleap-app reads them as empty node rows).
  */
 
 function num(v) { return typeof v === 'number' && Number.isFinite(v) ? v : null; }
@@ -40,8 +42,12 @@ function voc(v, family, key) {
 
 function normalizeDistance(raw) {
     if (!raw) return undefined;
-    const dists = (Array.isArray(raw.dists) ? raw.dists : []).map(function (row) { return Array.isArray(row) ? row.map(num) : []; });
+    const list = Array.isArray(raw.dists) ? raw.dists : [];
+    // A centroid model's distances are one number per matched animal, not a row per instance of node distances.
+    const perNode = !list.length || list.some(function (row) { return Array.isArray(row); });
+    const dists = list.map(function (row) { return Array.isArray(row) ? row.map(num) : perNode ? [] : [num(row)]; });
     return {
+        perNode: perNode,
         avg: num(raw.avg), p50: num(raw.p50), p75: num(raw.p75), p90: num(raw.p90), p95: num(raw.p95), p99: num(raw.p99),
         dists: dists,
         frame_idxs: (Array.isArray(raw.frame_idxs) ? raw.frame_idxs : []).map(count),
@@ -57,6 +63,7 @@ export function normalizeMetrics(raw, split) {
     const mode = vocRaw ? 'oks' : o.mask_metrics ? 'mask' : o.semantic_metrics ? 'semantic' : distRaw ? 'centroid' : 'unknown';
     const pck = obj(o.pck_metrics);
     const vis = obj(o.visibility_metrics);
+    const det = obj(o.detection_metrics);
     let mOKS;
     if ('mOKS' in o) mOKS = obj(o.mOKS) ? num(o.mOKS.mOKS) : num(o.mOKS);
     return {
@@ -70,6 +77,8 @@ export function normalizeMetrics(raw, split) {
         distance: normalizeDistance(distRaw),
         pck: pck ? { mPCK: num(pck.mPCK), pck5: num(pck['PCK@5']), pck10: num(pck['PCK@10']) } : undefined,
         visibility: vis ? { tp: count(vis.tp), fp: count(vis.fp), tn: count(vis.tn), fn: count(vis.fn), precision: num(vis.precision), recall: num(vis.recall) } : undefined,
+        // A centroid model's detection quality (sleap-nn's centroid mode); sleap-app does not show it.
+        detection: det ? { precision: num(det.precision), recall: num(det.recall), f1: num(det.f1), tp: count(det.n_tp), fp: count(det.n_fp), fn: count(det.n_fn) } : undefined,
         raw: o,
     };
 }
@@ -167,8 +176,11 @@ export async function buildModelMetricsRow(runDir, io) {
 /** sleap-app's detailed list: classic SLEAP `METRICS_KEY_LABELS`, in order. */
 export function labeledMetrics(m) {
     if (!m) return [];
-    const v = m.voc, d = m.distance, p = m.pck, s = m.visibility;
+    const v = m.voc, d = m.distance, p = m.pck, s = m.visibility, dt = m.detection;
     return [
+        ['Detection - Precision', dt ? dt.precision : null], ['Detection - Recall', dt ? dt.recall : null],
+        ['Detection - F1', dt ? dt.f1 : null], ['Detection - True Positives', dt ? dt.tp : null],
+        ['Detection - False Positives', dt ? dt.fp : null], ['Detection - False Negatives', dt ? dt.fn : null],
         ['Visibility - True Positives', s ? s.tp : null], ['Visibility - False Positives', s ? s.fp : null],
         ['Visibility - True Negatives', s ? s.tn : null], ['Visibility - False Negatives', s ? s.fn : null],
         ['Visibility - Precision', s ? s.precision : null], ['Visibility - Recall', s ? s.recall : null],

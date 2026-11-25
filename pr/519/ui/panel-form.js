@@ -8,8 +8,8 @@
  * for now). A form is created per panel with its `isBusy` (disables every control while a run is
  * going) and `refresh`.
  */
-import { setInfoTip } from './info-tip.js?v=df92c23b45e2';
-import { railIconSvg } from './panel-rail-icons.js?v=df92c23b45e2';
+import { setInfoTip } from './info-tip.js?v=b06a5a85e413';
+import { railIconSvg } from './panel-rail-icons.js?v=b06a5a85e413';
 
 const INFO_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" ' +
     'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/>' +

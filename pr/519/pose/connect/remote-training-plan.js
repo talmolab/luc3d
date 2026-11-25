@@ -29,7 +29,7 @@
  *
  * Imports only inside `pose/connect/` (Node tests: tests/test-remote-training-plan.mjs).
  */
-import { emptyModelProgress, applyTelemetry, withEpochSize } from './job-stream.js?v=df92c23b45e2';
+import { emptyModelProgress, applyTelemetry, withEpochSize } from './job-stream.js?v=b06a5a85e413';
 
 export const REMOTE_LABELS_WARN_BYTES = 10 * 1024 * 1024;
 export const REMOTE_LABELS_MAX_BYTES = 150 * 1024 * 1024;

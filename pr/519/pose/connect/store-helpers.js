@@ -30,7 +30,7 @@
  *    `pathRulesFor`, `resolvePreferredTransport`, `endCurrentRun`, `leaveWorker`, `applyShared`,
  *    `dropWorkerLocally`, `localStore`, `readSessionSelection`, `writeSessionSelection`.
  *
- * @typedef {import("./connect-sync.js?v=df92c23b45e2").SharedConnectState} SharedConnectState
+ * @typedef {import("./connect-sync.js?v=b06a5a85e413").SharedConnectState} SharedConnectState
  * @typedef {{ jobId: string, state: string, run?: { id: string, index?: number } } & Record<string, any>} JobSummary
  * @typedef {{ workerId: string, jobId: string, lastSeq: number, kind: "train" | "track", label: string,
  *   source: "window" | "worker-file", state: "active" | "completed" | "failed" | "canceled",
@@ -38,7 +38,7 @@
  * @typedef {"disconnected" | "connecting" | "connected" | "reconnecting" | "error"} ConnectionStatus
  * @typedef {"ws" | "iroh"} TransportKind
  */
-import { hydraQuote } from "./launcher-spec.js?v=df92c23b45e2";
+import { hydraQuote } from "./launcher-spec.js?v=b06a5a85e413";
 
 // ── Constants ─────────────────────────────────────────────────────
 

@@ -27,7 +27,7 @@
  * @typedef {string} ModelType
  * @typedef {{ filename?: string, content: string, modelType: string, slot: string,
  *   hyperparams: Record<string, any>, checkpointPath?: string | null } & Record<string, any>} ConfigFile
- * @typedef {import("./project-tag.js?v=df92c23b45e2").JobProject} JobProject
+ * @typedef {import("./project-tag.js?v=b06a5a85e413").JobProject} JobProject
  * @typedef {Record<string, any>} TrackJobSpec
  * @typedef {Record<string, any>} TrainJobSpec
  * @typedef {Record<string, any>} InferenceConfig
@@ -43,8 +43,8 @@
  * @property {(content: string, filename: string, slot: string) => ConfigFile | null} [parseYamlConfig] Only `seedFromJobSpec`.
  * @property {() => string} [formatRunTimestamp]
  */
-import { formatRunTimestamp as defaultFormatRunTimestamp } from "./timestamp.js?v=df92c23b45e2";
-import { buildRemoteTrackSpecs as defaultBuildRemoteTrackSpecs } from "./remote-track-spec.js?v=df92c23b45e2";
+import { formatRunTimestamp as defaultFormatRunTimestamp } from "./timestamp.js?v=b06a5a85e413";
+import { buildRemoteTrackSpecs as defaultBuildRemoteTrackSpecs } from "./remote-track-spec.js?v=b06a5a85e413";
 
 /**
  * Quote a value for use inside a Hydra CLI override so that `=`, spaces, commas,

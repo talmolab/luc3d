@@ -39,22 +39,22 @@
  * `window.lucidDesktop` (src-tauri/js/lucid-desktop.js), looked up inside
  * `setupInferencePanel` and never on the web; it imports no desktop code.
  */
-import { state } from './app-state.js?v=df92c23b45e2';
-import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=df92c23b45e2';
-import { railIconSvg } from './panel-rail-icons.js?v=df92c23b45e2';
-import { setInfoTip } from './info-tip.js?v=df92c23b45e2';
-import { noteProgress, resetProgress } from './progress-delta.js?v=df92c23b45e2';
+import { state } from './app-state.js?v=b06a5a85e413';
+import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=b06a5a85e413';
+import { railIconSvg } from './panel-rail-icons.js?v=b06a5a85e413';
+import { setInfoTip } from './info-tip.js?v=b06a5a85e413';
+import { noteProgress, resetProgress } from './progress-delta.js?v=b06a5a85e413';
 import {
     defaultInferenceConfig, INFERENCE_DEFAULTS, targetFrames, sampleFrames, pickInferenceSubcommand,
     parseProgressLine, formatDuration, formatEta, framesToSpec,
-} from './inference-args.js?v=df92c23b45e2';
-import { planInferenceJobs, runJobQueue, joinPath, viewInferenceBlocker } from './inference-jobs.js?v=df92c23b45e2';
-import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=df92c23b45e2';
-import { mergeViewPredictions } from './inference-merge.js?v=df92c23b45e2';
-import { createRemoteInference } from './connect/remote-inference.js?v=df92c23b45e2';
-import { createBackendPicker } from './connect/backend-picker.js?v=df92c23b45e2';
-import { createAssignment, addModel, assignViews, perViewModelPaths, viewsOfModel, modelLabel, pruneViews } from './inference-model-assignment.js?v=df92c23b45e2';
-import { openModelsModal } from './inference-models-modal.js?v=df92c23b45e2';
+} from './inference-args.js?v=b06a5a85e413';
+import { planInferenceJobs, runJobQueue, joinPath, viewInferenceBlocker } from './inference-jobs.js?v=b06a5a85e413';
+import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=b06a5a85e413';
+import { mergeViewPredictions } from './inference-merge.js?v=b06a5a85e413';
+import { createRemoteInference } from './connect/remote-inference.js?v=b06a5a85e413';
+import { createBackendPicker } from './connect/backend-picker.js?v=b06a5a85e413';
+import { createAssignment, addModel, assignViews, perViewModelPaths, viewsOfModel, modelLabel, pruneViews } from './inference-model-assignment.js?v=b06a5a85e413';
+import { openModelsModal } from './inference-models-modal.js?v=b06a5a85e413';
 
 export const INFERENCE_TAB_ID = 'tabInference';
 

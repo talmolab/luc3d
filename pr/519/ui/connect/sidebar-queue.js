@@ -10,17 +10,17 @@
  *  - "my project" = `lucidProjectTag` of the open project, not a path;
  *  - confirms via `ui/ask.js`, toasts via `notify.js`; a response after a worker switch is dropped.
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { groupJobs, isManagedJob, jobTitle, endJobConfirm, queueRunEntries, unfinishedJobs, cancelRunConfirm } from '../../pose/connect/job-groups.js?v=df92c23b45e2';
+import { useConnectStore } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { groupJobs, isManagedJob, jobTitle, endJobConfirm, queueRunEntries, unfinishedJobs, cancelRunConfirm } from '../../pose/connect/job-groups.js?v=b06a5a85e413';
 import {
     failedRunShown, loadDismissedFailedRuns, saveDismissedFailedRuns, DEFAULT_POLL_MS,
-} from '../../pose/connect/worker-ui-helpers.js?v=df92c23b45e2';
-import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=df92c23b45e2';
-import { askConfirm } from '../ask.js?v=df92c23b45e2';
-import { state } from '../app-state.js?v=df92c23b45e2';
-import { notify } from './notify.js?v=df92c23b45e2';
-import { createQueueRunList } from './worker-queue.js?v=df92c23b45e2';
-import { el } from './dom.js?v=df92c23b45e2';
+} from '../../pose/connect/worker-ui-helpers.js?v=b06a5a85e413';
+import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=b06a5a85e413';
+import { askConfirm } from '../ask.js?v=b06a5a85e413';
+import { state } from '../app-state.js?v=b06a5a85e413';
+import { notify } from './notify.js?v=b06a5a85e413';
+import { createQueueRunList } from './worker-queue.js?v=b06a5a85e413';
+import { el } from './dom.js?v=b06a5a85e413';
 
 function storage() {
     try { return window.localStorage; } catch (e) { return null; }

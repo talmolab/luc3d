@@ -10,11 +10,11 @@
  *  - never shows a blank / disabled Local: "Select a worker…", or on the web with nothing paired
  *    sleap-app's empty-state text.
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { shallowEqual } from '../../pose/connect/mini-store.js?v=df92c23b45e2';
-import { transportLabel } from '../../pose/connect/transport.js?v=df92c23b45e2';
-import { setInfoTip } from '../info-tip.js?v=df92c23b45e2';
-import { el, button } from './dom.js?v=df92c23b45e2';
+import { useConnectStore } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { shallowEqual } from '../../pose/connect/mini-store.js?v=b06a5a85e413';
+import { transportLabel } from '../../pose/connect/transport.js?v=b06a5a85e413';
+import { setInfoTip } from '../info-tip.js?v=b06a5a85e413';
+import { el, button } from './dom.js?v=b06a5a85e413';
 
 const LOCAL_VALUE = '__local__';
 

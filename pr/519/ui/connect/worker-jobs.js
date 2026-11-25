@@ -13,22 +13,22 @@
  *  - Run again is hidden on a failed TRAIN job (Inference-only wizard);
  *  - Fetch & Load connects first when needed, then `loadJobPredictions`; confirms via `ui/ask.js`.
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=df92c23b45e2';
+import { useConnectStore } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=b06a5a85e413';
 import {
     isManagedJob, siblingJobIds, jobTitle, canDeleteRun, deleteRunMessage, statusChipFor, jobStatusChip,
     jobTimeLabel, groupTimeLabel, groupJobs, jobMatches, isActiveGroup, unfinishedJobs, cancelRunConfirm,
     endJobConfirm,
-} from '../../pose/connect/job-groups.js?v=df92c23b45e2';
-import { DEFAULT_POLL_MS } from '../../pose/connect/worker-ui-helpers.js?v=df92c23b45e2';
-import { askConfirm } from '../ask.js?v=df92c23b45e2';
-import { railIconSvg } from '../panel-rail-icons.js?v=df92c23b45e2';
-import { notify } from './notify.js?v=df92c23b45e2';
-import { openJobViewer } from './job-viewer.js?v=df92c23b45e2';
-import { loadJobPredictions } from './merge-predictions-dialog.js?v=df92c23b45e2';
-import { openProjectInfo } from './remote-inference.js?v=df92c23b45e2';
-import * as wizard from './new-job-wizard.js?v=df92c23b45e2';
-import { el, button, errMsg } from './dom.js?v=df92c23b45e2';
+} from '../../pose/connect/job-groups.js?v=b06a5a85e413';
+import { DEFAULT_POLL_MS } from '../../pose/connect/worker-ui-helpers.js?v=b06a5a85e413';
+import { askConfirm } from '../ask.js?v=b06a5a85e413';
+import { railIconSvg } from '../panel-rail-icons.js?v=b06a5a85e413';
+import { notify } from './notify.js?v=b06a5a85e413';
+import { openJobViewer } from './job-viewer.js?v=b06a5a85e413';
+import { loadJobPredictions } from './merge-predictions-dialog.js?v=b06a5a85e413';
+import { openProjectInfo } from './remote-inference.js?v=b06a5a85e413';
+import * as wizard from './new-job-wizard.js?v=b06a5a85e413';
+import { el, button, errMsg } from './dom.js?v=b06a5a85e413';
 
 function confirmOpts(req) { return { title: req.title, okLabel: req.confirmLabel, cancelLabel: req.cancelLabel }; }
 

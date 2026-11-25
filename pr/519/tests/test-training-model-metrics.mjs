@@ -73,6 +73,17 @@ assert.equal(list[0], 'Visibility - True Positives');
 assert.ok(list.indexOf('Mean Object Keypoint Similarity (OKS)') > list.indexOf('Average Distance (ground truth vs prediction)'));
 assert.deepEqual(labeledMetrics(null), []);
 
+// §3b a centroid model (sleap-nn centroid mode, the shape of a real run's metrics.val.0.json): detection
+// metrics, and distances one per matched animal → one series, not empty node rows.
+const cen = normalizeMetrics({ detection_metrics: { precision: 0.908, recall: 0.656, f1: 0.76, n_tp: 238, n_fp: 24, n_fn: 125, avg: 19.5 },
+    distance_metrics: { dists: [12.5, 20.1, 31.0], frame_idxs: [1, 2, 3], avg: 19.5, p95: 34.9 } });
+assert.equal(cen.mode, 'centroid');
+assert.equal(cen.distance.perNode, false);
+assert.deepEqual(cen.distance.dists, [[12.5], [20.1], [31.0]]);
+assert.deepEqual(computeNodeBoxplots(cen.distance.dists, ['centroid']).map((b) => [b.node, b.count, b.median]), [['centroid', 3, 20.1]]);
+assert.deepEqual(labeledMetrics(cen).slice(0, 3).map((x) => x.label + '=' + x.value), ['Detection - Precision=0.908', 'Detection - Recall=0.656', 'Detection - F1=0.76']);
+assert.equal(row.metrics.distance.perNode, true, 'a pose model keeps per-node rows');
+
 // §4 boxplots.
 assert.equal(percentileSorted([1, 2, 3, 4], 50), 2.5);
 assert.equal(percentileSorted([5], 95), 5);

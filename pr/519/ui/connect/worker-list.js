@@ -9,13 +9,13 @@
  *  - vanilla DOM from a store selector; Tailwind dot classes become `cw-dot-*`;
  *  - a repaint keeps focus on its card / chip; pairing forms survive repaints and `reset()` when hidden.
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=df92c23b45e2';
-import { shallowEqual } from '../../pose/connect/mini-store.js?v=df92c23b45e2';
-import { classifyWorkerStatus, workerSpecsLine, WORKER_FILTERS } from '../../pose/connect/worker-ui-helpers.js?v=df92c23b45e2';
-import { transportLabel } from '../../pose/connect/transport.js?v=df92c23b45e2';
-import { createPairWorkerForm } from './pair-worker-form.js?v=df92c23b45e2';
-import { forgetWorkerWithConfirm } from './connect-panel.js?v=df92c23b45e2';
-import { el, button } from './dom.js?v=df92c23b45e2';
+import { useConnectStore } from '../../pose/connect/store.js?v=b06a5a85e413';
+import { shallowEqual } from '../../pose/connect/mini-store.js?v=b06a5a85e413';
+import { classifyWorkerStatus, workerSpecsLine, WORKER_FILTERS } from '../../pose/connect/worker-ui-helpers.js?v=b06a5a85e413';
+import { transportLabel } from '../../pose/connect/transport.js?v=b06a5a85e413';
+import { createPairWorkerForm } from './pair-worker-form.js?v=b06a5a85e413';
+import { forgetWorkerWithConfirm } from './connect-panel.js?v=b06a5a85e413';
+import { el, button } from './dom.js?v=b06a5a85e413';
 
 /** sleap-app's Tailwind dot class (`bg-green-500`, …) as the Connect window's own class. */
 function dotClassFor(tailwindClass) {
