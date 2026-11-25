@@ -82,7 +82,8 @@ export function lossTitle(m) {
 
 /**
  * @param {HTMLElement} container
- * @param {{height?: number}} [props]
+ * @param {{height?: number, titleLines?: false}} [props] - `titleLines: false` hides the one-line title (the
+ *   Training Monitor shows sleap-app's runtime lines above the plot instead)
  * @returns {{ update: (p: {model: any, status: string}) => void, destroy: () => void }}
  */
 export function createLossPlot(container, props) {
@@ -139,6 +140,7 @@ export function createLossPlot(container, props) {
         tool('PNG', 'Export the plot as a PNG image', exportPng, 'cjLossPng'),
         tool('CSV', 'Export the loss values as CSV', exportCsv, 'cjLossCsv'));
     opts.append(check('Log scale', true, function (v) { logScale = v; }), check('Ignore outliers', false, function (v) { ignoreOutliers = v; }), batchLab, tools);
+    if (props && props.titleLines === false) title.hidden = true;
     root.append(title, legend, empty, wrap, opts);
     container.appendChild(root);
 

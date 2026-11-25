@@ -46,10 +46,12 @@ function connectionStatusText(status, error) {
  *   remoteEnabled: () => boolean,
  *   onRemoteEnabledChange: (on: boolean) => void,
  *   hintButton?: (text: string) => HTMLElement,
+ *   idPrefix?: string,                    // element ids: `<prefix>Backend`, … (default 'inf'; the Training panel uses 'trn')
  * }} o
  * @returns {{el: HTMLElement, refresh: () => void, dispose: () => void}}
  */
 export function createBackendPicker(o) {
+    const P = o.idPrefix || 'inf';
     const root = el('div', 'backend-picker');
     const label = el('label', 'inf-label inf-caps', 'Backend');
     if (o.hintButton) {
@@ -58,28 +60,28 @@ export function createBackendPicker(o) {
         setInfoTip(label, 'Run this ' + o.jobLabel + ' on this machine, or send it to a paired sleap-connect worker.');
     }
     const select = el('select', 'inf-select');
-    select.id = 'infBackend';
+    select.id = P + 'Backend';
     select.setAttribute('aria-label', 'Backend');
     const emptyText = el('p', 'inf-muted');
-    emptyText.id = 'infBackendEmpty';
+    emptyText.id = P + 'BackendEmpty';
     emptyText.textContent = 'Connect to a worker in the Connect tab to start remote inference.';
     const pairHint = el('p', 'inf-muted');
-    pairHint.id = 'infBackendPairHint';
+    pairHint.id = P + 'BackendPairHint';
     const status = el('div', 'backend-status');
-    status.id = 'infBackendStatus';
+    status.id = P + 'BackendStatus';
     const dot = el('span', 'connect-dot');
     const statusText = el('span', 'backend-status-text');
     const via = el('span', 'backend-via');
     via.setAttribute('data-testid', 'backend-transport');
     const connectBtn = button('btn btn-sm inf-btn-outline backend-connect', 'Connect');
-    connectBtn.id = 'infBackendConnect';
+    connectBtn.id = P + 'BackendConnect';
     connectBtn.addEventListener('click', function () {
         const id = useConnectStore.getState().selectedWorkerId;
         if (id) Promise.resolve(useConnectStore.getState().selectWorker(id)).catch(function () { /* connectionError shows it */ });
     });
     status.append(dot, statusText, via, connectBtn);
     const banner = el('div', 'backend-reattach');
-    banner.id = 'infReattach';
+    banner.id = P + 'Reattach';
     root.append(label, select, emptyText, pairHint, status, banner);
 
     function render() {
@@ -150,7 +152,7 @@ export function createBackendPicker(o) {
                 p.appendChild(el('b', null, rj.state));
                 p.append(' on this worker from a previous session.');
                 const cancel = button('btn btn-sm inf-btn-outline', 'Cancel it');
-                cancel.id = 'infReattachCancel';
+                cancel.id = P + 'ReattachCancel';
                 cancel.addEventListener('click', function () { useConnectStore.getState().cancelJob(); });
                 banner.append(p, cancel);
             }

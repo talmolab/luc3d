@@ -1147,6 +1147,9 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
  * @param {Object} videoFileInfo - { videoWidth, videoHeight, frameCount, videoPath, file }
  * @returns {Object} sleap-io.js Labels instance
  */
+// The training file (import-export/training-slp.js) names tracks the same way.
+export { _exportTrackSource as exportTrackSource };
+
 /**
  * Which track each instance of `session` is exported on. With identities assigned
  * the file's tracks ARE the identities (`Session.identityTrackPlan`, the same

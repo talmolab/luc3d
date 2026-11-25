@@ -198,6 +198,38 @@
             pickModelDirectory: function (title) {
                 return call('pick_model_directory', title != null ? { title: String(title) } : {});
             },
+            /**
+             * Local training (src-tauri/src/training.rs). Rust builds sleap-nn's argv and owns
+             * every path, port and the staging folder; the page sends configs (JSON) and bytes.
+             *   pickRunsDirectory(title) -> {path, existingRuns} | null  (a READ-ONLY model grant)
+             *   prepare({runsRoot, models: [{config, runName, init?: {mode: 'finetune'|'resume', checkpoint}}],
+             *            trainSlp, valSlp?, videoPaths}) -> token   (a checkpoint must be inside a model grant)
+             *   run(token, modelIndex, onEvent, {dryRun}) -> bool; events: {event: 'stdout'|'stderr'|
+             *     'progress'|'finished', data}
+             *   stop(token) (Stop Early) / cancel(token) / release(token)
+             */
+            training: {
+                pickRunsDirectory: function (title) {
+                    return call('pick_runs_directory', title != null ? { title: String(title) } : {});
+                },
+                prepare: function (args) { return call('training_prepare', { args: args }); },
+                run: function (token, modelIndex, onEvent, opts) {
+                    var Channel = tauriChannelCtor();
+                    if (!Channel) return Promise.reject(new Error(LOG + ' window.__TAURI__.core.Channel is unavailable'));
+                    var channel = new Channel();
+                    channel.onmessage = function (msg) {
+                        if (typeof onEvent !== 'function') return;
+                        try { onEvent(msg); } catch (e) { console.error(LOG, 'training onEvent threw', e); }
+                    };
+                    return call('training_run', {
+                        token: String(token), modelIndex: Number(modelIndex) | 0,
+                        dryRun: !!(opts && opts.dryRun), onEvent: channel,
+                    });
+                },
+                stop: function (token) { return call('training_stop', { token: String(token) }); },
+                cancel: function (token) { return call('training_cancel', { token: String(token) }); },
+                release: function (token) { return call('training_release', { token: String(token) }); },
+            },
         },
         /**
          * iroh: the dial-only QUIC byte pipe to a sleap-connect worker (Connect;

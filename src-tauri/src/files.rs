@@ -140,6 +140,12 @@ impl Grants {
         self.model_dirs.iter().any(|d| resolved.starts_with(d))
     }
 
+    /// A normal (writable) grant at or below `root`, if any: a runs folder must not hold one, or
+    /// making it read-only would stop the page saving the project inside it.
+    pub fn normal_grant_under(&self, root: &Path) -> Option<PathBuf> {
+        self.files.iter().chain(self.dirs.iter()).find(|g| g.starts_with(root)).cloned()
+    }
+
     /// `GrantState::check` without the lock (tests).
     #[cfg(test)]
     pub fn check(&self, raw: &str) -> Result<PathBuf, String> {
@@ -195,7 +201,22 @@ fn pick_model(g: &Grants, resolved: PathBuf, raw: &str) -> Result<PathBuf, Strin
     }
 }
 
+/// File types that are Python pickles (or load like them): the page never writes one, so a
+/// script in it cannot leave a checkpoint where a later model pick would trust it.
+pub const PICKLE_EXTENSIONS: &[&str] = &["ckpt", "pt", "pth", "pkl", "pickle", "joblib"];
+
+fn is_pickle_name(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| PICKLE_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+}
+
 fn pick_writable(g: &Grants, resolved: PathBuf, raw: &str) -> Result<PathBuf, String> {
+    if is_pickle_name(&resolved) {
+        return Err(format!(
+            "NOT_GRANTED: {raw}: the app does not write model checkpoint files"
+        ));
+    }
     if g.is_model_path(&resolved) {
         return Err(format!(
             "NOT_GRANTED: {raw} is inside a read-only model folder"
@@ -256,6 +277,12 @@ impl GrantState {
     /// prefix, so the JS shim maps it to NotAllowedError.
     pub fn check_writable(&self, raw: &str) -> Result<PathBuf, String> {
         self.with(raw, pick_writable)
+    }
+
+    /// See `Grants::normal_grant_under`.
+    #[cfg_attr(not(feature = "sleap-nn"), allow(dead_code))]
+    pub fn normal_grant_under(&self, root: &Path) -> Result<Option<PathBuf>, String> {
+        Ok(self.0.lock().map_err(|e| e.to_string())?.normal_grant_under(root))
     }
 
     pub fn grant_model_dir(&self, path: &Path) -> Result<(), String> {
@@ -1021,6 +1048,33 @@ mod tests {
         assert!(g
             .check_writable(&s(&d.path("proj").join("out.slp")))
             .is_ok());
+    }
+
+    #[test]
+    fn checkpoint_files_are_never_written_even_inside_a_normal_grant() {
+        let d = Scratch::new("pickle-ext");
+        let mut g = Grants::default();
+        g.grant_dir(&d.0);
+        for name in ["best.ckpt", "w.pt", "w.PTH", "x.pkl", "x.pickle", "m.joblib"] {
+            let err = g.check_writable(&s(&d.path(name))).unwrap_err();
+            assert!(err.starts_with("NOT_GRANTED: ") && err.contains("checkpoint"), "{name}: {err}");
+        }
+        // Everything LUC3D does write stays writable (.h5 exports are not pickles).
+        for name in ["p.slp", "points.h5", "a.json", "calibration.toml", "x.ckpt.txt"] {
+            assert!(g.check_writable(&s(&d.path(name))).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_runs_folder_must_not_hold_a_writable_grant() {
+        let d = Scratch::new("runs-under");
+        std::fs::create_dir_all(d.path("proj").join("models")).unwrap();
+        let mut g = Grants::default();
+        g.grant_file(&d.path("proj").join("p.slp"));
+        assert!(g.normal_grant_under(&d.path("proj").join("models")).is_none(), "models/ holds nothing writable");
+        assert_eq!(g.normal_grant_under(&d.path("proj")), Some(d.path("proj").join("p.slp")), "the project folder holds the project");
+        g.grant_dir(&d.path("proj").join("models").join("sub"));
+        assert!(g.normal_grant_under(&d.path("proj").join("models")).is_some());
     }
 
     #[test]

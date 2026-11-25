@@ -727,6 +727,17 @@ function runEnabled() {
     return canRun();
 }
 
+/** Why a local Run cannot start (the Run button's note), or '' (also '' without sleap-nn: the panel says so). */
+function localWhyNot() {
+    return !state.session ? 'Open a session first.'
+        : !sleapNnAvailable() ? ''
+            : mappedViewCount() > 0 && viewsWithModel().length === 0 ? 'Assign a model to a view (Models \u25b8 Assign models\u2026).'
+            : mappedViewCount() === 0 ? (sessionViews().some(function (v) { return viewInferenceBlocker(state.session, v); })
+                && sessionViews().every(function (v) { return viewInferenceBlocker(state.session, v); })
+                ? 'Inference on lazy-loaded views is not supported yet.'
+                : 'No checked view has its video on disk: Choose folder\u2026 (Data).') : '';
+}
+
 function canRun() {
     syncVideosToSession();
     return !!state.session && sleapNnAvailable() && !isRunning() && !isDone() &&
@@ -1177,13 +1188,7 @@ function buildPanel(root) {
         runBtn.disabled = !runEnabled();
         runLabel.textContent = isRemote() ? ' Run Remote Inference' : ' Run Inference';
         const rwhy = isRemote() ? (customRangeError() || remote.whyNot()) : '';
-        const why = isRemote() ? (isRunning() ? '' : rwhy) : isRunning() || isDone() ? '' : !state.session ? 'Open a session first.'
-            : !sleapNnAvailable() ? ''
-                : mappedViewCount() > 0 && viewsWithModel().length === 0 ? 'Assign a model to a view (Models \u25b8 Assign models\u2026).'
-                : mappedViewCount() === 0 ? (sessionViews().some(function (v) { return viewInferenceBlocker(state.session, v); })
-                    && sessionViews().every(function (v) { return viewInferenceBlocker(state.session, v); })
-                    ? 'Inference on lazy-loaded views is not supported yet.'
-                    : 'No checked view has its video on disk: Choose folder\u2026 (Data).') : '';
+        const why = isRemote() ? (isRunning() ? '' : rwhy) : isRunning() || isDone() ? '' : localWhyNot();
         runWhy.textContent = why;
         runWhy.hidden = !why;
     });
@@ -1367,19 +1372,81 @@ export async function setupInferencePanel() {
 export async function runRemoteInferenceWithModels(models) {
     if (!remote) return { ok: false, error: 'The Inference panel is not available.' };
     if (!models || !models.length) return { ok: false, error: 'Add a model on the worker.' };
-    if (sn) backend.remote = true;
     const a = createAssignment();
     assignViews(a, sessionViews(), addModel(a, models).id);
+    return startRemoteWith(a);
+}
+
+/** Make `a` the remote assignment and start the panel's remote Run once the worker checks are done. */
+async function startRemoteWith(a) {
+    if (sn) backend.remote = true;
     remote.setAssignment(a);
     refresh();
     const t0 = Date.now();
     while (Date.now() - t0 < 20000 && /^Checking/.test(remote.whyNot())) await new Promise(function (r) { setTimeout(r, 150); });
     const why = customRangeError() || remote.whyNot();
-    if (why) return { ok: false, error: why };
+    if (why) return { ok: false, error: why, skipped: true };
     await remote.start();
     const s = remote._state();
     if (s.run.error) return { ok: false, error: s.run.error };
     return { ok: true, jobs: s.runIds.size };
+}
+
+/**
+ * The Training panel's post-training inference (sleap-app trainingStore's post-training step): the models
+ * it just trained become this panel's models for the current session's views each was trained for, the
+ * panel's pipeline / target / sample count / Skip user labeled / Existing predictions are set from the
+ * Training panel, and the panel's own Run starts, so its progress, log, Cancel and (remote) Fetch & Load
+ * are the usual ones. Local: runs and merges, resolving when the run ends. Remote: resolves once the jobs
+ * are submitted (Fetch & Load merges, as for any remote run). Views without a trained model are skipped.
+ *
+ * @param {{remote?: boolean, pipeline: string, models: {views: string[], paths: string[]}[], frameRange: string,
+ *   sampleCount?: number, excludeUserLabeled?: boolean, existingPredictions?: string}} o
+ * @returns {Promise<{ok: boolean, error?: string, skipped?: boolean, status?: string, jobs?: number, views?: string[]}>}
+ *   `skipped`: nothing started (`error` says why: e.g. lazy-loaded views, no video on disk, a worker check).
+ */
+export async function runTrainedModels(o) {
+    if (!pane) return { ok: false, error: 'The Inference panel is not available.' };
+    const rem = !!o.remote;
+    if (rem ? !remote : !sn) return { ok: false, error: rem ? 'The Inference panel is not available.' : 'sleap-nn is not available on this machine.' };
+    if (isRunning()) return { ok: false, skipped: true, error: 'Inference is already running.' };
+    if (!state.session) return { ok: false, skipped: true, error: 'Open a session first.' };
+    const views = sessionViews();
+    const a = createAssignment();
+    const assigned = [];
+    (o.models || []).forEach(function (m) {
+        const vs = views.filter(function (v) { return m.views.indexOf(v) !== -1 && assigned.indexOf(v) === -1; });
+        if (!vs.length || !m.paths || !m.paths.length) return;
+        assignViews(a, vs, addModel(a, m.paths).id);
+        vs.forEach(function (v) { assigned.push(v); });
+    });
+    if (!assigned.length) return { ok: false, skipped: true, error: 'No view of the current session has a trained model.' };
+    if (o.pipeline) cfg.pipeline = o.pipeline;
+    cfg.frameRange = o.frameRange;
+    if (Number.isInteger(o.sampleCount) && o.sampleCount > 0) cfg.sampleCount = o.sampleCount;
+    cfg.excludeUserLabeled = !!o.excludeUserLabeled;
+    if (o.existingPredictions) cfg.existingPredictions = o.existingPredictions;
+    // The trained views run even if they were unchecked here; the others keep their checkbox.
+    assigned.forEach(function (v) { videos.unselected.delete(v); });
+    if (rem) {
+        // Results not loaded yet would be loaded together with the new ones (Fetch & Load takes every
+        // pending job), so they come first; then a finished run is dismissed, as the local branch below does.
+        if (remote.hasUnloaded()) return { ok: false, skipped: true, error: 'The last inference run has results that are not loaded yet: Fetch & Load Results in the Inference panel first.' };
+        if (remote.isDone()) remote.dismiss();
+        const r = await startRemoteWith(a);
+        return Object.assign({ views: assigned }, r);
+    }
+    if (sn) backend.remote = false;
+    if (isDone()) dismiss();
+    assignment = a;
+    syncVideosToSession();
+    await autoResolveVideos();
+    const t0 = Date.now();
+    while (videos.autoBusy && Date.now() - t0 < 20000) await new Promise(function (r) { setTimeout(r, 100); });
+    refresh();
+    if (!canRun()) return { ok: false, skipped: true, error: localWhyNot() || customRangeError() || 'Inference cannot run now.' };
+    await startInference();
+    return { ok: run.status === 'completed', status: run.status, error: run.error || undefined, views: assigned };
 }
 
 /** Test/automation hook: show the panel. */

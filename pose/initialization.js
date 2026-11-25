@@ -92,11 +92,17 @@ async function init() {
         const inferencePanelDone = import('../ui/inference-panel.js')
             .then(function (m) { return m.setupInferencePanel(); })
             .catch(function (e) { console.warn('[inference] panel not added:', e); });
+        // The Training panel (sleap-app's order: right after Inference): training on a paired
+        // SLEAP Connect worker everywhere. Same literal dynamic import, after the Inference panel
+        // settles so the rail order is always the same; failing to load it changes nothing else.
+        const trainingPanelDone = inferencePanelDone.then(function () { return import('../ui/training-panel.js'); })
+            .then(function (m) { return m.setupTrainingPanel(); })
+            .catch(function (e) { console.warn('[training] panel not added:', e); });
         // SLEAP Connect (remote GPU workers): the rail's Connect panel, in the
         // web app and the desktop app. Fetched after the rail exists; failing
         // to load it leaves the rest of the app untouched. Added after the
-        // Inference panel settles so the rail order is always the same.
-        inferencePanelDone.then(function () { return import('../ui/connect/index.js'); })
+        // Inference and Training panels settle so the rail order is always the same.
+        trainingPanelDone.then(function () { return import('../ui/connect/index.js'); })
             .then(function (m) { return m.setupConnect(); })
             .catch(function (e) { console.warn('[connect] panel not added:', e); });
 

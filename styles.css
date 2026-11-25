@@ -8934,6 +8934,308 @@ div.track-summary-steps { padding-left: 0; }
 .inf-view-blocked { cursor: default; opacity: 0.75; }
 
 /* ============================================
+   Training panel (ui/training-panel.js) — sleap-app's TrainingPanel.tsx look on the
+   Inference panel's classes; trn-* adds the config slots, the sessions × views list,
+   the "Models for views" switch and one progress row per model.
+   ============================================ */
+.trn-rec { display: flex; align-items: flex-start; gap: 4px; margin: 0; font-size: 10px; color: var(--success-color); }
+.trn-rec .inf-icon { flex-shrink: 0; margin-top: 1px; }
+.trn-warnline { margin: 0; font-size: 10px; color: var(--warning-color); }
+/* Anchor Part: the select, then the crop preview eye beside it (sleap-app AnchorPartField); Crop Size under it. */
+.trn-anchor-row .inf-select { margin-left: auto; min-width: 0; }
+.trn-eye { flex-shrink: 0; width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-color); border-radius: 4px; background: none; color: var(--text-muted); cursor: pointer; }
+.trn-eye svg { width: 14px; height: 14px; }
+.trn-eye:hover:not(:disabled) { color: var(--text-primary); border-color: var(--accent); }
+.trn-eye[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.trn-eye:disabled { opacity: 0.4; cursor: default; }
+.trn-crop-size { font-size: 11px; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.trn-crop-warn { display: flex; flex-direction: column; gap: 2px; }
+.trn-slots { display: flex; flex-direction: column; gap: 6px; }
+.trn-slot { border: 1px dashed var(--border-light); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; }
+.trn-slot-set { border: 1px solid rgba(46, 204, 113, 0.5); background: rgba(46, 204, 113, 0.05); }
+.trn-slot-drag { border-color: var(--accent); background: var(--accent-dim); }
+.trn-slot-meta { font-size: 10px; color: var(--text-muted); font-family: monospace; }
+.trn-ok-note { border: 1px solid rgba(46, 204, 113, 0.25); background: rgba(46, 204, 113, 0.06); color: var(--success-color);
+  border-radius: 6px; padding: 6px 8px; font-size: 10.5px; }
+.trn-views { border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-primary); padding: 4px 6px;
+  display: flex; flex-direction: column; gap: 2px; }
+.trn-vsess { display: flex; align-items: center; gap: 6px; padding-top: 2px; font-size: 10px; font-weight: 500; color: var(--text-secondary); }
+.trn-lazy { font-size: 9px; font-weight: 400; color: var(--text-muted); border: 1px solid var(--border-light); border-radius: 3px; padding: 0 3px; }
+.trn-vrow { display: grid; grid-template-columns: 14px minmax(36px, auto) minmax(0, 1fr) auto; align-items: center; gap: 6px; font-size: 10px; padding-left: 4px; }
+.trn-vrow input { margin: 0; }
+.trn-vname { font-weight: 500; }
+.trn-vfile { color: var(--text-muted); font-family: monospace; font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.trn-vcount { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.trn-vrow-empty .trn-vcount { color: var(--warning-color); }
+.trn-vrow-empty .trn-vname, .trn-vrow-empty .trn-vfile { opacity: 0.6; }
+.trn-vworker { display: flex; align-items: center; gap: 6px; padding-left: 24px; font-size: 9.5px; color: var(--text-muted); min-width: 0; }
+.trn-vworker-text { font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.trn-locate { margin-left: auto; flex-shrink: 0; height: 20px; font-size: 10px; padding: 0 6px; }
+.trn-seg { display: flex; border: 1px solid var(--border-color); border-radius: 4px; overflow: hidden; }
+.trn-seg-btn { flex: 1; background: transparent; border: none; border-right: 1px solid var(--border-color); color: var(--text-secondary);
+  font-size: 10.5px; padding: 4px 2px; cursor: pointer; }
+.trn-seg-btn:last-child { border-right: none; }
+.trn-seg-btn[aria-pressed="true"] { background: var(--accent-dim); color: var(--text-primary); }
+.trn-seg-btn:disabled { cursor: default; opacity: 0.6; }
+.trn-tabs { margin-bottom: 2px; }
+.trn-chips { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 4px; }
+/* Training ▸ Models to train… (ui/training-models-modal.js): models in the centre, the views folded, a settings side panel, the 3D view. */
+.trn-mm { min-width: 760px; min-height: 420px; }
+.trn-mm-main { gap: 10px; }
+.trn-mm-split { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.trn-mm-split .inf-mm-label { margin-right: 4px; }
+.trn-mm-models { display: flex; flex-direction: column; gap: 8px; }
+.trn-mm-card { border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-tertiary); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 7px; }
+.trn-mm-card.hl { border-color: rgba(102, 126, 234, 0.6); }
+.trn-mm-card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.trn-mm-cardtop { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.trn-mm-name { flex: 1; min-width: 0; background: none; border: none; padding: 0; text-align: left; cursor: pointer; color: var(--text-primary);
+  font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trn-mm-name:hover { text-decoration: underline; }
+.trn-mm-badge { flex: none; font-size: 10px; color: var(--text-secondary); border: 1px solid var(--border-light); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
+.trn-mm-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.trn-mm-tag { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; padding: 1px 2px 1px 8px; border-radius: 10px;
+  background: var(--bg-button); color: var(--text-primary); border: 1px solid transparent; }
+.trn-mm-tag.off { color: var(--text-secondary); border-style: dashed; border-color: var(--border-light); background: transparent; }
+.trn-mm-tag.hl { border-color: var(--accent); background: var(--accent-dim); }
+.trn-mm-tagx { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 9px; padding: 2px 4px; border-radius: 8px; line-height: 1; }
+.trn-mm-tagx:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.08); }
+.trn-mm-addview { font-size: 11px; background: transparent; color: var(--text-secondary); border: 1px dashed var(--border-light);
+  border-radius: 10px; padding: 1px 6px; max-width: 160px; cursor: pointer; }
+.trn-mm-auto { font-size: 10.5px; color: var(--text-muted); font-style: italic; }
+.trn-mm-meta { font-size: 11px; color: var(--text-secondary); }
+.trn-mm-fold { border: 1px solid var(--border-color); border-radius: 5px; padding: 0 8px; }
+.trn-mm-foldhead { display: flex; align-items: center; gap: 6px; padding: 6px 0; cursor: pointer; list-style: none; user-select: none; }
+.trn-mm-foldhead::-webkit-details-marker { display: none; }
+.trn-mm-fold[open] > .trn-mm-foldhead .inf-chevron::before { content: '\25BE'; }
+.trn-mm-foldnote { font-size: 11px; color: var(--text-muted); }
+.trn-mm-foldnote.warn { color: var(--warning-color); }
+.trn-mm-fold > .inf-mm-bulk { margin-bottom: 6px; }
+/* The Views table scrolls within a capped height (asked for: it is the lesser part of the modal). */
+.trn-mm-views { max-height: 240px; overflow-y: auto; margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 4px; }
+.trn-mm-vtable { font-size: 12px; }
+.trn-mm-vrow { display: grid; grid-template-columns: 16px minmax(110px, 170px) 48px minmax(0, 1fr) 120px; align-items: center; column-gap: 8px;
+  padding: 4px 8px; border-bottom: 1px solid var(--border-color); }
+.trn-mm-vrow:last-child { border-bottom: none; }
+.trn-mm-vrow input { margin: 0; }
+.trn-mm-vhead { position: sticky; top: 0; z-index: 1; background: var(--bg-primary); color: var(--text-muted); font-size: 10.5px; font-weight: 500; }
+.trn-mm-vrow.hl { background: var(--accent-dim); }
+.trn-mm-vrow.off .trn-mm-vname { opacity: 0.6; }
+.trn-mm-vname { display: flex; align-items: center; gap: 2px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trn-mm-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.trn-mm-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 1px 8px; border-radius: 10px; cursor: pointer;
+  background: transparent; color: var(--text-secondary); border: 1px dashed var(--border-light); white-space: nowrap; }
+.trn-mm-chip i { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--m); }
+.trn-mm-chip.on { border-style: solid; border-color: var(--m); color: var(--text-primary); background: color-mix(in srgb, var(--m) 18%, transparent); }
+.trn-mm-chip.on i { background: var(--m); }
+.trn-mm-infer { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trn-mm-infer .inf-mm-select { max-width: 100%; }
+.trn-mm-run { padding: 2px 0 10px; display: flex; flex-direction: column; gap: 8px; }
+.trn-mm-drawer { width: 330px; flex: none; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border-color); background: var(--bg-primary); }
+.trn-mm-drawerhead { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px; border-bottom: 1px solid var(--border-color); }
+.trn-mm-nameinput { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text-primary); background: transparent;
+  border: 1px solid transparent; border-radius: 4px; padding: 3px 5px; }
+.trn-mm-nameinput:hover, .trn-mm-nameinput:focus { border-color: var(--border-light); background: var(--bg-secondary); }
+.trn-mm-drawerbody { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.trn-mm-drawerfoot { padding: 8px 12px; border-top: 1px solid var(--border-color); }
+.trn-mm-strip { display: none; }
+.trn-mm-drawer.collapsed { width: 30px; }
+.trn-mm-drawer.collapsed > :not(.trn-mm-strip) { display: none; }
+.trn-mm-drawer.collapsed > .trn-mm-strip { display: block; margin: 8px auto; writing-mode: vertical-rl; transform: rotate(180deg); background: none;
+  border: 1px solid var(--border-light); border-radius: 5px; color: var(--text-secondary); font-size: 11px; padding: 10px 3px; cursor: pointer; white-space: nowrap; }
+.trn-mm-drawer.collapsed > .trn-mm-strip:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+/* Training panel: the models summary (the settings live in the Models modal). */
+.trn-sum-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.trn-sum-cards { display: flex; flex-direction: column; gap: 6px; }
+.trn-sum-card { border: 1px solid var(--border-color); border-radius: 5px; background: var(--bg-tertiary); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.trn-sum-cardtop { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.trn-sum-name { flex: 1; min-width: 0; font-weight: 600; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trn-sum-edit .inf-icon { width: 12px; height: 12px; }
+.trn-sum-tags { display: flex; flex-wrap: wrap; gap: 3px; }
+.trn-sum-tag { font-size: 10px; padding: 0 5px; border: 1px solid var(--border-light); border-radius: 4px; color: var(--text-secondary); }
+.trn-sum-none { font-size: 10px; color: var(--warning-color); }
+.trn-sum-meta { font-size: 10px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.trn-sum-problems { display: flex; flex-direction: column; gap: 3px; }
+.trn-sum-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; row-gap: 3px; font-size: 10.5px; }
+.trn-sum-k { color: var(--text-muted); }
+.trn-sum-v { overflow-wrap: anywhere; }
+.trn-group-head { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; margin-top: 2px; }
+.trn-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trn-group-views { font-weight: 400; color: var(--text-muted); font-size: 10px; }
+.trn-row-grouped { padding-left: 15px; }
+
+.trn-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 1px 6px; border: 1px solid var(--border-light); border-radius: 4px; }
+.trn-chip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.trn-pathrow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.trn-path { flex: 1; min-width: 0; font-family: monospace; font-size: 10px; overflow-wrap: anywhere; color: var(--text-secondary); }
+.trn-center { text-align: center; }
+.trn-btns { display: flex; gap: 8px; }
+.trn-btns .btn { flex: 1; height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.trn-stop { background: transparent; color: var(--warning-color); border: 1px solid rgba(243, 156, 18, 0.5); }
+.trn-tiny { margin: 0; font-size: 9px; color: var(--text-muted); text-align: center; }
+.trn-rows { display: flex; flex-direction: column; gap: 8px; }
+.trn-row-done { opacity: 0.7; }
+.trn-row-lab { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; margin-bottom: 4px; }
+.trn-row-lab .inf-icon { width: 12px; height: 12px; }
+.trn-row-text { min-width: 0; overflow-wrap: anywhere; }
+.trn-running { color: var(--accent-hover); }
+.trn-completed { color: var(--success-color); }
+.trn-failed { color: var(--error-color); }
+.trn-cancelled, .trn-pending { color: var(--text-muted); }
+.trn-dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border-light); display: inline-block; flex-shrink: 0; }
+.trn-bar { height: 6px; margin-bottom: 4px; }
+.trn-fill-completed { background: var(--success-color); }
+.trn-fill-failed { background: var(--error-color); }
+.trn-fill-cancelled { background: var(--text-muted); }
+.trn-stats { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.trn-logbtns { display: inline-flex; gap: 2px; }
+.trn-banner-ok { border: 1px solid rgba(46, 204, 113, 0.3); background: rgba(46, 204, 113, 0.06); color: var(--success-color);
+  border-radius: 6px; padding: 8px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
+.trn-strong { font-weight: 600; }
+.trn-path-ok { font-family: monospace; font-size: 10px; overflow-wrap: anywhere; }
+.trn-banner-next { border: 1px solid rgba(102, 126, 234, 0.35); background: rgba(102, 126, 234, 0.08); color: var(--accent-hover);
+  border-radius: 6px; padding: 8px; font-size: 11px; }
+.trn-errout { display: flex; flex-direction: column; gap: 4px; }
+.trn-errout .inf-log { color: var(--error-color); }
+/* The monitor hides parts with the `hidden` attribute, some of which set `display` (the panel itself
+   is covered by `.inference-panel [hidden]`). */
+.trn-mon [hidden] { display: none !important; }
+/* Training Monitor (ui/training-monitor.js) — sleap-app's LossViewerDialog: a 760 px card, the
+   body scrolls between a pinned title and pinned Stop Early / Cancel. */
+.trn-row-open { cursor: pointer; }
+.trn-row-open:hover .trn-row-text, .trn-row-open:focus-visible .trn-row-text { text-decoration: underline; }
+.trn-row-chart { margin-left: auto; opacity: 0.6; flex-shrink: 0; }
+.trn-mon-scrim { position: fixed; inset: 0; z-index: 10000; background: rgba(0, 0, 0, 0.55); display: flex;
+  align-items: center; justify-content: center; padding: 16px; }
+.trn-mon { width: min(760px, 100%); max-height: 90vh; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); }
+.trn-mon-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px 6px; flex-shrink: 0; }
+.trn-mon-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.trn-mon-x { background: transparent; border: none; color: var(--text-muted); cursor: pointer; width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; }
+.trn-mon-x:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.trn-mon-x .inf-icon { width: 14px; height: 14px; }
+.trn-mon-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 16px 12px; display: flex; flex-direction: column; gap: 10px; }
+.trn-mon-runtime { font-size: 12px; line-height: 1.45; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.trn-mon-runtime strong { color: var(--text-primary); font-weight: 700; }
+.trn-mon-foot { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-color); flex-shrink: 0; }
+.trn-mon-foot .btn { flex: 1; height: 32px; }
+.trn-mon-viz { display: flex; flex-direction: column; gap: 6px; }
+.trn-mon-vizhead { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); }
+.trn-mon-vizhead .trn-seg { width: 180px; }
+.trn-mon-vizimg { width: 100%; height: auto; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-primary); }
+.trn-mon-vizempty { font-size: 11px; color: var(--text-muted); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; text-align: center; }
+/* Dry run (sleap-app DryRunResult) */
+.trn-start-row .inf-run { flex: 1; }
+.trn-start-row .trn-dry { flex: none; height: 32px; padding: 0 10px; }
+.trn-dry-box { border: 1px solid var(--border-color); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
+.trn-dry-head { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.trn-dry-head > span:nth-child(2) { flex: 1; min-width: 0; }
+.trn-dry-rows { display: flex; flex-direction: column; gap: 4px; }
+.trn-dry-row { display: flex; align-items: center; gap: 6px; }
+.trn-dry-err { color: var(--error-color); }
+/* Full Configuration (ui/training-config-dialog.js, sleap-app TrainingConfigDialog) */
+.trn-fullcfg { width: 100%; height: 28px; border: 1px solid rgba(91, 141, 239, 0.5); color: #7aa7ff; background: transparent; }
+.trn-fullcfg:hover:not(:disabled) { background: rgba(91, 141, 239, 0.1); }
+.tcd-scrim { position: fixed; inset: 0; z-index: 10000; background: rgba(0, 0, 0, 0.55); display: flex;
+  align-items: center; justify-content: center; padding: 16px; }
+.tcd-scrim [hidden] { display: none !important; }
+.tcd-card { width: min(1100px, 92vw); height: min(820px, 90vh); min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); font-size: 12px; }
+.tcd-head { display: flex; align-items: center; gap: 16px; padding: 10px 20px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+.tcd-title { margin: 0; font-size: 14px; font-weight: 600; flex-shrink: 0; }
+.tcd-tabs { flex: 0 1 auto; margin: 0 auto; min-width: 0; }
+.tcd-tabs .trn-seg-btn { flex: none; font-size: 12px; padding: 5px 14px; }
+.tcd-saved { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.tcd-search { position: relative; padding: 8px 20px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+.tcd-search-input { width: 100%; height: 30px; font-size: 12px; padding: 0 10px; background: var(--bg-primary); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; }
+.tcd-results { position: absolute; left: 20px; right: 20px; top: 100%; z-index: 2; margin-top: 2px; background: var(--bg-secondary);
+  border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); display: flex; flex-direction: column; }
+.tcd-result { display: flex; justify-content: space-between; gap: 12px; padding: 7px 12px; background: transparent; border: none;
+  color: var(--text-primary); font-size: 12px; text-align: left; cursor: pointer; }
+.tcd-result:hover, .tcd-result:focus-visible { background: var(--bg-tertiary); }
+.tcd-result-tab { color: var(--text-muted); font-size: 11px; }
+.tcd-body { flex: 1; min-height: 0; display: flex; }
+.tcd-nav { width: 180px; flex-shrink: 0; border-right: 1px solid var(--border-color); padding: 10px 0; display: flex; flex-direction: column;
+  background: var(--bg-primary); user-select: none; }
+.tcd-nav-btn { text-align: left; padding: 8px 18px; background: transparent; border: none; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.tcd-nav-btn:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.tcd-content { flex: 1; min-width: 0; overflow-y: auto; padding: 14px 28px 28px; display: flex; flex-direction: column; gap: 18px; }
+.tcd-section { display: flex; flex-direction: column; gap: 8px; max-width: 560px; }
+.tcd-section-title { margin: 0 0 2px; font-size: 13px; font-weight: 600; padding-bottom: 4px; border-bottom: 1px solid var(--border-color); }
+.tcd-field.inf-row .inf-label { font-size: 12px; }
+.tcd-field .inf-num { width: 110px; height: 26px; font-size: 12px; }
+.tcd-field .inf-select { width: 220px; height: 26px; font-size: 12px; }
+.tcd-field.inf-check { font-size: 12px; }
+.tcd-ro { color: var(--text-secondary); font-size: 12px; }
+.tcd-note { font-size: 10px; color: var(--text-muted); }
+.tcd-crop { display: flex; flex-direction: column; gap: 2px; }
+.tcd-crop p { margin: 0; }
+.tcd-flash { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; transition: outline-color 1.2s; }
+.tcd-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 20px;
+  border-top: 1px solid var(--border-color); flex-shrink: 0; }
+.tcd-foot-right { display: flex; gap: 8px; }
+@media (max-width: 720px) { .tcd-nav { display: none; } .tcd-head { flex-wrap: wrap; } }
+/* Full Configuration: training mode (Fine-tune / Resume) */
+.tcd-mode-radios { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.tcd-mode-radios .inf-check { font-size: 12px; }
+.tcd-ckpt { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tcd-ckpt-path { flex: 1; min-width: 0; font-family: monospace; font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.tcd-ckpt-input { flex: 1; min-width: 0; height: 28px; font-family: monospace; font-size: 11px; padding: 0 8px; background: var(--bg-primary);
+  color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; }
+.tcd-ckpt-msg { margin: 0; font-size: 11px; color: var(--text-muted); }
+.tcd-ckpt-msg.tcd-ckpt-bad { color: var(--error-color); }
+.tcd-ckpt-msg.tcd-ckpt-warn { color: var(--warning-color); }
+/* View Metrics (ui/training-metrics-dialog.js, sleap-app ModelMetricsDialog) */
+.trn-metrics-btn { width: 100%; height: 28px; }
+.tmd-scrim { position: fixed; inset: 0; z-index: 10000; background: rgba(0, 0, 0, 0.55); display: flex;
+  align-items: center; justify-content: center; padding: 16px; }
+.tmd-scrim [hidden] { display: none !important; }
+.tmd-card { width: min(1200px, 96vw); max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); font-size: 12px; }
+.tmd-head { padding: 14px 20px 8px; flex-shrink: 0; }
+.tmd-title { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.tmd-sub { margin: 4px 0 0; font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.tmd-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 20px 12px; display: flex; flex-direction: column; gap: 10px; }
+.tmd-table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 860px; font-size: 11px; }
+.tmd-table th { position: sticky; top: 0; background: var(--bg-secondary); text-align: left; font-weight: 600; padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color); white-space: nowrap; }
+.tmd-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-color); }
+.tmd-row { cursor: pointer; }
+.tmd-row:hover, .tmd-row:focus-visible { background: var(--bg-tertiary); outline: none; }
+.tmd-mono { font-family: monospace; }
+.tmd-num { font-variant-numeric: tabular-nums; }
+.tmd-path { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmd-nowrap { white-space: nowrap; }
+.tmd-empty { text-align: center; color: var(--text-muted); padding: 18px; }
+.tmd-error { margin: 0; color: var(--warning-color); }
+.tmd-h3 { margin: 4px 0 0; font-size: 12px; font-weight: 600; }
+.tmd-box { width: 100%; max-width: 640px; height: auto; }
+.tmd-box .tmd-grid { stroke: var(--border-color); stroke-width: 1; }
+.tmd-box .tmd-tick { fill: var(--text-muted); font-size: 10px; }
+.tmd-box .tmd-node { fill: var(--text-secondary); font-size: 11px; }
+.tmd-box .tmd-whisker { stroke: var(--text-muted); stroke-width: 1.5; }
+.tmd-box .tmd-iqr { fill: rgba(91, 141, 239, 0.35); stroke: #7aa7ff; stroke-width: 1; }
+.tmd-box .tmd-median { stroke: var(--text-primary); stroke-width: 2; }
+.tmd-list { display: grid; grid-template-columns: 1fr auto; gap: 4px 24px; margin: 0; }
+.tmd-list dt { color: var(--text-secondary); }
+.tmd-list dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.tmd-foot { display: flex; justify-content: space-between; gap: 8px; padding: 10px 20px; border-top: 1px solid var(--border-color); flex-shrink: 0; }
+.tmd-foot > :last-child { margin-left: auto; }
+.tmd-card.tmd-card-detail { width: min(720px, 94vw); }
+/* Post-training inference (sleap-app's postTrainingInference box) */
+.trn-post-opts { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.trn-post-msg { font-size: 10px; color: var(--text-muted); overflow-wrap: anywhere; }
+.trn-post.trn-post-error { border-color: rgba(231, 76, 60, 0.35); background: rgba(231, 76, 60, 0.06); }
+.trn-post.trn-post-error .trn-post-msg { color: var(--error-color); }
+
+/* ============================================
    Connect panel (ui/connect/*) — sleap-app's ConnectPanel.tsx look:
    10px caps label, compact worker cards with a status dot, a pairing card.
    ============================================ */

@@ -10,7 +10,8 @@
 //! so its tests run with and without the `sleap-nn` feature.
 //!
 //! Layout: one `Spec` per sleap-nn subcommand, listed in `SUBCOMMANDS`.
-//! Adding Training later means writing a `TRAIN_SPEC` and one table line.
+//! Training does NOT come through here: `training.rs` builds sleap-nn's `train` argv itself
+//! from a prepared token (the page never supplies training arguments).
 #![cfg_attr(not(feature = "sleap-nn"), allow(dead_code))]
 
 /// Prefix of every refusal.
@@ -170,7 +171,7 @@ static INFERENCE_SPEC: Spec = Spec {
     ],
 };
 
-/// sleap-nn subcommand -> its argument spec. Add `train` here later.
+/// sleap-nn subcommand -> its argument spec (no `train`: see `training.rs`).
 static SUBCOMMANDS: &[(&str, &Spec)] = &[("predict", &INFERENCE_SPEC), ("track", &INFERENCE_SPEC)];
 
 fn refuse<T>(why: impl std::fmt::Display) -> Result<T, String> {

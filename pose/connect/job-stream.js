@@ -158,8 +158,12 @@ function parseStatus(raw) {
     : null;
 }
 
-/** @param {ModelProgress} model @param {NonNullable<ReturnType<typeof parseJobTelemetry>>} telemetry @returns {ModelProgress} */
-function applyTelemetry(model, telemetry) {
+/**
+ * LUCID: exported for the Training panel's remote run (`pose/connect/remote-training-plan.js`), which
+ * folds the same telemetry into its progress rows (sleap-app `trainingStore.applyRemoteTelemetry`).
+ * @param {ModelProgress} model @param {NonNullable<ReturnType<typeof parseJobTelemetry>>} telemetry @returns {ModelProgress}
+ */
+export function applyTelemetry(model, telemetry) {
   switch (telemetry.kind) {
     case "epoch": {
       const sample = {
@@ -208,7 +212,7 @@ function applyTelemetry(model, telemetry) {
  * replaces the running estimate instead of only ever growing it.
  */
 /** @param {ModelProgress} model @param {boolean} [exact] @returns {ModelProgress} */
-function withEpochSize(model, exact = false) {
+export function withEpochSize(model, exact = false) {
   const lastX = model.batchSamples[model.batchSamples.length - 1]?.globalBatch;
   const lastEpoch = model.epochSamples[model.epochSamples.length - 1]?.epoch;
   if (lastX === undefined || lastEpoch === undefined) return model;

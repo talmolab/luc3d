@@ -6,11 +6,11 @@
  * Layout: a Models table (each model a colour, its folders, how many views use
  * it) and a Views table (one row per view: its video and a model menu; tick
  * several rows to give them one model at once; Clear all puts every view back
- * to no model). Beside them a collapsible 3D view: a second `Viewport3D` built
- * with the app viewer's own display settings (`viewport3DDisplayOptions`) and
- * the same scene (the current frame's skeletons, the planes), where each camera
- * wears its model's colour. HOVER drives the highlight: a view row lights its
- * camera, a model row lights all its cameras (`Viewport3D.tintCameras`).
+ * to no model). Beside them a collapsible 3D view (`ui/models-3d-pane.js`, shared
+ * with Training ▸ Models to train…): a second `Viewport3D` with the app viewer's
+ * own display settings and scene, where each camera wears its model's colour.
+ * HOVER drives the highlight: a view row (or the camera itself in the 3D view)
+ * lights its camera, a model row lights all its cameras (`Viewport3D.tintCameras`).
  *
  * The card moves by dragging its header and resizes from its corner; ⤢ fills
  * the window. Edits go to a copy of the assignment; Apply hands it back, Cancel
@@ -19,12 +19,8 @@
  *
  * Data: `ui/inference-model-assignment.js` (plain, Node-tested).
  */
-import { state, viewport3d } from './app-state.js';
-import { Viewport3D } from './viewport3d.js';
-import { viewport3DDisplayOptions } from './viewport3d-options.js';
-import { getTrackColor, getGroupColor } from './overlays.js';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
 import { trapModal } from './connect/layers.js';
+import { createModels3DPane } from './models-3d-pane.js';
 import {
     cloneAssignment, addModel, addFolderToModel, removeModel, assignView, assignViews, clearAssignments,
     modelOfView, viewsOfModel, modelLabel, foldersNeeded, pruneViews,
@@ -49,12 +45,6 @@ function btn(cls, text, title) {
 
 function plural(n, word) { return n.toLocaleString('en-US') + ' ' + word + (n === 1 ? '' : 's'); }
 
-/** True when the session's cameras carry a calibration the 3D view can place. */
-function hasCalibration(session) {
-    return !!(session && Array.isArray(session.cameras) && session.cameras.length &&
-        session.cameras.every(function (c) { return c && c.rotationMatrix && c.tvec; }));
-}
-
 /**
  * Open the modal (one at a time).
  *
@@ -75,8 +65,6 @@ export function openModelsModal(o) {
     pruneViews(work, viewNames);
     const checked = new Set();
     let hover = null;            // {kind:'view'|'model', id}
-    let vp = null;
-    let collapsed = false;
 
     // ---- shell ----
     const scrim = el('div', 'inf-mm-scrim');
@@ -101,9 +89,17 @@ export function openModelsModal(o) {
 
     const body = el('div', 'inf-mm-body');
     const main = el('div', 'inf-mm-main');
-    const pane = el('div', 'inf-mm-3d');
+    const pane3d = createModels3DPane({
+        ids: { stage: 'infMm3dStage', toggle: 'infMm3dToggle', foot: 'infMm3dFoot' },
+        noCalibrationText: 'No calibration loaded, so the cameras can’t be placed. Assigning models still works.',
+        onCameraHover: function (name) {
+            if (name && viewNames.indexOf(name) !== -1) hover = { kind: 'view', id: name };
+            else if (hover && hover.kind === 'view') hover = null;
+            paintFocus();
+        },
+    });
     body.appendChild(main);
-    body.appendChild(pane);
+    body.appendChild(pane3d.el);
     card.appendChild(body);
 
     const foot = el('div', 'inf-mm-foot');
@@ -138,22 +134,6 @@ export function openModelsModal(o) {
     main.appendChild(bulk);
     const viewsBox = el('div', 'inf-mm-tablebox');
     main.appendChild(viewsBox);
-
-    // ---- 3D pane ----
-    const paneHead = el('div', 'inf-mm-3dhead');
-    paneHead.appendChild(el('span', 'inf-mm-3dtitle', '3D view'));
-    const collapseBtn = btn('inf-mm-icon', '⟩', 'Hide the 3D view');
-    collapseBtn.id = 'infMm3dToggle';
-    paneHead.appendChild(collapseBtn);
-    const stage = el('div', 'inf-mm-stage');
-    stage.id = 'infMm3dStage';
-    const stageMsg = el('div', 'inf-mm-stagemsg');
-    stage.appendChild(stageMsg);
-    const paneFoot = el('div', 'inf-mm-3dfoot');
-    paneFoot.id = 'infMm3dFoot';
-    pane.appendChild(paneHead);
-    pane.appendChild(stage);
-    pane.appendChild(paneFoot);
 
     // ---- render ----
     function renderModels() {
@@ -352,70 +332,20 @@ export function openModelsModal(o) {
                 (!!tr.dataset.model && tr.dataset.model === (hover.kind === 'model' ? hover.id : (work.byView[hover.id] || null))));
             tr.classList.toggle('inf-mm-hl', on === true);   // never undefined: toggle(x, undefined) FLIPS
         });
-        if (!hover) paneFoot.textContent = views.length ? 'Hover a view or a model to see its cameras.' : '';
+        if (!hover) pane3d.setFoot(views.length ? 'Hover a view or a model to see its cameras.' : '');
         else if (hover.kind === 'view') {
             const m = modelOfView(work, hover.id);
-            paneFoot.textContent = hover.id + ' → ' + (m ? modelLabel(m) : 'no model');
+            pane3d.setFoot(hover.id + ' → ' + (m ? modelLabel(m) : 'no model'));
         } else {
             const m = work.models.find(function (x) { return x.id === hover.id; });
-            paneFoot.textContent = m ? modelLabel(m) + ' → ' + (focus.length ? focus.join(', ') : 'no views yet') : '';
+            pane3d.setFoot(m ? modelLabel(m) + ' → ' + (focus.length ? focus.join(', ') : 'no views yet') : '');
         }
-        if (vp) {
-            const colors = {};
-            viewNames.forEach(function (v) {
-                const m = modelOfView(work, v);
-                colors[v] = m ? m.color : UNASSIGNED_COLOR;
-            });
-            try { vp.tintCameras({ colors: colors, defaultColor: UNASSIGNED_COLOR, focus: focus }); } catch (e) { /* ignore */ }
-        }
-    }
-
-    // ---- 3D ----
-    function mount3D() {
-        const session = state.session;
-        if (!session || !views.length) { stageMsg.textContent = 'Import data with a calibration to see the cameras here.'; return; }
-        if (!hasCalibration(session)) {
-            stageMsg.textContent = 'No calibration loaded, so the cameras can’t be placed. Assigning models still works.';
-            return;
-        }
-        if (typeof THREE === 'undefined') { stageMsg.textContent = '3D view unavailable.'; return; }
-        try {
-            vp = new Viewport3D(stage, Object.assign({
-                cameras: session.cameras,
-                skeleton: session.skeleton,
-                getTrackColor: getTrackColor,
-                getGroupColor: function (group) {
-                    return getGroupColor(group, session, state.colorByIdentity || false, state.currentFrame);
-                },
-                pickCameras: false,
-            }, viewport3DDisplayOptions()));
-            stageMsg.hidden = true;
-            vp.setFrame(getInstanceGroupsForFrame(state.currentFrame));
-            if (viewport3d && typeof viewport3d.getPlanes === 'function') {
-                vp.showPlaneSurfaces = viewport3d.showPlaneSurfaces;
-                vp.showPlaneNodes = viewport3d.showPlaneNodes;
-                vp.planeNodeSize = viewport3d.planeNodeSize;
-                vp.setPlanes(viewport3d.getPlanes());
-            }
-            setTimeout(function () { if (vp) { try { vp.resize(); vp.fitToScene(); } catch (e) { /* ignore */ } paintFocus(); } }, 120);
-        } catch (err) {
-            console.error('[inference models] 3D view unavailable:', err);
-            vp = null;
-            stageMsg.hidden = false;
-            stageMsg.textContent = '3D view unavailable (WebGL required).';
-        }
-    }
-
-    function setCollapsed(c) {
-        collapsed = c;
-        pane.classList.toggle('collapsed', c);
-        collapseBtn.textContent = c ? '⟨' : '⟩';
-        const label = c ? 'Show the 3D view' : 'Hide the 3D view';
-        collapseBtn.title = label;
-        collapseBtn.setAttribute('aria-label', label);
-        if (vp) {
-            try { vp.setVisible(!c); if (!c) { vp.resize(); paintFocus(); } } catch (e) { /* ignore */ }
-        }
+        const colors = {};
+        viewNames.forEach(function (v) {
+            const m = modelOfView(work, v);
+            colors[v] = m ? m.color : UNASSIGNED_COLOR;
+        });
+        pane3d.tint({ colors: colors, defaultColor: UNASSIGNED_COLOR, focus: focus });
     }
 
     // ---- move / resize / fill ----
@@ -447,7 +377,7 @@ export function openModelsModal(o) {
             maxBtn.title = 'Restore the size';
         }
         maxBtn.setAttribute('aria-label', maxBtn.title);
-        if (vp) try { vp.resize(); } catch (e) { /* ignore */ }
+        pane3d.resize();
     }
     head.addEventListener('pointerdown', function (e) {
         if (e.button !== 0 || e.target.closest('button')) return;
@@ -483,7 +413,6 @@ export function openModelsModal(o) {
     });
     clearBtn.addEventListener('click', function () { clearAssignments(work); checked.clear(); renderAll(); });
     maxBtn.addEventListener('click', toggleFill);
-    collapseBtn.addEventListener('click', function () { setCollapsed(!collapsed); });
 
     let trap = null;
     function close(apply) {
@@ -491,7 +420,7 @@ export function openModelsModal(o) {
         if (apply) o.onApply(work);
         if (trap) { trap.release(); trap.restoreFocus(); }
         window.removeEventListener('resize', clampIntoWindow);
-        if (vp) { try { vp.dispose(); } catch (e) { /* ignore */ } vp = null; }
+        pane3d.dispose();
         scrim.remove();
     }
     closeBtn.addEventListener('click', function () { close(false); });
@@ -503,7 +432,7 @@ export function openModelsModal(o) {
     window.addEventListener('resize', clampIntoWindow);
     trap = trapModal(scrim, card, { onEscape: function () { close(false); } });
     renderAll();
-    mount3D();
+    pane3d.mount(views.length > 0);
     paintFocus();
     applyBtn.focus();
     return { close: function () { close(false); } };
