@@ -21,10 +21,14 @@ under any static server, build a pre-rewritten zip instead:
 """
 
 import argparse
+import hashlib
 import io
 import json
 import os
+import re
 import sys
+import urllib.parse
+from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -56,6 +60,29 @@ except Exception as exc:                                        # noqa: BLE001
           % (type(exc).__name__, exc))
 
 
+# Entity tags in an If-None-Match value ("a", W/"b", ...). A W/ tag stays one
+# token with its prefix, so it never equals one of ours: only exact tags count.
+_ETAG_TOKEN = re.compile(r'(?:W/)?"[^"]*"')
+
+
+def file_etag(st):
+    """Strong ETag of a file served as-is, from its stat.
+
+    mtime alone is not enough: a checkout or another worktree can put DIFFERENT
+    bytes behind a URL with an OLDER (or equal) mtime. ctime cannot be set by
+    tools that preserve mtimes, the inode changes when a file is replaced by
+    rename (git checkout), and the size catches the rest.
+    """
+    return '"%x-%x-%x-%x"' % (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino)
+
+
+def body_etag(body):
+    """Strong ETag of a body that is not the file on disk (--offline rewrite):
+    a hash of the bytes actually sent, so toggling --offline (same file,
+    different body) can never validate the other mode's copy."""
+    return '"rewritten-%s"' % hashlib.blake2b(body, digest_size=16).hexdigest()
+
+
 class LucidHandler(SimpleHTTPRequestHandler):
     # Keep-alive, so a cold load reuses ~6 connections instead of opening one per
     # file. Safe only because the server is threaded (above): single-threaded
@@ -68,8 +95,8 @@ class LucidHandler(SimpleHTTPRequestHandler):
     # With only Last-Modified, a browser guesses freshness from the file's age, so
     # a module untouched for weeks was reused for days without asking -- the
     # desktop app's WKWebView (`tauri dev` loads this server) kept showing old UI
-    # after a checkout changed the file. Plain files still answer
-    # If-Modified-Since with a cheap 304, so a reload stays fast.
+    # after a checkout changed the file. A reload stays fast: unchanged files
+    # answer a matching If-None-Match with a 304 (see send_head).
     def send_response(self, *args, **kwargs):
         self._cache_control_sent = False
         super().send_response(*args, **kwargs)
@@ -83,6 +110,73 @@ class LucidHandler(SimpleHTTPRequestHandler):
         if not getattr(self, "_cache_control_sent", True):
             self.send_header("Cache-Control", "no-cache")
         super().end_headers()
+
+    # Revalidation is by exact ETag, never by date. The stdlib's send_head
+    # answers If-Modified-Since with 304 whenever the file is NOT NEWER than the
+    # browser's date, so when the file behind a URL gets OLDER -- an older branch
+    # checked out, or another worktree served the same localhost:8080 URL with
+    # newer files -- the browser keeps its newer copy forever. Every `tauri dev`
+    # shares one WKWebView cache, and on 2026-11-25 that handed one checkout a
+    # newer branch's ui/rendering.js whose import 404'd there: the desktop app
+    # hung on "Initializing...". So If-Modified-Since is dropped before the
+    # stdlib sees it, regular files are served here with a strong ETag, and only
+    # an If-None-Match naming that exact ETag gets a 304.
+    def send_head(self):
+        del self.headers["If-Modified-Since"]
+        path = self._plain_file_path()
+        if path is None:
+            return super().send_head()      # redirect, directory listing or 404
+        try:
+            f = open(path, "rb")
+        except OSError:
+            self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+            return None
+        try:
+            st = os.fstat(f.fileno())
+            etag = file_etag(st)
+            if self._etag_matches(etag):
+                f.close()
+                self._send_not_modified(etag)
+                return None
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-type", self.guess_type(path))
+            self.send_header("Content-Length", str(st.st_size))
+            self.send_header("Last-Modified", self.date_time_string(st.st_mtime))
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return f
+        except BaseException:
+            f.close()
+            raise
+
+    def _plain_file_path(self):
+        """The regular file a GET/HEAD serves (a directory's index.html), or None
+        where the stdlib answers: the redirect adding a directory's slash, a
+        directory listing, or a 404."""
+        path = self.translate_path(self.path)
+        if os.path.isdir(path):
+            if not urllib.parse.urlsplit(self.path).path.endswith("/"):
+                return None
+            for index in ("index.html", "index.htm"):
+                candidate = os.path.join(path, index)
+                if os.path.isfile(candidate):
+                    return candidate
+            return None
+        if path.endswith("/") or not os.path.isfile(path):
+            return None
+        return path
+
+    def _etag_matches(self, etag):
+        """Does If-None-Match name exactly this ETag? A W/ form or `*` does not
+        count: a needless 200 costs a download, a wrong 304 runs stale code."""
+        return any(token == etag
+                   for value in self.headers.get_all("If-None-Match") or ()
+                   for token in _ETAG_TOKEN.findall(value))
+
+    def _send_not_modified(self, etag):
+        self.send_response(HTTPStatus.NOT_MODIFIED)
+        self.send_header("ETag", etag)
+        self.end_headers()                  # + Cache-Control: no-cache
 
     def do_GET(self):
         rewritten = self._rewritten_body()
@@ -134,21 +228,20 @@ class LucidHandler(SimpleHTTPRequestHandler):
         return new.encode("utf-8", "surrogateescape"), fs_path
 
     def _send_rewritten(self, body, fs_path, include_body):
-        ctype = self.guess_type(fs_path)
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
+        # The ETag is a hash of these bytes, never the file's: mtime does not
+        # change when --offline is toggled, but the body does, so a file-based
+        # validator would hand the browser a cached CDN body while serving
+        # offline (or the reverse) and half the app would point at the wrong
+        # place. If-Modified-Since is never consulted here either.
+        etag = body_etag(body)
+        if self._etag_matches(etag):
+            self._send_not_modified(etag)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", self.guess_type(fs_path))
         self.send_header("Content-Length", str(len(body)))
-        # These were the only responses with no validator at all -- every other
-        # file gets Last-Modified from send_head() -- which left them uncacheable
-        # rather than merely revalidated.
-        #
-        # Deliberately NOT answering If-Modified-Since with a 304: mtime does not
-        # change when --offline is toggled, but the body does, so an mtime-only
-        # 304 would hand the browser a cached CDN body while serving offline (or
-        # the reverse) and half the app would point at the wrong place. Keep
-        # no-cache + a full 200 on revalidation; a 304 here needs a validator that
-        # includes the mode.
         self.send_header("Last-Modified", self.date_time_string(os.stat(fs_path).st_mtime))
+        self.send_header("ETag", etag)
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         if include_body:
