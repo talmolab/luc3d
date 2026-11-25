@@ -16797,6 +16797,16 @@ start when a declared package is missing rather than serving a page that half
 works. `.js` coverage is required, not optional: two of the six CDN references
 are ESM imports inside `ui/sessions-panes.js` and `ui/overlay-export-modal.js`.
 
+**Caching.** Every response says `Cache-Control: no-cache`, and revalidation is
+by exact ETag only: `LucidHandler.send_head` drops `If-Modified-Since` (the
+stdlib 304s whenever the file is not newer than the browser's date, so a file
+that got OLDER, e.g. another checkout or worktree on the same port, left the
+browser on its newer copy) and serves regular files with a strong ETag
+(`file_etag`: mtime_ns, ctime_ns, size, inode); a rewritten offline body's ETag
+is a hash of the bytes sent (`body_etag`). A 304 needs an `If-None-Match` naming
+that exact ETag. Redirects, directory listings and 404s stay the stdlib's.
+Test: `tests/test-server-revalidation.mjs`.
+
 **Imports from project modules.** `scripts/offline_deps.py` —
 `load_manifest`, `package_status`, `replacement_map`, `rewrite_text`,
 `is_rewritable`.

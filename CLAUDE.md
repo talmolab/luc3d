@@ -16,6 +16,7 @@ python3 server.py 8080            # Windows: py server.py 8080 (or python3 -m ht
 # App: http://localhost:8080/   Tests: http://localhost:8080/tests/test-runner.html
 python3 scripts/offline_deps.py install && python3 server.py --offline
 ```
+`server.py` revalidates by exact ETag only (never `If-Modified-Since`), so switching checkouts or worktrees on one port never serves a stale cached module; plain `http.server` can (test: `tests/test-server-revalidation.mjs`).
 
 ## Deployment
 `luc3d.sleap.ai` is the GitHub Pages custom domain (Cloudflare-proxied) for this repo; the `CNAME` at the `gh-pages` root makes it work. `.github/workflows/deploy.yml` publishes channels on `gh-pages`; `pr-preview.yml` owns `/pr/<n>/`. A deployed "build" is a copy of the repo at a ref.
