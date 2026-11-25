@@ -7,7 +7,7 @@
  * `trainingStore.ts:2323-2345`; `applyRemoteTelemetry`) @ c97c6a5.
  *
  * What it decides:
- *  - one `train` spec per training GROUP (`pose/training-groups.js`): the group's configs (one
+ *  - one `train` spec per training MODEL (`pose/training-models.js`): the model's configs (one
  *    per model, centroid first), `model_types`, the group's training `.slp` inline
  *    (`labels_content`, base64), the project tag and the output folder. The store's
  *    `submitJob` splits a multi-model spec into one job per model (the worker runs

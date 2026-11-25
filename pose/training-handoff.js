@@ -7,7 +7,7 @@
  * neither; "Entire session (all views)" and one random sample of moments shared by every view, so the
  * views stay comparable in 3D). The default is Random sample, not sleap-app's Suggested frames: a few
  * predicted frames to correct, which is what sleap-app's default is for. Each model runs on the views of
- * the current session it was trained for ("One model for all views": every trained view).
+ * the current session it was trained for; a view several models trained gets one of them (`handoffPlan`).
  *
  * Tests: tests/test-training-handoff.mjs.
  */
@@ -61,6 +61,44 @@ export function trainedModels(rows, groups) {
         else incomplete.push(g.name);
     }
     return { models: models, incomplete: incomplete };
+}
+
+/**
+ * Which trained models run on which views after training. Each view gets ONE model's predictions: the model the
+ * user picked for it (`prefs`, view -> model id) when that model trained it, else its model with the fewest views
+ * (the most specific), the first on a tie (`pose/training-models.js` `inferenceModelOf`). The Inference panel runs
+ * one pipeline at a time, so when the models are of several types, the type that covers the most views runs and
+ * the other models are named in `skipped`.
+ *
+ * @param {{groupId: string, name: string, views: string[], paths: string[]}[]} trained `trainedModels(...).models`
+ * @param {{id: string, name: string, views: string[], modelType: string}[]} snapshot the run's models, in list order
+ * @param {Object<string, string>} [prefs]
+ * @returns {{modelType: string|null, models: {groupId: string, name: string, views: string[], paths: string[]}[], skipped: string[]}}
+ */
+export function handoffPlan(trained, snapshot, prefs) {
+    const byId = new Map((snapshot || []).map(function (m) { return [m.id, m]; }));
+    const ok = (trained || []).filter(function (t) { return byId.has(t.groupId); });
+    const views = [];
+    ok.forEach(function (t) { t.views.forEach(function (v) { if (views.indexOf(v) === -1) views.push(v); }); });
+    const pick = {};
+    views.forEach(function (v) {
+        const cands = ok.filter(function (t) { return t.views.indexOf(v) !== -1; });
+        const want = prefs && prefs[v];
+        pick[v] = (cands.find(function (t) { return t.groupId === want; }) ||
+            cands.reduce(function (best, t) { return t.views.length < best.views.length ? t : best; })).groupId;
+    });
+    const count = new Map();
+    (snapshot || []).forEach(function (m) { if (!count.has(m.modelType)) count.set(m.modelType, 0); });
+    views.forEach(function (v) { const t = byId.get(pick[v]).modelType; count.set(t, count.get(t) + 1); });
+    let type = null, best = 0;
+    count.forEach(function (n, t) { if (n > best) { best = n; type = t; } });
+    const mine = function (t) { return t.views.filter(function (v) { return pick[v] === t.groupId; }); };
+    return {
+        modelType: type,
+        models: ok.filter(function (t) { return byId.get(t.groupId).modelType === type && mine(t).length > 0; })
+            .map(function (t) { return { groupId: t.groupId, name: t.name, views: mine(t), paths: t.paths.slice() }; }),
+        skipped: ok.filter(function (t) { return byId.get(t.groupId).modelType !== type && mine(t).length > 0; }).map(function (t) { return t.name; }),
+    };
 }
 
 /**

@@ -90,8 +90,11 @@ try {
     const atReady = urls.map(r => new URL(r.url)).filter(u => u.host === `localhost:${PORT}` && /\.m?js$/.test(u.pathname));
     const tags = new Set(['/app.js', '/lib/h5wasm/h5wasm.iife.js']);
     const pre = new Set(preloads.map(u => u.pathname + u.search));
-    // Connect and the Inference panel are imported dynamically after init (lazy by design, so not preloaded; it may land before or after "ready").
-    const lazyByDesign = (p) => p.startsWith('/ui/connect/') || p.startsWith('/pose/connect/') || /^\/ui\/inference-[a-z-]+\.js$/.test(p);
+    // Connect, the Inference panel and the Training panel (with the Models modals' shared 3D pane) are imported dynamically
+    // after init (lazy by design, so not preloaded; they may land before or after "ready").
+    const lazyByDesign = (p) => p.startsWith('/ui/connect/') || p.startsWith('/pose/connect/') || /^\/ui\/inference-[a-z-]+\.js$/.test(p) ||
+        /^\/(ui|pose|import-export)\/training-[a-z-]+\.js$/.test(p) || p === '/ui/panel-form.js' || p === '/ui/models-3d-pane.js' ||
+        p.startsWith('/lib/sleap-app-profiles/');
     const notPreloaded = atReady.filter(u => !tags.has(u.pathname) && !lazyByDesign(u.pathname) && !pre.has(u.pathname + u.search)).map(u => u.pathname);
     const reqCount = new Map(); for (const u of atReady) reqCount.set(u.pathname + u.search, (reqCount.get(u.pathname + u.search) || 0) + 1);
     const unused = [...pre].filter(k => reqCount.get(k) !== 1);

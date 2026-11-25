@@ -2,27 +2,31 @@
  * connect-training.mjs — the Training panel trains on a paired SLEAP Connect worker, end to end in
  * the WEB app against the fake worker (`tests/connect/fake-worker.mjs`).
  *
- *  1. Web build: the Training panel sits between Inference and Connect (sleap-app's order); it
- *     defaults to Top-Down with the Medium RF presets; Start waits for a session.
- *  2. A session (2 views, user labels on 6 frames of each, a prediction elsewhere): the views list
- *     shows 6 labelled frames each; Start asks for a worker.
+ *  Every setting lives in the Models modal (Edit models…, `#trnModelsModal`, edits a copy until Apply); the panel
+ *  shows a summary, the Backend, Start and the progress.
+ *  1. Web build: the Training panel sits between Inference and Connect (sleap-app's order); its one
+ *     model ("All views") defaults to Top-Down with the Medium RF presets; Start waits for a session.
+ *  2. A session (2 views, user labels on 6 frames of each, a prediction elsewhere): the Run settings
+ *     views list shows 6 labelled frames each; Start asks for a worker.
  *  3. Pair, pick the worker in the panel's Backend: both views are "not located on the worker yet";
  *     ONE Locate on worker… places both; the output folder is the session's folder on the worker.
  *  4. Start (Max Epochs 3): one `train` job per model, centroid first: inline `labels_content` (a
  *     training .slp naming the worker videos, 12 user instances, no prediction), the config with
  *     max_epochs 3, W&B off and the run name, which the store hoists into `run_name`; the project
- *     tag and output_dir. Telemetry fills the row ("Training: Centroid · all views (1/2)",
+ *     tag and output_dir. Telemetry fills the row ("Training: Centroid (1/2)",
  *     "1 / 3 epochs", "loss: 0.0200").
  *  5. Stop Early: `jobs.cancel {mode: "stop"}` on the running job only; it completes (sleap-nn exits 0)
  *     and the centered-instance job follows; both done → Complete, both model folders listed, Next
  *     step, Train Again. Post-training inference (default Random sample): the Inference panel submits
  *     one `track` job per view with both trained folders; the box points to Fetch & Load.
- *  6. One per view: Train Again → Start sends cam1's job only (one video in its file); Cancel sends
+ *  6. One per view: Train Again → Edit models… ▸ One per view (the new models keep the shown model's
+ *     Top-Down and Max Epochs) ▸ Apply (model cards cam1, cam2) → Start sends cam1's job only (one video in its
+ *     file, run name `…centroid.cam1.n=6`); the rows go under a header per model; Cancel sends
  *     `mode: "cancel"`; the run ends Failed "Training cancelled", the row "cancelled", nothing more is
  *     submitted.
  *     View Metrics reads the runs ON THE WORKER (`fs.stat` / `fs.read`): run.centroid's real metrics JSON
  *     gives its numbers, run.centered_instance (no metrics file) shows "—"; no Add Trained Model(s)… there.
- *  7. Retry with Resume from a worker checkpoint (typed in Full Configuration: a worker has no folder picker)
+ *  7. Retry with Resume from a worker checkpoint (typed in Full Configuration, opened from the Models modal: a worker has no folder picker)
  *     → the centroid job's config resumes from it (`resume_ckpt_path`), the other model's does not; then the
  *     failing job: the error banner names the model and "exit code 1", and Error output (sleap-nn) shows the
  *     worker's error line.
@@ -36,6 +40,7 @@
 import { FakeWorker } from '../connect/fake-worker.mjs';
 import { runConnectE2E, check, fail, watchPage, pair } from './fixtures/connect-e2e.mjs';
 import { loadTrainingSession } from './fixtures/training-session.js';
+import { openModels, applyModels, setModelType, setModelNumber } from './fixtures/training-models.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +69,7 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     check(order.join() === 'tabInference,tabTraining,tabConnect', 'rail order: Inference, Training, Connect (sleap-app)', order);
     await page.evaluate(async () => { (await import('./ui/training-panel.js')).showTrainingPanel(); });
     await page.waitForFunction(() => /Open a session/.test(document.getElementById('trnWhy').textContent));
+    await openModels(page);
     const t1 = await page.evaluate(async () => {
         const s = (await import('./ui/training-panel.js'))._trainingState();
         return {
@@ -72,6 +78,8 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
             start: document.getElementById('trnStart').textContent.trim(),
         };
     });
+    await page.click('#trnMmCancel');
+    await page.waitForFunction(() => !document.getElementById('trnModelsModal'));
     check(t1.type === 'top_down' && t1.slots.join() === 'Preset: Centroid (Medium RF),Preset: Centered Instance (Medium RF)', 'Top-Down with the Medium RF presets', t1);
     check(t1.options.filter((o) => /\[off\]/.test(o)).length === 2 && t1.options.some((o) => /Box Detector \(needs box labels\) \[off\]/.test(o)),
         'box-detector types are disabled with "(needs box labels)"', t1.options);
@@ -80,19 +88,27 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     console.log('\n2. A session with user labels');
     const sess = await loadTrainingSession(page);
     check(sess.views.join() === 'cam1,cam2', 'session loaded', sess);
+    await openModels(page, { run: true });
     const rows2 = await page.evaluate(() => Array.from(document.querySelectorAll('#trnViews .trn-vrow')).map((r) => r.dataset.view + ':' + r.querySelector('.trn-vcount').textContent));
     check(rows2.join() === 'cam1:6 frames,cam2:6 frames', 'each view lists its 6 labelled frames (predictions do not count)', rows2);
     check(await page.evaluate(() => /^12 labelled frames · 12 user instances · 2 videos$/.test(document.getElementById('trnDataSummary').textContent)), 'summary: 12 frames, 12 instances, 2 videos');
+    await page.click('#trnMmCancel');
+    await page.waitForFunction(() => !document.getElementById('trnModelsModal'));
     check(await page.evaluate(() => document.getElementById('trnWhy').textContent === 'Select a worker' && document.getElementById('trnStart').disabled), 'Start asks for a worker');
+    await openModels(page);
     const rec = await page.evaluate(() => ({ type: document.getElementById('trnModelType').value, rec: document.getElementById('trnRecommendation').textContent,
         star: Array.from(document.querySelectorAll('#trnModelType option')).find((o) => /★/.test(o.textContent)).value }));
     check(rec.type === 'single_animal' && rec.star === 'single_animal' && /Only one animal per frame/.test(rec.rec),
         'one animal per frame: Single Animal is recommended (★) and auto-selected, as sleap-app does for an untouched type', rec);
     await page.selectOption('#trnModelType', 'top_down');
+    await applyModels(page);
     await page.evaluate(async () => { (await import('./ui/training-panel.js'))._trainingAnalyze(); });
+    await openModels(page);
     const picked = await page.evaluate(() => ({ type: document.getElementById('trnModelType').value, rec: document.getElementById('trnRecommendation').textContent }));
     check(picked.type === 'top_down' && /^\s*Recommended: Single Animal — Only one animal per frame$/.test(picked.rec),
         'picking Top-Down sticks; the line says what is recommended instead', picked);
+    await page.click('#trnMmCancel');
+    await page.waitForFunction(() => !document.getElementById('trnModelsModal'));
 
     console.log('\n3. Pair, pick the worker, Locate once');
     await pair(page, worker, WS);
@@ -102,8 +118,10 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     check(true, 'the panel\'s Backend connected the worker');
     check(await page.evaluate(() => !!document.getElementById('infBackend') && !!document.getElementById('trnBackend') && document.querySelectorAll('#infBackend').length === 1),
         'two Backend pickers on one page keep their own ids');
+    await page.waitForFunction(() => /Locate each view/.test(document.getElementById('trnWhy').textContent), null, { timeout: 20000 });
+    check(await page.evaluate(() => document.getElementById('trnWhy').textContent === 'Locate each view\u2019s video on the worker (Edit models… \u25B8 Run settings).'), 'Start asks to locate the videos (Edit models… ▸ Run settings)');
+    await openModels(page, { run: true });
     await page.waitForFunction(() => document.querySelectorAll('#trnViews .trn-locate').length === 2, null, { timeout: 20000 });
-    check(await page.evaluate(() => /Locate each view/.test(document.getElementById('trnWhy').textContent)), 'Start asks to locate the videos');
     await page.click('#trnViews .trn-locate');
     await page.waitForSelector('#remoteFileBrowser .rfb-entry');
     const dbl = (name) => page.dblclick(`#remoteFileBrowser .rfb-entry[data-name="${name}"]`);
@@ -116,13 +134,14 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     check(true, 'one Locate placed both views');
     await page.waitForFunction(() => document.querySelector('#trnOutput .trn-path').textContent === '/data/sess/models', null, { timeout: 20000 });
     check(true, 'output: the session\'s folder on the worker (models go in /data/sess/models)');
+    await applyModels(page);
 
     console.log('\n4. Start: one train job per model');
-    await page.fill('#trnMaxEpochs', '3');
-    await page.dispatchEvent('#trnMaxEpochs', 'change');
+    await openModels(page);
+    await setModelNumber(page, '#trnMaxEpochs', 3);
     await page.click('.trn-tabs .trn-seg-btn[data-slot="centered_instance"]');
-    await page.fill('#trnMaxEpochs', '3');
-    await page.dispatchEvent('#trnMaxEpochs', 'change');
+    await setModelNumber(page, '#trnMaxEpochs', 3);
+    await applyModels(page);
     await page.waitForFunction(() => !document.getElementById('trnStart').disabled, null, { timeout: 20000 });
     await page.click('#trnStart');
     await waitJobs(1);
@@ -144,10 +163,10 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     worker.curve(j1.job_id, [[0, 0.05], [5, 0.02]]);
     await page.waitForFunction(() => {
         const r = document.querySelector('#trnRows .trn-row');
-        return r && /^Training: Centroid · all views \(1\/2\)$/.test(r.querySelector('.trn-row-text').textContent) && /1 \/ 3 epochs/.test(r.textContent) && /loss: 0\.0200/.test(r.textContent);
+        return r && /^Training: Centroid \(1\/2\)$/.test(r.querySelector('.trn-row-text').textContent) && /1 \/ 3 epochs/.test(r.textContent) && /loss: 0\.0200/.test(r.textContent);
     }, null, { timeout: 20000 });
-    check(true, 'telemetry fills the row: Training: Centroid · all views (1/2), 1 / 3 epochs, loss 0.0200');
-    check(await page.evaluate(() => /Centered Instance · all views \(pending\)/.test(document.querySelectorAll('#trnRows .trn-row')[1].textContent)), 'the second model is pending');
+    check(true, 'telemetry fills the row: Training: Centroid (1/2), 1 / 3 epochs, loss 0.0200');
+    check(await page.evaluate(() => /Centered Instance \(pending\)/.test(document.querySelectorAll('#trnRows .trn-row')[1].textContent)), 'the second model is pending');
 
     console.log('\n5. Stop Early, then the next model');
     await page.click('#trnStopEarly');
@@ -159,7 +178,7 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     jobs = [...worker.jobs.values()];
     const j2 = jobs[1];
     check(j2.spec.model_types.join() === 'centered_instance' && /centered_instance\.n=12'$/.test(j2.spec.run_name), 'job 2 trains the centered instance model', j2.spec.run_name);
-    await page.waitForFunction(() => /Centroid · all views — 1 epochs, best val_loss: 0\.0300/.test(document.querySelector('#trnRows .trn-row').textContent), null, { timeout: 20000 });
+    await page.waitForFunction(() => /Centroid — 1 epochs, best val_loss: 0\.0300/.test(document.querySelector('#trnRows .trn-row').textContent), null, { timeout: 20000 });
     check(true, 'row 1: 1 epochs, best val_loss 0.0300');
     worker.setJobState(j2.job_id, 'running');
     worker.epoch(j2.job_id, 0, 0.05, 0.06);
@@ -198,8 +217,16 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
 
     console.log('\n6. One per view, then Cancel');
     await page.click('#trnTrainAgain');
-    await page.click('.trn-seg-btn[data-mode="perview"]');
-    await page.waitForFunction(() => document.querySelectorAll('#trnGroups .trn-chip').length === 2);
+    await openModels(page);
+    await page.click('#trnMmSplitEach');
+    // A split starts the new models from the shown model's settings: the Top-Down recipe (and Max Epochs 3) carries over.
+    const kept = await page.evaluate(async () => (await import('./ui/training-panel.js'))._trainingState().work.models
+        .map((m) => m.name + ':' + m.modelType + ':' + m.hp.centroid.maxEpochs + ':' + m.hp.centered_instance.maxEpochs));
+    check(kept.join() === 'cam1:top_down:3:3,cam2:top_down:3:3', 'the split keeps the shown model\'s settings (Top-Down, Max Epochs 3)', kept);
+    await applyModels(page);
+    const cards = await page.evaluate(() => Array.from(document.querySelectorAll('#trnModelCards .trn-sum-card')).map((c) => c.dataset.model));
+    const names = await page.evaluate(async () => (await import('./ui/training-panel.js'))._trainingState().models.map((m) => m.name));
+    check(cards.length === 2 && names.join() === 'cam1,cam2', 'One per view: two model cards, cam1 and cam2', { cards, names });
     const before = worker.jobs.size;
     await page.click('#trnStart');
     await waitJobs(before + 1);
@@ -207,6 +234,11 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
     const spec3 = await describeSpec(j3.spec);
     check(spec3.labels.videos.join() === '/data/sess/cam1/cam1.mp4' && spec3.labels.frames === 6 && /centroid\.cam1\.n=6'$/.test(j3.spec.run_name),
         'cam1\'s job: only its video, 6 frames, a per-view run name', { videos: spec3.labels.videos, run: j3.spec.run_name });
+    const grouped = await page.evaluate(() => ({
+        heads: Array.from(document.querySelectorAll('#trnRows .trn-group-head')).map((h) => h.querySelector('.trn-group-name').textContent),
+        rows: Array.from(document.querySelectorAll('#trnRows .trn-row .trn-row-text')).map((t) => t.textContent) }));
+    check(grouped.heads.join() === 'cam1,cam2' && grouped.rows[0] === 'Training: Centroid (1/4)' && grouped.rows[3] === 'Centered Instance (pending)',
+        'two models: the rows go under a header per model, each naming its head only', grouped);
     worker.setJobState(j3.job_id, 'running');
     await page.click('#trnCancel');
     await waitFor(() => worker.jobs.get(j3.job_id).cancelRequested === 'cancel');
@@ -220,17 +252,28 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
 
     console.log('\n7. Retry with Resume from a worker checkpoint, then a failing job');
     await page.click('#trnRetry');
+    await openModels(page);
+    await page.click('#trnMmModels .trn-mm-card .trn-mm-name');
     await page.click('#trnFullConfig');
     await page.waitForSelector('#trnConfigDialog');
     await page.click('#trnConfigDialog .tcd-tabs .trn-seg-btn[data-tab="centroid"]');
     await page.check('#tcdMode input[value="resume"]');
-    const rm = await page.evaluate(() => ({ text: !document.getElementById('tcdCheckpoint').hidden, choose: !document.getElementById('tcdChooseCheckpoint').hidden,
-        why: document.getElementById('trnWhy').textContent }));
+    const rm = await page.evaluate(() => ({ text: !document.getElementById('tcdCheckpoint').hidden, choose: !document.getElementById('tcdChooseCheckpoint').hidden }));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trnConfigDialog'));
+    await applyModels(page);   // the panel only sees the edit after Apply
+    rm.why = await page.evaluate(() => document.getElementById('trnWhy').textContent);
     check(rm.text && !rm.choose && /Centroid: Choose the checkpoint to resume from/.test(rm.why), 'remote: the checkpoint is a worker path typed in; Start waits for it', rm);
+    await openModels(page);
+    await page.click('#trnMmModels .trn-mm-card .trn-mm-name');
+    await page.click('#trnFullConfig');
+    await page.waitForSelector('#trnConfigDialog');
+    await page.click('#trnConfigDialog .tcd-tabs .trn-seg-btn[data-tab="centroid"]');
     await page.fill('#tcdCheckpoint', '/data/sess/models/run.centroid/best.ckpt');
     await page.dispatchEvent('#tcdCheckpoint', 'change');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.getElementById('trnConfigDialog'));
+    await applyModels(page);
     const before2 = worker.jobs.size;
     await page.waitForFunction(() => !document.getElementById('trnStart').disabled, null, { timeout: 20000 });
     await page.click('#trnStart');

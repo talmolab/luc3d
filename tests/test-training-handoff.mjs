@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-    POST_TRAINING_TARGETS, POST_TRAINING_DEFAULTS, inferencePipelineFor, trainedModels, skeletonChangeProblem,
+    POST_TRAINING_TARGETS, POST_TRAINING_DEFAULTS, inferencePipelineFor, trainedModels, skeletonChangeProblem, handoffPlan,
 } from '../pose/training-handoff.js';
 import { MODEL_TYPE_OPTIONS } from '../ui/training-args.js';
 
@@ -58,6 +58,34 @@ const shared = trainedModels([{ groupId: 'all', status: 'completed', modelDir: '
 assert.deepEqual(shared.models[0].views, ['a', 'b']);
 assert.deepEqual(trainedModels([], groups).models, []);
 assert.deepEqual(trainedModels(rows, []).models, []);
+
+// §3b which model each view gets after training (a view in several models), and one pipeline at a time.
+{
+    const snap = [
+        { id: 'top', name: 'Top', views: ['mid', 't1', 't2'], modelType: 'top_down' },
+        { id: 'side', name: 'Side', views: ['mid', 's1'], modelType: 'top_down' },
+        { id: 'all', name: 'All', views: ['mid', 't1', 't2', 's1', 's2'], modelType: 'bottom_up' },
+    ];
+    const trained = snap.map((m) => ({ groupId: m.id, name: m.name, views: m.views.slice(), paths: ['/r/' + m.id] }));
+    // By default each view gets its most specific model: mid → Side (2 views), t1/t2 → Top, s1 → Side, s2 → All (bottom-up).
+    const p1 = handoffPlan(trained, snap, {});
+    assert.equal(p1.modelType, 'top_down');
+    assert.deepEqual(p1.models.map((m) => [m.name, m.views]), [['Top', ['t1', 't2']], ['Side', ['mid', 's1']]]);
+    assert.deepEqual(p1.skipped, ['All']);
+    // The user's pick wins when that model trained the view.
+    const p2 = handoffPlan(trained, snap, { mid: 'top', s1: 'all', t1: 'nope' });
+    assert.deepEqual(p2.models.map((m) => [m.name, m.views]), [['Top', ['mid', 't1', 't2']]]);
+    assert.equal(p2.modelType, 'top_down');
+    assert.deepEqual(p2.skipped, ['All']);
+    // One model: everything it trained, nothing skipped.
+    const one = handoffPlan([trained[2]], [snap[2]], {});
+    assert.deepEqual([one.modelType, one.models[0].views, one.skipped], ['bottom_up', ['mid', 't1', 't2', 's1', 's2'], []]);
+    // A model whose rows did not all finish is not in `trained`: its views fall to the others.
+    const p3 = handoffPlan(trained.filter((t) => t.groupId !== 'side'), snap, {});
+    assert.deepEqual(p3.models.map((m) => [m.name, m.views]), [['Top', ['mid', 't1', 't2']]]);
+    assert.deepEqual(p3.skipped, ['All']);
+    assert.deepEqual(handoffPlan([], snap, {}), { modelType: null, models: [], skipped: [] });
+}
 
 // §4 skeleton.
 assert.equal(skeletonChangeProblem(['head', 'tail'], ['tail', 'head']), null);

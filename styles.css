@@ -8980,6 +8980,92 @@ div.track-summary-steps { padding-left: 0; }
 .trn-seg-btn:disabled { cursor: default; opacity: 0.6; }
 .trn-tabs { margin-bottom: 2px; }
 .trn-chips { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 4px; }
+/* Training ▸ Models to train… (ui/training-models-modal.js): models in the centre, the views folded, a settings side panel, the 3D view. */
+.trn-mm { min-width: 760px; min-height: 420px; }
+.trn-mm-main { gap: 10px; }
+.trn-mm-split { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.trn-mm-split .inf-mm-label { margin-right: 4px; }
+.trn-mm-models { display: flex; flex-direction: column; gap: 8px; }
+.trn-mm-card { border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-tertiary); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 7px; }
+.trn-mm-card.hl { border-color: rgba(102, 126, 234, 0.6); }
+.trn-mm-card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.trn-mm-cardtop { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.trn-mm-name { flex: 1; min-width: 0; background: none; border: none; padding: 0; text-align: left; cursor: pointer; color: var(--text-primary);
+  font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trn-mm-name:hover { text-decoration: underline; }
+.trn-mm-badge { flex: none; font-size: 10px; color: var(--text-secondary); border: 1px solid var(--border-light); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
+.trn-mm-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.trn-mm-tag { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; padding: 1px 2px 1px 8px; border-radius: 10px;
+  background: var(--bg-button); color: var(--text-primary); border: 1px solid transparent; }
+.trn-mm-tag.off { color: var(--text-secondary); border-style: dashed; border-color: var(--border-light); background: transparent; }
+.trn-mm-tag.hl { border-color: var(--accent); background: var(--accent-dim); }
+.trn-mm-tagx { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 9px; padding: 2px 4px; border-radius: 8px; line-height: 1; }
+.trn-mm-tagx:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.08); }
+.trn-mm-addview { font-size: 11px; background: transparent; color: var(--text-secondary); border: 1px dashed var(--border-light);
+  border-radius: 10px; padding: 1px 6px; max-width: 160px; cursor: pointer; }
+.trn-mm-auto { font-size: 10.5px; color: var(--text-muted); font-style: italic; }
+.trn-mm-meta { font-size: 11px; color: var(--text-secondary); }
+.trn-mm-fold { border: 1px solid var(--border-color); border-radius: 5px; padding: 0 8px; }
+.trn-mm-foldhead { display: flex; align-items: center; gap: 6px; padding: 6px 0; cursor: pointer; list-style: none; user-select: none; }
+.trn-mm-foldhead::-webkit-details-marker { display: none; }
+.trn-mm-fold[open] > .trn-mm-foldhead .inf-chevron::before { content: '\25BE'; }
+.trn-mm-foldnote { font-size: 11px; color: var(--text-muted); }
+.trn-mm-foldnote.warn { color: var(--warning-color); }
+.trn-mm-fold > .inf-mm-bulk { margin-bottom: 6px; }
+/* The Views table scrolls within a capped height (asked for: it is the lesser part of the modal). */
+.trn-mm-views { max-height: 240px; overflow-y: auto; margin-bottom: 8px; border: 1px solid var(--border-color); border-radius: 4px; }
+.trn-mm-vtable { font-size: 12px; }
+.trn-mm-vrow { display: grid; grid-template-columns: 16px minmax(110px, 170px) 48px minmax(0, 1fr) 120px; align-items: center; column-gap: 8px;
+  padding: 4px 8px; border-bottom: 1px solid var(--border-color); }
+.trn-mm-vrow:last-child { border-bottom: none; }
+.trn-mm-vrow input { margin: 0; }
+.trn-mm-vhead { position: sticky; top: 0; z-index: 1; background: var(--bg-primary); color: var(--text-muted); font-size: 10.5px; font-weight: 500; }
+.trn-mm-vrow.hl { background: var(--accent-dim); }
+.trn-mm-vrow.off .trn-mm-vname { opacity: 0.6; }
+.trn-mm-vname { display: flex; align-items: center; gap: 2px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trn-mm-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.trn-mm-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 1px 8px; border-radius: 10px; cursor: pointer;
+  background: transparent; color: var(--text-secondary); border: 1px dashed var(--border-light); white-space: nowrap; }
+.trn-mm-chip i { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--m); }
+.trn-mm-chip.on { border-style: solid; border-color: var(--m); color: var(--text-primary); background: color-mix(in srgb, var(--m) 18%, transparent); }
+.trn-mm-chip.on i { background: var(--m); }
+.trn-mm-infer { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trn-mm-infer .inf-mm-select { max-width: 100%; }
+.trn-mm-run { padding: 2px 0 10px; display: flex; flex-direction: column; gap: 8px; }
+.trn-mm-drawer { width: 330px; flex: none; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border-color); background: var(--bg-primary); }
+.trn-mm-drawerhead { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px; border-bottom: 1px solid var(--border-color); }
+.trn-mm-nameinput { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text-primary); background: transparent;
+  border: 1px solid transparent; border-radius: 4px; padding: 3px 5px; }
+.trn-mm-nameinput:hover, .trn-mm-nameinput:focus { border-color: var(--border-light); background: var(--bg-secondary); }
+.trn-mm-drawerbody { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.trn-mm-drawerfoot { padding: 8px 12px; border-top: 1px solid var(--border-color); }
+.trn-mm-strip { display: none; }
+.trn-mm-drawer.collapsed { width: 30px; }
+.trn-mm-drawer.collapsed > :not(.trn-mm-strip) { display: none; }
+.trn-mm-drawer.collapsed > .trn-mm-strip { display: block; margin: 8px auto; writing-mode: vertical-rl; transform: rotate(180deg); background: none;
+  border: 1px solid var(--border-light); border-radius: 5px; color: var(--text-secondary); font-size: 11px; padding: 10px 3px; cursor: pointer; white-space: nowrap; }
+.trn-mm-drawer.collapsed > .trn-mm-strip:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+/* Training panel: the models summary (the settings live in the Models modal). */
+.trn-sum-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.trn-sum-cards { display: flex; flex-direction: column; gap: 6px; }
+.trn-sum-card { border: 1px solid var(--border-color); border-radius: 5px; background: var(--bg-tertiary); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.trn-sum-cardtop { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.trn-sum-name { flex: 1; min-width: 0; font-weight: 600; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trn-sum-edit .inf-icon { width: 12px; height: 12px; }
+.trn-sum-tags { display: flex; flex-wrap: wrap; gap: 3px; }
+.trn-sum-tag { font-size: 10px; padding: 0 5px; border: 1px solid var(--border-light); border-radius: 4px; color: var(--text-secondary); }
+.trn-sum-none { font-size: 10px; color: var(--warning-color); }
+.trn-sum-meta { font-size: 10px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.trn-sum-problems { display: flex; flex-direction: column; gap: 3px; }
+.trn-sum-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; row-gap: 3px; font-size: 10.5px; }
+.trn-sum-k { color: var(--text-muted); }
+.trn-sum-v { overflow-wrap: anywhere; }
+.trn-group-head { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; margin-top: 2px; }
+.trn-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trn-group-views { font-weight: 400; color: var(--text-muted); font-size: 10px; }
+.trn-row-grouped { padding-left: 15px; }
+
 .trn-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 1px 6px; border: 1px solid var(--border-light); border-radius: 4px; }
 .trn-chip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .trn-pathrow { display: flex; align-items: center; gap: 6px; min-width: 0; }

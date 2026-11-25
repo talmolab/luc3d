@@ -34,6 +34,12 @@
  *     training_config.yaml; Resume refuses an .h5 and Start waits; training_prepare gets each model's
  *     `init`; View Metrics lists the runs with the real numbers, a row opens the detail (boxplot + list).
  *
+ *
+ * The settings live in the Models modal (Training ▸ Edit models…, `#trnModelsModal`): the model's type and
+ * configs in its side panel, the run's (views, validation split, runs folder, post-training inference) in its
+ * Run settings fold; its edits reach the run only on Apply (the runs folder picker acts at once). One model
+ * ("All views") trains here, so rows carry the head only; the panel shows a summary card.
+ *
  * Usage: node tests/e2e/desktop-training.mjs   (PORT= to move its server; SHOT=file.png screenshots 7, SHOT9=file.png 9)
  */
 import { chromium } from 'playwright';
@@ -42,6 +48,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTrainingSession } from './fixtures/training-session.js';
+import { openModels, applyModels } from './fixtures/training-models.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -219,14 +226,20 @@ try {
     console.log('\n1. Desktop with sleap-nn');
     await page.waitForFunction(() => /sleap-nn 0\.3\.5/.test(document.getElementById('trnEnvLine').textContent), null, { timeout: 20000 });
     await loadTrainingSession(page);
+    await openModels(page, { run: true });
     await page.selectOption('#trnModelType', 'top_down');
     const s1 = await page.evaluate(() => ({
         backend: document.getElementById('trnBackend').value, start: document.getElementById('trnStart').textContent.trim(),
-        dry: !document.getElementById('trnDryRun').hidden, why: document.getElementById('trnWhy').textContent,
+        dry: !document.getElementById('trnDryRun').hidden,
         runs: !document.getElementById('trnRunsFolder').hidden,
     }));
+    await applyModels(page);
+    s1.why = await page.textContent('#trnWhy');
     check(s1.backend === '__local__' && s1.start === 'Start Training' && s1.dry && s1.runs, 'Local by default: Start Training, Dry run, a Runs folder row', s1);
-    check(/Choose a runs folder/.test(s1.why), 'Start waits for a runs folder', s1.why);
+    check(s1.why === 'Choose a runs folder (Edit models… ▸ Run settings).', 'Start waits for a runs folder', s1.why);
+    const c1 = await page.evaluate(() => Array.from(document.querySelectorAll('#trnModelCards .trn-sum-card')).map((c) => c.textContent));
+    check(c1.length === 1 && /All views/.test(c1[0]) && /cam1/.test(c1[0]) && /cam2/.test(c1[0]), 'the panel summarises the one model (All views: cam1, cam2)', c1);
+    await openModels(page, { run: true });
     const p1 = await page.evaluate(() => ({ target: document.getElementById('trnPostTarget').value,
         options: Array.from(document.querySelectorAll('#trnPostTarget option')).map((o) => o.value),
         samples: document.getElementById('trnPostSamples').value, existing: document.getElementById('trnPostExisting').value }));
@@ -236,13 +249,14 @@ try {
 
     console.log('\n2. Runs folder; videos on disk');
     await page.click('#trnRunsChoose');
-    await page.waitForFunction(() => /holds \/rec\/cam1/.test(document.querySelector('#tabTraining .inf-error-text:not([hidden])') ? document.querySelector('#tabTraining .inf-error-text:not([hidden])').textContent : ''));
+    await page.waitForFunction(() => /holds \/rec\/cam1/.test(document.querySelector('#trnModelsModal .inf-error-text:not([hidden])') ? document.querySelector('#trnModelsModal .inf-error-text:not([hidden])').textContent : ''));
     check(true, 'a folder holding the project is refused with Rust\'s reason');
     await page.click('#trnRunsChoose');
     await page.waitForFunction(() => document.querySelector('#trnRunsFolder .trn-path').textContent === '/rec/models');
     check(await page.evaluate(() => /1 trained run already there/.test(document.getElementById('trnRunsFolder').textContent)), 'the models folder is taken; its existing run is mentioned');
     await page.waitForFunction(() => Array.from(document.querySelectorAll('#trnViews .trn-vworker-text')).map((e) => e.textContent).join() === '/rec/cam1/cam1.mp4,/rec/cam2/cam2.mp4', null, { timeout: 20000 });
     check(true, 'each view\'s video is found on disk from the opened files');
+    await applyModels(page);
     await page.waitForFunction(() => !document.getElementById('trnStart').disabled, null, { timeout: 20000 });
 
     console.log('\n3. Dry run');
@@ -252,7 +266,10 @@ try {
     check(d3.prepared === 1 && d3.released.includes('tok1'), 'This sleap-nn can\'t do a dry run; its token is released', d3);
 
     console.log('\n4. Start: two models, one after another');
+    await openModels(page);
     await page.fill('#trnMaxEpochs', '200');
+    await page.dispatchEvent('#trnMaxEpochs', 'change');
+    await applyModels(page);
     await page.click('#trnStart');
     await page.waitForFunction(() => /Complete/.test((document.querySelector('#trnProgress .inf-status-text') || {}).textContent || ''), null, { timeout: 60000 });
     const p4 = await page.evaluate(async () => {
@@ -330,7 +347,7 @@ try {
     await page.waitForFunction(() => /Failed/.test((document.querySelector('#trnProgress .inf-status-text') || {}).textContent || ''), null, { timeout: 20000 });
     const f6 = await page.evaluate(() => ({ err: document.getElementById('trnError').textContent, out: document.querySelector('.trn-errout pre').textContent,
         shown: !document.querySelector('.trn-errout').hidden, released: [...window.__mock.released] }));
-    check(/^Training Centroid · all views failed \(exit code 1\)/.test(f6.err), 'the error names the model and the exit code', f6.err);
+    check(/^Training Centroid failed \(exit code 1\)/.test(f6.err), 'the error names the model and the exit code', f6.err);
     check(f6.shown && /MPS backend out of memory/.test(f6.out) && !/objc/.test(f6.out), 'Error output: the traceback line, not the objc noise', f6.out);
     check(f6.released.includes('tok' + (nPrep + 1)), 'the failed run\'s token is released');
     check(await page.evaluate(() => document.getElementById('trnPostInference').hidden && window.__mock.inference.length === 0),
@@ -338,8 +355,10 @@ try {
 
     console.log('\n7. Post-training inference: the trained models run in the Inference panel');
     await page.click('#trnRetry');
+    await openModels(page, { run: true });
     await page.selectOption('#trnPostTarget', 'random');
     await page.check('#trnPostSkipUser input');
+    await applyModels(page);
     await page.click('#trnStart');
     await page.waitForFunction(() => { const b = document.getElementById('trnPostInference'); return b && !b.hidden && /merged into the project|failed|skipped/.test(b.textContent); }, null, { timeout: 60000 });
     const h7 = await page.evaluate(async () => {
@@ -397,9 +416,12 @@ try {
     check(/skeleton changed while the models trained \(removed Z\)/.test(h8.box) && h8.n === 0, 'skipped, naming the node; no inference ran', h8);
 
     console.log('\n9. Trained runs, Fine-tune / Resume, View Metrics');
-    await page.selectOption('#trnPostTarget', 'nothing');
     await page.click('#trnTrainAgain');
+    await openModels(page, { run: true });
+    await page.selectOption('#trnPostTarget', 'nothing');
+    await applyModels(page);
     await page.evaluate(async () => (await import('./ui/training-panel.js'))._scanTrainedRuns());
+    await openModels(page);
     const t9 = await page.evaluate(async () => {
         const T = (await import('./ui/training-panel.js'))._trainingState();
         return { trained: T.local.trained.map((r) => ({ path: r.path, head: r.head, ck: r.checkpoint, runName: r.runName })),
@@ -430,7 +452,15 @@ try {
     await page.check('#tcdMode input[value="finetune"]');
     await page.click('#trnConfigDialog .tcd-tabs .trn-seg-btn[data-tab="centered_instance"]');
     await page.check('#tcdMode input[value="finetune"]');
+    // The modal's edits reach the run only on Apply: close the dialog and the modal, then read Start's reason.
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trnConfigDialog'));
+    await applyModels(page);
     check(/^Centered Instance: Choose the checkpoint to fine-tune from/.test(await page.textContent('#trnWhy')), 'Fine-tune without a checkpoint: Start waits for one');
+    await openModels(page);
+    await page.click('#trnFullConfig');
+    await page.waitForSelector('#trnConfigDialog');
+    await page.click('#trnConfigDialog .tcd-tabs .trn-seg-btn[data-tab="centered_instance"]');
     await page.evaluate((p) => { window.__mock.put('/models/legacy/best_model.h5', new Uint8Array(4)); window.__mock.modelPicks.push(p, '/models/legacy'); }, cRun.path);
     await page.click('#tcdChooseCheckpoint');
     await page.waitForFunction(() => /head mismatch/.test(document.querySelector('#tcdMode .tcd-ckpt-msg').textContent));
@@ -440,14 +470,22 @@ try {
     await page.waitForFunction(() => document.querySelector('#tcdMode .tcd-ckpt-path').textContent === '/models/legacy/best_model.h5');
     check(await page.isHidden('#tcdMode .tcd-ckpt-msg'), 'a legacy SLEAP folder: its best_model.h5 (Fine-tune takes .h5), no warning');
     await page.check('#tcdMode input[value="resume"]');
-    const r9 = await page.evaluate(() => ({ msg: document.querySelector('#tcdMode .tcd-ckpt-msg').textContent, bad: /tcd-ckpt-bad/.test(document.querySelector('#tcdMode .tcd-ckpt-msg').className),
-        why: document.getElementById('trnWhy').textContent, start: document.getElementById('trnStart').disabled }));
+    const r9 = await page.evaluate(() => ({ msg: document.querySelector('#tcdMode .tcd-ckpt-msg').textContent, bad: /tcd-ckpt-bad/.test(document.querySelector('#tcdMode .tcd-ckpt-msg').className) }));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trnConfigDialog'));
+    await applyModels(page);
+    Object.assign(r9, await page.evaluate(() => ({ why: document.getElementById('trnWhy').textContent, start: document.getElementById('trnStart').disabled })));
     check(r9.bad && /Resume training requires a \.ckpt file/.test(r9.msg) && r9.start && /Resume training requires/.test(r9.why), 'Resume refuses the .h5; Start waits', r9);
+    await openModels(page);
+    await page.click('#trnFullConfig');
+    await page.waitForSelector('#trnConfigDialog');
+    await page.click('#trnConfigDialog .tcd-tabs .trn-seg-btn[data-tab="centered_instance"]');
     await page.check('#tcdMode input[value="finetune"]');
     if (process.env.SHOT9) await page.screenshot({ path: process.env.SHOT9.replace(/\.png$/, '-mode.png') });
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.getElementById('trnConfigDialog'));
     check(/fine-tune from best\.ckpt/.test(await page.textContent('.trn-slots .trn-slot[data-slot="centroid"] .trn-slot-meta')), 'the slot says it fine-tunes from best.ckpt');
+    await applyModels(page);
 
     const nPrep9 = await page.evaluate(() => window.__mock.prepared.length);
     await page.waitForFunction(() => !document.getElementById('trnStart').disabled, null, { timeout: 20000 });

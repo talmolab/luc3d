@@ -309,6 +309,13 @@ export class Viewport3D {
          *  viewport that colours cameras itself (`tintCameras`). */
         this._pickCameras = options.pickCameras !== false;
 
+        /** @type {?function(?string)} Opt-in: called with the camera under the pointer (or null) as it
+         *  moves, for a viewport that lights cameras itself (the Models modals). */
+        this._onCameraHover = typeof options.onCameraHover === 'function' ? options.onCameraHover : null;
+
+        /** @type {?function(string)} Opt-in: a click on a camera when `pickCameras` is off. */
+        this._onCameraClick = typeof options.onCameraClick === 'function' ? options.onCameraClick : null;
+
         /** @type {boolean} Whether to show camera labels */
         this.showCameraLabels = options.showCameraLabels !== undefined ? options.showCameraLabels : true;
 
@@ -849,7 +856,6 @@ export class Viewport3D {
      */
     _setupCameraPicking() {
         this._raycaster = new THREE.Raycaster();
-        const mouse = new THREE.Vector2();
 
         this.renderer.domElement.addEventListener('click', (e) => {
             // A plane-corner drag that happens to end over a camera pyramid
@@ -866,30 +872,65 @@ export class Viewport3D {
                 this._handleOriginPick(e);
                 return;
             }
-            if (!this._pickCameras) return;
-            const rect = this.renderer.domElement.getBoundingClientRect();
-            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-            this._raycaster.setFromCamera(mouse, this.threeCamera);
-
-            // Collect all meshes in the camera group for intersection
-            const meshes = [];
-            this._cameraGroup.traverse(function (child) {
-                if (child.isMesh) meshes.push(child);
-            });
-
-            const intersects = this._raycaster.intersectObjects(meshes, false);
-            if (intersects.length > 0) {
-                const hitObj = intersects[0].object;
-                const camName = this._getCameraNameFromObject(hitObj);
-                if (camName) {
-                    this.selectCamera(camName);
+            if (!this._pickCameras) {
+                // A click that ends an orbit / pan drag is not a pick: it would toggle a camera by accident.
+                const d = this._clickDown;
+                const dragged = !d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4;
+                if (this._onCameraClick && !dragged) {
+                    const hit = this._cameraAt(e);
+                    if (hit) this._onCameraClick(hit);
                 }
+                return;
             }
+            const camName = this._cameraAt(e);
+            if (camName) this.selectCamera(camName);
         });
+        if (this._onCameraClick) {
+            this._onClickDownBound = (e) => { this._clickDown = { x: e.clientX, y: e.clientY }; };
+            this.renderer.domElement.addEventListener('pointerdown', this._onClickDownBound);
+        }
+        if (this._onCameraHover) {
+            const dom = this.renderer.domElement;
+            let last = null, pending = null, raf = 0;
+            const report = (name) => {
+                if (name === last) return;
+                last = name;
+                try { this._onCameraHover(name); } catch (err) { console.warn('[viewport3d] onCameraHover failed:', err); }
+            };
+            this._onHoverMoveBound = (e) => {
+                pending = e;
+                if (raf) return;
+                raf = requestAnimationFrame(() => {
+                    raf = 0;
+                    if (this._disposed || !pending) return;
+                    report(this._cameraAt(pending));
+                });
+            };
+            this._onHoverLeaveBound = () => { pending = null; report(null); };
+            dom.addEventListener('pointermove', this._onHoverMoveBound);
+            dom.addEventListener('pointerleave', this._onHoverLeaveBound);
+        }
         // The controls' own 'change' listener is attached in `_createControls`,
         // so it survives a rebuild.
+    }
+
+    /**
+     * The camera whose pyramid, sphere or label is under a pointer event, or null.
+     * @private
+     */
+    _cameraAt(e) {
+        if (!this._cameraGroup || !this._raycaster || !this.renderer) return null;
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        const mouse = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+        this._raycaster.setFromCamera(mouse, this.threeCamera);
+        // Collect all meshes in the camera group for intersection
+        const meshes = [];
+        this._cameraGroup.traverse(function (child) {
+            if (child.isMesh && child.visible !== false) meshes.push(child);
+        });
+        const intersects = this._raycaster.intersectObjects(meshes, false);
+        return intersects.length > 0 ? this._getCameraNameFromObject(intersects[0].object) : null;
     }
 
     // ============================================
@@ -3106,6 +3147,9 @@ export class Viewport3D {
         if (this.renderer && this.renderer.domElement) {
             const dom = this.renderer.domElement;
             if (this._onPlaneMoveBound) dom.removeEventListener('pointermove', this._onPlaneMoveBound);
+            if (this._onHoverMoveBound) dom.removeEventListener('pointermove', this._onHoverMoveBound);
+            if (this._onHoverLeaveBound) dom.removeEventListener('pointerleave', this._onHoverLeaveBound);
+            if (this._onClickDownBound) dom.removeEventListener('pointerdown', this._onClickDownBound);
             if (this._onPlaneUpBound) {
                 dom.removeEventListener('pointerup', this._onPlaneUpBound);
                 dom.removeEventListener('pointercancel', this._onPlaneUpBound);

@@ -1,6 +1,6 @@
 /**
  * import-export/training-slp.js — the training and validation `.slp` files of one training group
- * (the Training panel; rules in `pose/training-data.js`, groups in `pose/training-groups.js`).
+ * (the Training panel; rules in `pose/training-data.js`, models in `pose/training-models.js`).
  *
  * sleap-app hands sleap-nn the saved project file. LUC3D builds a dedicated file instead,
  * because the project holds predictions, 3D, several sessions and lazy stores:

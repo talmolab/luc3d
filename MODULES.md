@@ -2820,22 +2820,27 @@ reason}`, `interpolationProblem(lists)`, `ID_MODEL_TYPES`, `BOX_MODEL_TYPES`,
 **Imports.** None. **Imported by** `import-export/training-slp.js`, `ui/training-panel.js`.
 **Tests.** `tests/test-training-data.mjs`, `tests/e2e/training-data.mjs`.
 
-### pose/training-groups.js
+### pose/training-models.js
 
-**Purpose.** Which camera views train which model ("Models for views") and the
-run names. A group is a set of camera NAMES (a camera name stands for that
-camera in every session, as Inference ▸ Assign models… maps views). Modes:
-`shared` (one model for all views, the default) and `perview` (one model per
-camera). Run names follow sleap-app (`YYMMDD_HHMMSS.<head>.n=<N>`) and add the
-view for a per-view group; `RUN_NAME_RE` is the charset Rust will accept.
+**Purpose.** The models a training run trains, DOM-free: each model has a name, a colour (the Inference panel's
+palette) and the camera views whose labelled frames train it; its settings are held with it by the panel. A view is a
+camera NAME (it stands for that camera in every session) and may train several models. An `auto` model ("One model,
+all views", the default) follows every view until its views are edited. Quick splits: all / per view / by name
+token (`viewToken`: `Camera1_topB` → `top`). After training each view gets ONE model (`inferenceModelOf`: the
+user's pick, else the fewest views, the first on a tie). Run names follow sleap-app (`YYMMDD_HHMMSS.<head>.n=<N>`)
+and add the model's name when the run trains several; `RUN_NAME_RE` is the charset Rust will accept.
 
-**Exports.** `TRAINING_GROUP_MODES`, `DEFAULT_GROUP_MODE`, `GROUP_COLORS`,
-`trainingGroups(mode, views)` → `[{id, name, views, color}]`,
-`groupModelLabel(modelLabel, group)`, `safeRunPart(s)`,
-`trainingRunName({timestamp, head, group, mode, nFrames})`, `RUN_NAME_RE`.
+**Exports.** `MODEL_COLORS`, `ALL_VIEWS_NAME`, `orderedViews(list, allViews)`, `freeColor(models)`,
+`newModelName(models)`, `createModel(models, {name, views, auto, extra})`, `modelViews(model, available)`,
+`setModelViews` / `toggleModelView` / `addModelViews` / `removeModelViews` (mutate the model; it stops being
+`auto`), `modelsOfView(models, view, available)`, `viewToken(view)`, `viewTokens(views)`,
+`splitViews('all'|'perview'|'name', views)`, `modelProblems(models, available)` → `{unused, empty}`,
+`inferenceModelOf(models, view, prefs, available)`, `modelRunLabel(headLabel, model, multi)`, `safeRunPart(s)`,
+`uniqueRunParts(models)` (each model's run-name part, `_2`, `_3`… when names sanitize alike),
+`trainingRunName({timestamp, head, model, multi, nFrames})`, `RUN_NAME_RE`.
 
-**Imports.** None. **Imported by** `ui/training-panel.js`.
-**Tests.** `tests/test-training-groups.mjs`.
+**Imports.** None. **Imported by** `ui/training-panel.js`, `ui/training-models-modal.js`.
+**Tests.** `tests/test-training-models.mjs`, `tests/e2e/training-models-modal.mjs`.
 
 ### pose/training-model-metrics.js
 
@@ -2902,10 +2907,12 @@ DOM-free. **Exports.** `rowWithLocalProgress(row, msg, now)`, `MAX_BATCH_SAMPLES
 post-training step): the targets (`nothing` first, then the Inference panel's: current frame, user labeled,
 frames with predictions, entire session, random sample; no custom range / suggestions / clip), the defaults
 (Random sample of 20, Skip user labeled off, Existing predictions Replace), the Inference panel pipeline of a
-trained model type, which trained folders run on which views (`trainedModels`: per fully trained group, its views
-and its folders in model order), and the skeleton check (`skeletonChangeProblem`: the merge needs the same node
-names). **Exports.** `POST_TRAINING_TARGETS`, `POST_TRAINING_DEFAULTS`, `POST_TRAINING_TARGET_HINT`,
-`inferencePipelineFor(modelType)`, `trainedModels(rows, groups)`, `skeletonChangeProblem(trained, current)`.
+trained model type, which trained folders run on which views (`trainedModels`: per fully trained model, its views
+and its folders in head order; `handoffPlan(trained, snapshot, prefs)`: ONE model per view (the user's pick, else the
+fewest views) and one pipeline (the type covering the most views; the other models named in `skipped`)), and the
+skeleton check (`skeletonChangeProblem`: the merge needs the same node names). **Exports.** `POST_TRAINING_TARGETS`,
+`POST_TRAINING_DEFAULTS`, `POST_TRAINING_TARGET_HINT`, `inferencePipelineFor(modelType)`, `trainedModels(rows, groups)`,
+`handoffPlan(trained, snapshot, prefs)`, `skeletonChangeProblem(trained, current)`.
 **Imports.** None. **Imported by.** `ui/training-panel.js`. **Tests.** `tests/test-training-handoff.mjs`,
 `tests/e2e/desktop-training.mjs` §7–8, `tests/e2e/connect-training.mjs` §5.
 
@@ -12170,10 +12177,14 @@ via the options bag.
   `addCameraPyramids`, `selectCamera`, `showSelectedCameraView`,
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
   `tintCameras({colors, defaultColor, focus})` (a caller's colour per camera and a
-  lit FOCUS set, the rest dimmed; the Inference Models modal), `getPlanes()`
+  lit FOCUS set, the rest dimmed; the Models modals), `getPlanes()`
   (the last `setPlanes` payload, to mirror the scene),
   `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `originPivot`,
-  `originUp`, `setVisible(visible)` / `isVisible()`, `dispose`.
+  `originUp`, `setVisible(visible)` / `isVisible()`, `dispose`. Opt-in options
+  `onCameraHover(name|null)` (a pointermove raycast, once per change) and
+  `onCameraClick(name)` (a click on a camera when `pickCameras` is off, not one
+  that ends an orbit / pan drag of more than 4 px), for the
+  Models modals (`ui/models-3d-pane.js`); the app's own viewer uses neither.
 - **`skeleton` may be null** (`newProject`, removing the last session) and the
   loaders seek — which draws — before they set the new one; `updateSkeleton`
   and `setEnvironment` draw a null skeleton as one with no edges rather than
@@ -13205,22 +13216,64 @@ Test: `tests/test-inference-model-assignment.mjs`.
 models…). A Models table (colour, folders, view count, ✕; + folder for Top-Down's
 second folder) and a Views table (checkbox, view, video, model menu; tick
 several + Assign for one model on many views; Clear all = every view back to no
-model; no views → "Import a session or project first."). Beside them a
-collapsible 3D view: a second `Viewport3D` with the app viewer's display
-settings (`viewport3DDisplayOptions`) and its scene (the current frame's
-skeletons, the main viewer's planes via `getPlanes`), cameras coloured by model
-(`tintCameras`), `pickCameras: false`. HOVER highlights: a view row its camera,
-a model row all its cameras. The card moves by its header, resizes from its
+model; no views → "Import a session or project first."). Beside them the
+collapsible 3D view of `ui/models-3d-pane.js` (shared with Training ▸ Models to
+train), cameras coloured by model. HOVER highlights: a view row (or the camera
+itself in the 3D view) its camera, a model row all its cameras. The card moves by its header, resizes from its
 corner (CSS `resize`), ⤢ / header double-click fills the window. Edits a copy;
 Apply → `onApply`; Cancel / ✕ / Esc drop it. `data-shortcut-modal` scrim.
 
 **Key exports.** `openModelsModal({assignment, views, pipeline, pickModel, onApply})`.
 
-**Imports from project modules.** `./app-state.js`, `./viewport3d.js`,
-`./viewport3d-options.js`, `./overlays.js`, `../pose/triangulation.js`,
-`./connect/layers.js` (`trapModal`), `./inference-model-assignment.js`.
+**Imports from project modules.** `./connect/layers.js` (`trapModal`),
+`./models-3d-pane.js`, `./inference-model-assignment.js`.
 
 **Imported by.** `ui/inference-panel.js`. Test: `tests/e2e/desktop-inference.mjs` §3–4.
+
+### ui/models-3d-pane.js
+
+**Purpose.** The collapsible 3D pane of the two "models for views" modals (Inference ▸ Assign models…, Training ▸
+Models to train…): a second `Viewport3D` with the app viewer's display settings (`viewport3DDisplayOptions`) and
+scene (the current frame's skeletons, the main viewer's planes), `pickCameras: false`. The caller colours each
+camera and lights a focus set (`tint`, `tintCameras`); hovering a camera in 3D reports it (`onCameraHover`) and a
+click can too (`onCameraClick`). `ids` keeps each modal's element ids for its tests. Messages without a session,
+a calibration or WebGL.
+
+**Key exports.** `createModels3DPane({ids, title, onCameraHover, onCameraClick, noCalibrationText})` →
+`{el, mount(hasViews), tint(spec), setFoot(text), setCollapsed(c), isCollapsed(), resize(), dispose()}`,
+`hasCalibration(session)`.
+
+**Imports from project modules.** `./app-state.js`, `./viewport3d.js`, `./viewport3d-options.js`,
+`./overlays.js`, `../pose/triangulation.js`.
+
+**Imported by.** `ui/inference-models-modal.js`, `ui/training-models-modal.js`. Tests: `tests/e2e/desktop-inference.mjs`
+§3–4, `tests/e2e/training-models-modal.mjs` §5.
+
+### ui/training-models-modal.js
+
+**Purpose.** Training ▸ Edit models… ("Models to train"), the reverse of Inference ▸ Assign models…. Centre column:
+Start from (One model, all views / One per view / By name: the view-name tokens; the new models start from the
+shown model's settings), MODELS as cards (swatch, name → shows its settings, type badge, ⚙, ✕; view TAGS with ✕
+and a "+ Add view" select; "follows every view" for an `auto` model; a settings line), then the Views table in a
+fold (closed by default, capped at 240 px and scrolling: one row per camera with its labelled frames, a toggle chip
+per model, and which model's predictions it gets after training when several train it; tick several + Add to /
+Remove from the shown model), then the Run settings fold (built by the panel). Side panel: the shown model's name
+and settings (built by the panel), Delete; it folds to a strip. 3D view: `ui/models-3d-pane.js`; the shown model's
+pyramids are lit, HOVER on a card, tag, row or the camera itself lights that model's / view's cameras, a click on a
+camera puts it in the shown model or takes it out. A model never takes an id another had while the modal is open
+(`freshModel`); a re-render gives focus back to the control that had it (`keepFocus`, `data-fk`). Footer: the panel's status line, Cancel / Apply. Edits the
+working copy the panel passes; Apply → `onApply(work)`. Moves / resizes / ⤢ as the Inference modal;
+`data-shortcut-modal` scrim `.trn-mm-scrim` (a `layerAbove` layer, so Full Configuration over it gets Esc first).
+
+**Key exports.** `openTrainingModelsModal({work, allViews, available, viewStats, newModel, typeLabel, metaText,
+status, buildDrawer, buildRunSettings, refreshForms, isBusy, onApply, onClose, initialModelId, openRun})` →
+`{refresh, close, selected, runCfg, modelCount, select}`, `trainingModelsModal()` (the open one or null).
+
+**Imports from project modules.** `./connect/layers.js` (`trapModal`), `./models-3d-pane.js`,
+`../pose/training-models.js`.
+
+**Imported by.** `ui/training-panel.js`. Tests: `tests/e2e/training-models-modal.mjs`, and every Training e2e
+through `tests/e2e/fixtures/training-models.js`.
 
 ### ui/viewport3d-options.js
 
@@ -13334,9 +13387,22 @@ replica of sleap-app's `TrainingPanel.tsx` (Model Type & Configs with the ★ re
 auto-select, config slots with the presets / Browse / drop a YAML, Data, Hyperparameters with Anchor Part
 and per-model tabs, Remote = Backend picker, Start Remote Training, Stop Early / Cancel, one progress row
 per model, Log with Expand / Copy, Error output (sleap-nn), Complete / Failed blocks with Train Again,
-Retry, New Training). LUCID changes (file header): Data is the project's sessions × views with their
-user-labelled counts (`import-export/training-slp.js` writes the training file from the current edits),
-"Models for views" (one for all views / one per view, `pose/training-groups.js`), identity checks for "+ ID"
+Retry, New Training). MODELS (P9): the run trains one or more models (`let models`, each
+`{id, name, color, views, auto, modelType, modelTypeTouched, slots, hp, activeTab, anchorPart}`;
+`pose/training-models.js`), the run's own settings in `runCfg` (`unchecked`, `post`, `inferWith`). Every model-level
+helper takes the model (`setSlotConfig(m, …)`, `ensureSlots(m)`, `effectiveHp(m, slot)`, `cropInfo(m, rc)`,
+`pipelineProblem(m, rc)`, `openFullConfig(m, tab, rc)`, …). The settings are built into the Models modal
+(`ui/training-models-modal.js`, `openModelsEditor` on a `structuredClone` copy): `buildModelSettings` (the shown
+model: Model Type & Configs, Hyperparameters, Full Configuration…) in its side panel and `buildRunSettings`
+(Training data with Locate on worker, Validation split for every model, Output / Runs folder, Post-Training
+Inference) in its Run settings fold; a split or + New model copies the shown model's settings (`newTrainingModel`
+with a template). The panel itself (`buildSummarySection`, `buildRunSummary`): Models · N + Edit models…, a card per
+model (views, type, settings line, ✎), problems (views in no model, pipeline problems), the Run line + Edit, the
+Backend, Start; progress rows go under a header per model when a run has several (labels "Centroid · <model>",
+run names with the model's name). Each model trains on its views' frames (`modelFrames`, `runModels`), with its own
+★ (`modelRecommendation`, `autoModelType`), crop and validation split. LUCID changes (file header): Data is the
+project's sessions × views with their user-labelled counts (`import-export/training-slp.js` writes the training file
+from the current edits), identity checks for "+ ID"
 types, box types disabled, Top-Down + ID's second slot defaults to the Multi-Class Top-Down preset, every
 video must be on the worker (Locate on worker…), validation is sleap-nn's random split on a worker.
 LOCAL runs go through `lucidDesktop.sleapNn.training` (Rust `src-tauri/src/training.rs`, see CLAUDE.md
@@ -13361,11 +13427,12 @@ never goes to a worker, a typed worker path never runs locally); Choose… picks
 warning on a head mismatch from its `training_config.yaml`. The runs folder's trained runs (`scanTrainedRuns`, after
 picking it and after each local run) are "[Trained] <run> (training_config.yaml)" slot entries of their head
 (`selectTrainedRun` loads the config and offers the run's checkpoint; listed for local runs only; one scan at a
-time, rescanning when asked meanwhile). Anchor Part (Top-Down) lists each node with its visibility % and has
-sleap-app's crop preview eye (`ui/anchor-crop-preview.js`, drawn while the panel shows); under it Crop Size is the
-centered-instance crop each model trains on (`cropInfo`: the config's Crop Size, or Auto as sleap-nn computes it
-from that group's labels, `pose/training-crop-size.js`; a range with one model per view) with sleap-app's crop
-warnings; Full Configuration shows the same under its Crop Size (`host.cropInfo`). View Metrics (after a completed run) opens
+time, rescanning when asked meanwhile). Anchor Part (Top-Down) lists each node with its visibility % in the model's
+frames and has sleap-app's crop preview eye (`ui/anchor-crop-preview.js`, the shown model's views, drawn while the
+Models modal is open); under it Crop Size is the centered-instance crop the model trains on (`cropInfo`: the config's
+Crop Size, or Auto as sleap-nn computes it from that model's labels, `pose/training-crop-size.js`) with sleap-app's crop
+warnings; Full Configuration shows the same under its Crop Size (`host.cropInfo`) and the model's name in its title
+when the run has several (`host.title`). View Metrics (after a completed run) opens
 `ui/training-metrics-dialog.js` on this run's models (+ the trained runs locally), read locally or on the worker
 (`remote.workerFiles`). A row with a chart
 opens the Training Monitor (`ui/training-monitor.js`); rows keep their start / epoch / end times and the
@@ -13375,14 +13442,14 @@ import in `pose/initialization.js`, after the Inference panel. **Exports.** `TRA
 `setupTrainingPanel()`, `showTrainingPanel()`, `_trainingState()`, `_trainingAnalyze()` (tests).
 **Imports.** `./app-state.js`, `./panel-rail.js`, `./panel-rail-icons.js`, `./progress-delta.js`,
 `./ask.js`, `./panel-form.js`, `./training-args.js`, `../lib/sleap-app-profiles/profiles.js`,
-`../pose/training-groups.js`, `../pose/training-data.js`, `../pose/training-recommend.js`,
+`../pose/training-models.js`, `./training-models-modal.js`, `../pose/training-data.js`, `../pose/training-recommend.js`,
 `../import-export/training-slp.js`, `../import-export/file-io.js` (`findSkeletonMismatch`),
 `./connect/backend-picker.js`, `./connect/remote-training.js`, `../pose/connect/remote-training-plan.js`,
 `../pose/connect/store.js` (`configureConnect`: the YAML parser for `withYamlRunName`),
 `../pose/connect/timestamp.js`, `../pose/training-metrics.js`, `./training-monitor.js`, `../pose/training-local-progress.js`,
 `../pose/training-handoff.js`, `./inference-panel.js`, `./training-config-dialog.js`, `./training-metrics-dialog.js`,
 `../pose/training-crop-size.js`, `./anchor-crop-preview.js`, `./rendering.js` (`drawAllOverlays`, the preview's redraw); the importmap's `yaml` (dynamic). **Imported by.**
-`pose/initialization.js` (dynamic). **Exports** also `_openTrainingConfig(tab)`, `_scanTrainedRuns()` (tests); `_trainingState()` includes `crop` and `cropPreview`. **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/desktop-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/training-config-dialog.mjs`, `tests/e2e/training-crop-preview.mjs`, `tests/e2e/panel-rail.mjs`.
+`pose/initialization.js` (dynamic). **Exports** also `openTrainingModels({modelId, run})` (Edit models…), `_openTrainingConfig(tab, modelId)`, `_setTrainingModels(parts)`, `_scanTrainedRuns()` (tests); `_trainingState()` includes `models`, `runCfg`, `work` (the modal's copy), `cfg` (the model on screen), `crop` and `cropPreview`. **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/desktop-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/training-config-dialog.mjs`, `tests/e2e/training-crop-preview.mjs`, `tests/e2e/training-models-modal.mjs`, `tests/e2e/panel-rail.mjs`.
 
 ### ui/training-config-dialog.js
 
@@ -13395,7 +13462,7 @@ configuration files… (one `<head>.yaml` per model, as sent, via `<a download>`
 model's config, a model tab's only that model's; `host.changed(slot)` after each edit. Rows hide with `field.when`.
 Vanilla DOM card (Esc / Done / scrim close, Tab trapped by `trapModal`, `data-shortcut-modal`); the content column
 is the one scroller. Under Crop Size (`#tcdCropNote`): "Auto: N px from your labels." and sleap-app's crop warnings,
-from the optional `host.cropInfo(slot)`. LUCID changes: no W&B, devices fixed at 1, no job package or run scripts, backbone shown (UNet
+from the optional `host.cropInfo(slot)`; `host.title` (a model's name) follows the title. LUCID changes: no W&B, devices fixed at 1, no job package or run scripts, backbone shown (UNet
 settings only). **Exports.** `openTrainingConfigDialog(host)` → `{close, update, focus, isOpen}`,
 `trainingConfigDialog()`. **Imports.** `./training-config-fields.js`, `./connect/layers.js` (`trapModal`),
 `./panel-form.js`, `./ask.js`, `./training-args.js` (`TRAINING_MODES`). A model tab starts with the training
@@ -13605,7 +13672,7 @@ through it), `fetchJobPredictions(workerId, jobId, {name, onProgress})` (blob or
 
 #### ui/connect/layers.js
 **Purpose.** Which modal layer is on top: `layerAbove(el)` is true when another Connect layer (`.cw-scrim`,
-`.njw-scrim`, `.rfb-scrim`, `.cj-scrim`, the in-app `.ask-modal-overlay`, `.plane-confirm-overlay`, View Metrics' `.tmd-scrim`) sits over the one `el` is in
+`.njw-scrim`, `.rfb-scrim`, `.cj-scrim`, the in-app `.ask-modal-overlay`, `.plane-confirm-overlay`, View Metrics' `.tmd-scrim`, Full Configuration's `.tcd-scrim`, the Models to train modal's `.trn-mm-scrim`) sits over the one `el` is in
 (computed z-index, then DOM order). Every capture-phase Esc/Tab handler (wizard, job viewer, merge dialog,
 file browser, devices popover, queue menu) returns early when it is not the top layer, because listeners on
 one `document` run in registration order and the layer opened first used to close together with the dialog

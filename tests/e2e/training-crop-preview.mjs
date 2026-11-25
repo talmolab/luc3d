@@ -1,15 +1,15 @@
 /**
- * training-crop-preview.mjs — the Training panel's crop size and crop preview (sleap-app AnchorPartField,
- * `cropWarnings.ts`; sizes from pose/training-crop-size.js), on the shared two-view session (cam1, cam2, 320x240,
- * user instances A=(11+f, 22) B=(33+f, 44) on frames 0-5):
+ * training-crop-preview.mjs — a model's crop size and crop preview in the Models modal (Training ▸ Edit models…;
+ * sleap-app AnchorPartField, `cropWarnings.ts`; sizes from pose/training-crop-size.js), on the shared two-view
+ * session (cam1, cam2, 320x240, user instances A=(11+f, 22) B=(33+f, 44) on frames 0-5):
  *   1. Top-Down: "Crop Size 112 px (Auto)" (100 px floor + 56 px padding for ±180° / scale 1.1, stride 16), each
  *      Anchor Part node with its visibility (100%);
  *   2. the eye draws a dashed orange square around each animal in every view (pixels on the overlay canvas),
  *      centred on the centre of mass (Auto) or the anchor node, 112 video px wide; off again clears it;
  *   3. Full Configuration ▸ Centered Instance: "Auto: 112 px from your labels."; Crop Size 64 -> "64 px" and
- *      sleap-app's "only 64px after input scaling" warning in the panel and the dialog; 16 -> also "clipped";
- *   4. one model per view: each view keeps its own crop; a closed Training panel draws nothing; Bottom-Up hides
- *      the row and drops the preview.
+ *      sleap-app's "only 64px after input scaling" warning in the modal and the dialog; 16 -> also "clipped";
+ *   4. two models (One per view): each its own crop, and the preview draws on the shown model's views only;
+ *      closing the modal drops the preview at once; Bottom-Up hides the row and drops the preview.
  * Usage: node tests/e2e/training-crop-preview.mjs   (PORT= to move its server; SHOT=file.png screenshots the preview)
  */
 import { chromium } from 'playwright';
@@ -17,6 +17,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTrainingSession } from './fixtures/training-session.js';
+import { openModels } from './fixtures/training-models.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -44,6 +45,7 @@ try {
     await page.waitForSelector('.panel-rail-btn[data-tab="tabTraining"]', { state: 'attached' });
     await page.evaluate(async () => { (await import('./ui/training-panel.js')).showTrainingPanel(); });
     await loadTrainingSession(page);
+    await openModels(page);
     await page.selectOption('#trnModelType', 'top_down');
     await page.waitForFunction(() => document.getElementById('trnCrop') && !document.getElementById('trnCrop').hidden);
 
@@ -117,7 +119,7 @@ try {
     await page.keyboard.press('Escape');
     await page.waitForSelector('#trnConfigDialog', { state: 'detached' });
     const s3 = await S();
-    check(s3.text === '16 px' && s3.warnings.length === 2, 'panel: "16 px" and both warnings', s3);
+    check(s3.text === '16 px' && s3.warnings.length === 2, 'modal: "16 px" and both warnings', s3);
     await page.click('#trnFullConfig');
     await page.click('#trnConfigDialog .tcd-tabs .trn-seg-btn:has-text("Centered Instance")');
     await page.fill(field, '');
@@ -127,19 +129,36 @@ try {
     const s3b = await S();
     check(s3b.text === '112 px (Auto)' && s3b.warnings.length === 0, 'Crop Size empty again: Auto, no warning', s3b);
 
-    console.log('\n4. One model per view, a closed panel, Bottom-Up');
-    await page.click('.trn-seg-btn[data-mode="perview"]');
-    await page.waitForFunction(() => document.querySelectorAll('#trnGroups .trn-chip').length === 2);
+    console.log('\n4. Two models, closing the modal, Bottom-Up');
+    await page.click('#trnMmSplitEach');
+    await page.waitForFunction(() => document.querySelectorAll('#trnMmModels .trn-mm-card').length === 2);
+    // A split makes new models (the ★ type): both go Top-Down; cam2's is shown last.
+    await page.selectOption('#trnModelType', 'top_down');
+    await page.click('#trnMmModels .trn-mm-card:nth-child(2) .trn-mm-name');
+    await page.waitForFunction(() => document.getElementById('trnMmName').value === 'cam2');
+    await page.selectOption('#trnModelType', 'top_down');
+    await page.waitForFunction(() => document.getElementById('trnCrop') && !document.getElementById('trnCrop').hidden);
     await page.click('#trnCropPreview');
     const s4 = await S();
-    check(s4.preview && Object.keys(s4.preview).sort().join() === 'cam1,cam2' && s4.text === '112 px (Auto)' && s4.views.cam2.orange > 100,
-        'per view: each view its own model\'s crop', s4.preview);
-    await page.evaluate(async () => { (await import('./ui/panel-rail.js')).closePanelTab('tabTraining'); });
-    const s4b = await S(true);
-    check(s4b.views.cam1.orange === 0 && s4b.views.cam1.squares.length === 0, 'Training panel closed: the squares are gone at once (no other redraw)', s4b.views.cam1);
-    await page.evaluate(async () => { (await import('./ui/training-panel.js')).showTrainingPanel(); });
-    const s4c = await S(true);
-    check(s4c.views.cam1.orange > 100, 'panel shown again: the preview is back at once', s4c.views.cam1.orange);
+    check(s4.preview && Object.keys(s4.preview).join() === 'cam2' && s4.text === '112 px (Auto)' && s4.views.cam2.orange > 100 && s4.views.cam1.orange === 0,
+        'the shown model (cam2): its own crop, drawn on its view only', { preview: s4.preview, cam1: s4.views.cam1.orange, cam2: s4.views.cam2.orange });
+    await page.click('#trnMmModels .trn-mm-card:nth-child(1) .trn-mm-name');
+    const s4a = await S();
+    check(s4a.preview && Object.keys(s4a.preview).join() === 'cam1' && s4a.views.cam1.orange > 100 && s4a.views.cam2.orange === 0,
+        'showing cam1\'s model moves the preview to cam1', { preview: s4a.preview, cam1: s4a.views.cam1.orange, cam2: s4a.views.cam2.orange });
+    await page.click('#trnMmCancel');
+    await page.waitForFunction(() => !document.getElementById('trnModelsModal'));
+    const s4b = await page.evaluate(async () => {
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const P = await import('./ui/anchor-crop-preview.js');
+        const AS = (await import('./ui/app-state.js')).state;
+        const v = AS.views.find((x) => x.name === 'cam1');
+        return { preview: P.anchorCropPreview(), squares: P.previewSquares(v, AS.session.frameGroups.get(AS.currentFrame), AS.session).length };
+    });
+    check(s4b.preview === null && s4b.squares === 0, 'modal closed: the preview is gone at once', s4b);
+    const cards = await page.$$eval('#trnModelCards .trn-sum-card', (cs) => cs.length);
+    check(cards === 1, 'Cancel kept the one model', cards);
+    await openModels(page);
     await page.selectOption('#trnModelType', 'bottom_up');
     const s4d = await S();
     check(s4d.rowHidden && s4d.preview === null && s4d.views.cam1.orange === 0, 'Bottom-Up: no Crop Size row, preview dropped', s4d);

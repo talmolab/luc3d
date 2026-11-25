@@ -1,19 +1,21 @@
 /**
  * training-config-dialog.mjs — the Training panel's Full Configuration dialog (`ui/training-config-dialog.js`,
- * sleap-app's TrainingConfigDialog) in the web app:
+ * sleap-app's TrainingConfigDialog) in the web app, opened from a model's settings in the Models modal
+ * (Training ▸ Edit models…), over it:
  *
  *  1. "Full Configuration..." shows once there are configs; it opens "Training Configuration" with the tabs
  *     Pipeline, Centroid, Centered Instance, "All changes saved", the Pipeline sections in the nav.
  *  2. A Pipeline field (Accelerator) is written to EVERY model's config.
- *  3. A model tab shows the panel's own values (Max Epochs set on the panel's Centroid tab); an edit there shows
- *     in the panel at once (Max Epochs 42), and goes to that model only (Centered Instance keeps 200).
+ *  3. A model tab shows the model's own values (Max Epochs set on the modal's Centroid tab); an edit there shows
+ *     in the modal at once (Max Epochs 42), and goes to that model only (Centered Instance keeps 200).
  *  4. Fields that depend on another appear with it: LR Scheduler Step → Step Size / Gamma, not LR Patience; a
  *     nullable field (Crop Size) empties to null (Auto) and takes a number.
  *  5. Search "plateau patience" → one click goes to the field on a model tab.
  *  6. Save configuration files… downloads centroid.yaml and centered_instance.yaml with the edits; the
  *     training config as sent carries them too.
  *  7. Esc in a search box clears it and keeps the dialog; Reset to profile defaults… (confirmed) on a model tab
- *     puts that model's preset back (max_epochs 200, no step_lr) and leaves the other model's edits; Esc closes.
+ *     puts that model's preset back (max_epochs 200, no step_lr) and leaves the other model's edits; Esc closes
+ *     the dialog only (the Models modal under it stays), and Apply hands the edits to the panel.
  *
  * Usage: node tests/e2e/training-config-dialog.mjs   (PORT= to move its server; SHOT=file.png screenshots 3)
  */
@@ -23,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTrainingSession } from './fixtures/training-session.js';
+import { openModels, applyModels } from './fixtures/training-models.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -50,6 +53,7 @@ try {
     await page.waitForSelector('.panel-rail-btn[data-tab="tabTraining"]', { state: 'attached' });
     await page.evaluate(async () => { (await import('./ui/training-panel.js')).showTrainingPanel(); });
     await loadTrainingSession(page);
+    await openModels(page);
     await page.selectOption('#trnModelType', 'top_down');
     const T = () => page.evaluate(async () => {
         const s = (await import('./ui/training-panel.js'))._trainingState();
@@ -160,7 +164,13 @@ try {
         t7.slots.centered_instance.data_config.preprocessing.crop_size === 128, 'Reset is scoped to the tab: Centered Instance keeps its edit', { confirms, crop: t7.slots.centered_instance.data_config.preprocessing.crop_size });
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.getElementById('trnConfigDialog'));
-    check(true, 'Esc closes the dialog');
+    check(await page.evaluate(() => !!document.getElementById('trnModelsModal')), 'Esc closes the dialog, not the Models modal under it');
+    await applyModels(page);
+    const applied = await page.evaluate(async () => {
+        const s = (await import('./ui/training-panel.js'))._trainingState();
+        return { work: s.work, crop: s.cfg.slots.centered_instance.doc.data_config.preprocessing.crop_size, epochs: s.cfg.hp.centroid.maxEpochs };
+    });
+    check(applied.work === null && applied.crop === 128 && applied.epochs === 200, 'Apply hands the edits to the panel\'s model', applied);
 } catch (e) {
     console.error(e);
     fails++;

@@ -2,8 +2,8 @@
  * training-monitor.mjs — the Training Monitor (ui/training-monitor.js), opened from a progress row of
  * a remote training run against the fake SLEAP Connect worker.
  *
- *  1. A pending row does not open anything; the running row opens "Training Monitor — Centroid · all
- *     views" with sleap-app's runtime lines ("Training Epoch 3 / Total Runtime: …", "Last Epoch
+ *  1. A pending row does not open anything; the running row opens "Training Monitor — Centroid" (a run of
+ *     one model names the head only) with sleap-app's runtime lines ("Training Epoch 3 / Total Runtime: …", "Last Epoch
  *     Validation Loss: 2.000e-2", "Best Epoch Validation Loss: 2.000e-2 (epoch 2)", numbers bold),
  *     the loss plot (legend, canvas drawn, Log scale / Ignore outliers / Batches / Reset zoom / PNG /
  *     CSV) and Stop Early / Cancel pinned at the bottom.
@@ -18,6 +18,7 @@
 import { FakeWorker } from '../connect/fake-worker.mjs';
 import { runConnectE2E, check, fail, watchPage, pair, store } from './fixtures/connect-e2e.mjs';
 import { loadTrainingSession } from './fixtures/training-session.js';
+import { setModelType } from './fixtures/training-models.js';
 
 const WS = 'ws://127.0.0.1:9643';
 
@@ -35,7 +36,7 @@ await runConnectE2E(9397, async ({ browser, BASE }) => {
     await page.waitForSelector('.panel-rail-btn[data-tab="tabTraining"]', { state: 'attached' });
     await page.evaluate(async () => { (await import('./ui/training-panel.js')).showTrainingPanel(); });
     await loadTrainingSession(page);
-    await page.selectOption('#trnModelType', 'top_down');
+    await setModelType(page, 'top_down');
     await pair(page, worker, WS);
     await page.waitForFunction(() => document.querySelectorAll('#trnBackend option').length >= 1 && !document.getElementById('trnBackend').hidden);
     await page.selectOption('#trnBackend', worker.nodeId);
@@ -68,7 +69,7 @@ await runConnectE2E(9397, async ({ browser, BASE }) => {
         stop: !document.querySelector('#trnMonitor .trn-mon-foot').hidden,
     }));
     if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });   // SHOT=<png> keeps a picture of the open monitor
-    check(m1.title === 'Training Monitor — Centroid · all views', 'title names the model', m1.title);
+    check(m1.title === 'Training Monitor — Centroid', 'title names the model', m1.title);
     check(/^Training Epoch 3 \/ Total Runtime: \d\d:\d\d \/ Epoch Runtime: \d\d:\d\d$/.test(m1.lines[0]) &&
         m1.lines.includes('Last Epoch Validation Loss: 2.000e-2') && m1.lines.includes('Best Epoch Validation Loss: 2.000e-2 (epoch 2)') &&
         m1.lines.some((l) => /^Mean Time per Epoch: \d\d:\d\d \/ ETA Next 10 Epochs: \d+ min$/.test(l)), 'sleap-app\'s runtime lines', m1.lines);
@@ -109,13 +110,13 @@ await runConnectE2E(9397, async ({ browser, BASE }) => {
     await page.waitForFunction(() => document.querySelectorAll('#trnRows .trn-row-open').length === 2, null, { timeout: 20000 });
     await page.click('#trnRows .trn-row:nth-child(2) .trn-row-open');
     await page.waitForSelector('#trnMonitor');
-    check(await page.evaluate(() => document.getElementById('trnMonTitle').textContent) === 'Training Monitor — Centered Instance · all views', 'row 2 opens the second model');
+    check(await page.evaluate(() => document.getElementById('trnMonTitle').textContent) === 'Training Monitor — Centered Instance', 'row 2 opens the second model');
     await page.click('#trnMonitor .trn-mon-x');
     await page.click('#trnRows .trn-row:nth-child(1) .trn-row-open');
     await page.waitForSelector('#trnMonitor');
     const m4 = await page.evaluate(() => ({ title: document.getElementById('trnMonTitle').textContent, foot: document.querySelector('#trnMonitor .trn-mon-foot').hidden,
         lines: Array.from(document.querySelectorAll('#trnMonRuntime > div')).map((d) => d.textContent) }));
-    check(m4.title === 'Training Monitor — Centroid · all views' && m4.foot && !/Epoch Runtime/.test(m4.lines[0]),
+    check(m4.title === 'Training Monitor — Centroid' && m4.foot && !/Epoch Runtime/.test(m4.lines[0]),
         'the finished row reopens its monitor: no Stop / Cancel, no epoch runtime', m4);
 
     async function waitFor(pred, ms = 10000) {

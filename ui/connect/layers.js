@@ -9,9 +9,9 @@
 
 /**
  * Every full-window layer a Connect dialog can sit under (the window itself included, for popovers over it),
- * and the Training panel's stacked cards (View Metrics' table under its detail).
+ * and the Training panel's stacked cards (View Metrics' table under its detail; Full Configuration over the Models modal).
  */
-const MODAL_LAYER_SELECTOR = '.cw-scrim, .njw-scrim, .rfb-scrim, .cj-scrim, .ask-modal-overlay, .plane-confirm-overlay, .tmd-scrim';
+const MODAL_LAYER_SELECTOR = '.cw-scrim, .njw-scrim, .rfb-scrim, .cj-scrim, .ask-modal-overlay, .plane-confirm-overlay, .tmd-scrim, .tcd-scrim, .trn-mm-scrim';
 
 const FOCUSABLE = 'button, input, select, textarea, [tabindex]';
 

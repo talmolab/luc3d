@@ -39,6 +39,7 @@ export function trainingConfigDialog() { return open; }
  *   fileNameOf: (slot: string) => string,
  *   isBusy: () => boolean,
  *   initialTab?: string,
+ *   title?: string|null,         // the model's name, when the run trains several (shown after the title)
  *   mode?: (slot: string) => {mode, checkpoint, note, problem, local} | null,   a model's training mode
  *   setMode?: (slot: string, mode: string) => void,
  *   setCheckpoint?: (slot: string, path: string) => void,   a worker path (remote)
@@ -61,7 +62,7 @@ export function openTrainingConfigDialog(host) {
 
     // Header: title · tabs · saved
     const head = el('div', 'tcd-head');
-    const title = el('h2', 'tcd-title', 'Training Configuration');
+    const title = el('h2', 'tcd-title', 'Training Configuration' + (host.title ? ' \u2014 ' + host.title : ''));
     title.id = 'tcdTitle';
     head.appendChild(title);
     const tabs = el('div', 'trn-seg tcd-tabs');

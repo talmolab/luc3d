@@ -5,7 +5,7 @@
  *
  * A replica of sleap-app's Training panel (`src/components/panels/TrainingPanel.tsx` and the
  * training slice of `src/stores/trainingStore.ts` @ c97c6a5): the same sections in the same order
- * (Model Type & Configs, Data, Hyperparameters, Remote), the same labels, defaults, hints, config
+ * (Model Type & Configs, Data, Hyperparameters, Remote; now in the Models modal), the same labels, defaults, hints, config
  * slots and presets ("Preset: Centroid (Medium RF)" …), the ★ recommendation, Start / Stop Early /
  * Cancel and the progress rows / log / error output / completion block.
  *
@@ -14,9 +14,12 @@
  *     view with its user-labelled frame count. LUCID writes the training `.slp` itself
  *     (`import-export/training-slp.js`): user instances only, identities as tracks, the current
  *     in-memory edits (nothing has to be saved first);
- *   - "Models for views": one model for all views (default) or one per view
- *     (`pose/training-groups.js`); each group trains its own model pair, one after another, and
- *     each model gets a progress row ("Centroid · all views");
+ *   - Models: the run trains one or more models, each on a set of camera views, each with its own
+ *     settings (model type, configs, anchor, hyperparameters); a view may train several models
+ *     (`pose/training-models.js`). They are made and edited in the "Models to train" modal
+ *     (`ui/training-models-modal.js`, Edit models…), which also holds the run settings; the panel shows
+ *     a summary, Start and the progress, grouped by model. Each model trains its own model pair, one
+ *     after another; one model on every view (the default) is sleap-app's training;
  *   - the ★ recommendation reads every included view, each against its own video size
  *     (`pose/training-recommend.js`); "+ ID" types check LUCID's identities
  *     (`pose/training-data.js` `idModelProblem`); box-detector types are disabled (no box labels);
@@ -57,7 +60,10 @@ import {
     detectTrainingMode, applyTrainingMode, checkpointProblem, pickCheckpointFile,
 } from './training-args.js';
 import { BASELINE_PROFILES } from '../lib/sleap-app-profiles/profiles.js';
-import { trainingGroups, groupModelLabel, trainingRunName, DEFAULT_GROUP_MODE } from '../pose/training-groups.js';
+import {
+    ALL_VIEWS_NAME, createModel, modelViews, modelProblems, modelRunLabel, trainingRunName, uniqueRunParts,
+} from '../pose/training-models.js';
+import { openTrainingModelsModal, trainingModelsModal } from './training-models-modal.js';
 import { idModelProblem, interpolationProblem, isIdModelType, isBoxModelType } from '../pose/training-data.js';
 import { recommendPipeline, skeletonCompatibility, arborescenceProblems, arborescenceMessage } from '../pose/training-recommend.js';
 import { countUserLabels, collectGroupLabels, buildTrainingLabels, trainingSlpBytes } from '../import-export/training-slp.js';
@@ -71,7 +77,7 @@ import { plateauSettings } from '../pose/training-metrics.js';
 import { openTrainingMonitor, trainingMonitor } from './training-monitor.js';
 import { rowWithLocalProgress } from '../pose/training-local-progress.js';
 import { POST_TRAINING_TARGETS, POST_TRAINING_DEFAULTS, POST_TRAINING_TARGET_HINT, inferencePipelineFor, trainedModels,
-    skeletonChangeProblem } from '../pose/training-handoff.js';
+    skeletonChangeProblem, handoffPlan } from '../pose/training-handoff.js';
 import { runTrainedModels, showInferencePanel } from './inference-panel.js';
 import { openTrainingConfigDialog, trainingConfigDialog } from './training-config-dialog.js';
 import { openTrainingMetricsDialog } from './training-metrics-dialog.js';
@@ -101,27 +107,48 @@ const local = { runsRoot: null, existingRuns: 0, videos: new Map(), videoKey: ''
     trained: [], scanning: false, rescan: false };   // trained: the runs folder's trained runs, newest first (`scanTrainedRuns`)
 const dry = { status: 'idle', rows: [], log: [], key: '', error: null };
 
-const cfg = {
-    modelType: DEFAULT_MODEL_TYPE,
-    modelTypeTouched: false,
-    slots: {},                   // slot -> {name, filename, preset: bool, doc, head}
-    hp: {},                      // slot -> hyperparams (training-args `hyperparamsFromConfig`)
-    activeTab: null,
-    anchorPart: null,
-    groupMode: DEFAULT_GROUP_MODE,
-    unchecked: new Set(),        // 'sessionIdx:view'
+/**
+ * The models of the next run (`pose/training-models.js`), each with its own settings:
+ *   {id, name, color, views, auto,                    the model and its camera views
+ *    modelType, modelTypeTouched,                     the pipeline (★ auto-picked until the user picks one)
+ *    slots,                                           slot -> {name, filename, preset: bool, doc, head, mode, checkpoint…}
+ *    hp,                                              slot -> hyperparams (training-args `hyperparamsFromConfig`)
+ *    activeTab, anchorPart}
+ * The Models modal edits a copy (`structuredClone`) and hands it back on Apply.
+ */
+let models = [];
+/** Settings of the whole run (every model). */
+let runCfg = {
+    unchecked: new Set(),        // 'sessionIdx:view' left out of training
     post: Object.assign({}, POST_TRAINING_DEFAULTS),   // post-training inference (target, sampleCount, ...)
+    inferWith: {},               // view -> model id: whose predictions a view in several models gets after training
 };
+/** A model's settings, fresh: the default pipeline, its slots filled from the presets (`ensureSlots`). */
+function modelSettings() {
+    return { modelType: DEFAULT_MODEL_TYPE, modelTypeTouched: false, slots: {}, hp: {}, activeTab: null, anchorPart: null };
+}
+/** A new model; with `template`, a copy of that model's settings (model type, configs, hyperparameters, anchor). */
+function newTrainingModel(list, o, template) {
+    const settings = template ? structuredClone({ modelType: template.modelType, modelTypeTouched: template.modelTypeTouched, slots: template.slots,
+        hp: template.hp, activeTab: template.activeTab, anchorPart: template.anchorPart }) : modelSettings();
+    const m = createModel(list, Object.assign({}, o, { extra: settings }));
+    ensureSlots(m);
+    return m;
+}
+/** sleap-app's training: one model, every view (follows views added later). */
+function defaultModels() {
+    return [newTrainingModel([], { name: ALL_VIEWS_NAME, auto: true })];
+}
 const run = {
     status: 'idle', error: null, rows: [], log: [], errorTail: [], startedAt: null, endedAt: null,
     modelDirs: [], cancelled: false, stopRequested: false, note: null,
-    groups: [], trainedNodes: null,  // the run's groups and the skeleton's node names when it started
+    groups: [], trainedNodes: null,  // the run's models ({id, name, color, views, modelType}) and the skeleton's node names when it started
 };
 // Post-training inference: status null | 'running' | 'completed' | 'error' | 'skipped'.
 const postRun = { status: null, message: null, remote: false };
 let postSeq = 0;   // the newest post-training inference; an older one finishing late writes nothing
 const analysis = { key: '', at: 0, counts: new Map(), rec: null, idReport: null, nodeNames: [], trackNames: [], frames: [] };
-const crop = { key: '', info: null, preview: false };   // the centered-instance crop (Anchor Part) and its preview
+const crop = { cache: new WeakMap(), preview: false, model: null };   // each model's centered-instance crop (by model object); the preview (Models modal)
 let elapsedTimer = null;
 let form = null;
 let monitorIndex = null;          // the row the Training Monitor shows
@@ -131,6 +158,8 @@ function isDone() { return run.status === 'completed' || run.status === 'error';
 function refresh() {
     if (remote) remote.sync();
     if (form) form.runRefreshers();
+    const mm = trainingModelsModal();
+    if (mm) mm.refresh();
     const mon = trainingMonitor();
     if (mon && monitorIndex != null) mon.update();
     const dlg = trainingConfigDialog();
@@ -191,12 +220,11 @@ function labelCount(sIdx, view) {
     return c || { frames: 0, instances: 0 };
 }
 
-/** The (session, view) pairs that will train: checked and holding at least one user label. */
-function includedSelections() {
+/** The (session, view) pairs holding at least one user label (checked or not). */
+function labelledSelections() {
     const out = [];
     for (const s of projectSessions()) {
         for (const view of sessionViews(s.index, s.session)) {
-            if (cfg.unchecked.has(viewKey(s.index, view))) continue;
             if (labelCount(s.index, view).frames === 0) continue;
             out.push({ sessionIndex: s.index, session: s.session, cameraName: view, videoFileInfo: videoFileOf(s.index, view) || {} });
         }
@@ -204,13 +232,36 @@ function includedSelections() {
     return out;
 }
 
-function includedViewNames() {
+/** The (session, view) pairs that will train: checked (`rc`, the run settings) and holding at least one user label. */
+function includedSelections(rc) {
+    const un = (rc || runCfg).unchecked;
+    return labelledSelections().filter(function (s) { return !un.has(viewKey(s.sessionIndex, s.cameraName)); });
+}
+
+function includedViewNames(rc) {
     const out = [];
-    for (const sel of includedSelections()) if (out.indexOf(sel.cameraName) === -1) out.push(sel.cameraName);
+    for (const sel of includedSelections(rc)) if (out.indexOf(sel.cameraName) === -1) out.push(sel.cameraName);
     return out;
 }
 
-function groups() { return trainingGroups(cfg.groupMode, includedViewNames()); }
+/** The models that train in the next run (`list`, default the live ones), each with the views it trains on. */
+function runModels(list, rc) {
+    const avail = includedViewNames(rc);
+    return (list || models).map(function (m) { return { model: m, views: modelViews(m, avail) }; })
+        .filter(function (x) { return x.views.length > 0; });
+}
+
+/** A run's snapshot of one model, for its rows and the post-training handoff. */
+function modelSnapshot(x) {
+    return { id: x.model.id, name: x.model.name, color: x.model.color, views: x.views.slice(), modelType: x.model.modelType };
+}
+
+/** The labelled frames (`analysis.frames`) one model trains on: its views, checked. */
+function modelFrames(m, rc) {
+    const un = (rc || runCfg).unchecked;
+    const views = modelViews(m, includedViewNames(rc));
+    return (analysis.frames || []).filter(function (f) { return views.indexOf(f.view) !== -1 && !un.has(f.key); });
+}
 
 function skeletonOf() {
     const s = state.session || (projectSessions()[0] && projectSessions()[0].session);
@@ -243,10 +294,11 @@ function analyze(force) {
             for (const [v, n] of c) analysis.counts.set(viewKey(s.index, v), n);
         } catch (e) { console.warn('[training] counting labels failed:', e); }
     }
-    analysis.rec = null; analysis.idReport = null; analysis.trackNames = []; analysis.frames = [];
+    analysis.rec = null; analysis.idReport = null; analysis.trackNames = []; analysis.frames = []; analysis.recs = new WeakMap();
     const sk = skeletonOf();
     analysis.nodeNames = sk ? sk.nodes : [];
-    const sels = includedSelections();
+    // Every labelled view, checked or not: each model reads its own views' frames (`modelFrames`).
+    const sels = labelledSelections();
     if (!sels.length) return;
     try {
         const collected = collectGroupLabels(sels);
@@ -255,6 +307,7 @@ function analyze(force) {
             const vf = sel.videoFileInfo || {};
             return {
                 view: sel.cameraName,
+                key: viewKey(sel.sessionIndex, sel.cameraName),
                 width: Number(vf.videoWidth) || 0,
                 height: Number(vf.videoHeight) || 0,
                 maxDim: Math.max(Number(vf.videoWidth) || 0, Number(vf.videoHeight) || 0),
@@ -272,17 +325,51 @@ function analyze(force) {
         for (const r of collected.sessions.values()) r.trackNames.forEach(function (n) { tracks.add(n); });
         analysis.trackNames = Array.from(tracks);
         analysis.frames = frames;
-        analysis.rec = recommendPipeline({ frames: frames, numEdges: sk ? sk.edges.length : 0, trackCount: tracks.size });
+        analysis.trackCount = tracks.size;
         analysis.idReport = Array.from(collected.sessions.values());
     } catch (e) {
         console.warn('[training] reading labels failed:', e);
     }
 }
 
-function totalLabelledFrames() {
+function totalLabelledFrames(rc) {
     let n = 0;
-    for (const sel of includedSelections()) n += labelCount(sel.sessionIndex, sel.cameraName).frames;
+    for (const sel of includedSelections(rc)) n += labelCount(sel.sessionIndex, sel.cameraName).frames;
     return n;
+}
+
+/** sleap-app's ★ recommendation for one model, from the labelled frames of its views (cached per analysis). */
+function modelRecommendation(m, rc) {
+    const frames = modelFrames(m, rc);
+    if (!frames.length) return null;
+    const key = m.id + '|' + analysis.at + '|' + frames.length + '|' + modelViews(m, includedViewNames(rc)).join(',');
+    if (!analysis.recs) analysis.recs = new WeakMap();
+    const hit = analysis.recs.get(m);
+    if (hit && hit.key === key) return hit.rec;
+    const sk = skeletonOf();
+    let rec = null;
+    try { rec = recommendPipeline({ frames: frames, numEdges: sk ? sk.edges.length : 0, trackCount: analysis.trackCount || 0 }); } catch (e) { rec = null; }
+    analysis.recs.set(m, { key: key, rec: rec });
+    return rec;
+}
+
+/** sleap-app auto-selects the recommended type for a model whose type the user has not picked. */
+function autoModelType(m, rc) {
+    if (m.modelTypeTouched || isRunning()) return;
+    const rec = modelRecommendation(m, rc);
+    if (!rec || rec.recommended === m.modelType) return;
+    if (skeletonCompatibility(skeletonOf()).disabledTypes.has(rec.recommended)) return;
+    replacePipeline(m, rec.recommended);
+}
+
+/** Change a model's pipeline: a preset of the old one does not fit, so its slots restart from their presets. The
+ *  validation fraction (a Run setting, one for every model) is kept. */
+function replacePipeline(m, t) {
+    const vf = runValidationFraction(m);
+    m.modelType = t;
+    for (const slot of Object.keys(m.slots)) if (m.slots[slot].preset) { delete m.slots[slot]; delete m.hp[slot]; }
+    ensureSlots(m);
+    if (vf != null) for (const s of Object.keys(m.hp)) m.hp[s].validationFraction = vf;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,61 +389,67 @@ async function ensureYaml() {
  * checkpoint}`, the run folder and its checkpoint). The training mode is read from the config (sleap-app: a
  * config naming a checkpoint is a Resume / Fine-tune of it); a trained run's own checkpoint is the one offered.
  */
-function setSlotConfig(slot, text, name, filename, preset, extra) {
+function setSlotConfig(m, slot, text, name, filename, preset, extra) {
     let doc;
     try { doc = YAML.parse(text); } catch (e) { run.note = 'Could not read ' + (filename || 'the config') + ': ' + e.message; refresh(); return false; }
     if (!doc || typeof doc !== 'object') { run.note = (filename || 'The config') + ' is not a training config.'; refresh(); return false; }
     // `text`: what Reset to profile defaults goes back to (the preset, or the file as it was read).
     const tm = detectTrainingMode(doc);
     const ex = extra || {};
-    cfg.slots[slot] = { name: name, filename: filename, preset: !!preset, doc: doc, head: detectHeadType(doc), text: text,
+    m.slots[slot] = { name: name, filename: filename, preset: !!preset, doc: doc, head: detectHeadType(doc), text: text,
         extra: extra || null, trainedPath: ex.trainedPath || null, mode: tm.mode, checkpoint: ex.checkpoint || tm.checkpoint, checkpointNote: null,
         // 'local' (a folder on this computer), 'worker' (typed for a worker) or 'config' (named by the config itself).
         checkpointWhere: ex.checkpoint ? 'local' : 'config' };
-    cfg.hp[slot] = hyperparamsFromConfig(doc);
-    if ((slot === 'centered_instance' || slot === 'config') && cfg.hp[slot].anchorPart != null && cfg.anchorPart == null) cfg.anchorPart = cfg.hp[slot].anchorPart;
+    m.hp[slot] = hyperparamsFromConfig(doc);
+    if ((slot === 'centered_instance' || slot === 'config') && m.hp[slot].anchorPart != null && m.anchorPart == null) m.anchorPart = m.hp[slot].anchorPart;
+    // The run's validation split is one setting for every model (Run settings): a new config keeps it.
+    const vf = runValidationFraction(m);
+    if (vf != null) m.hp[slot].validationFraction = vf;
     run.note = null;
     return true;
 }
 
+/** The validation fraction a model's other slots hold (null when it has none yet). */
+function runValidationFraction(m, skip) {
+    for (const s of Object.keys(m.hp)) if (s !== skip && m.hp[s] && m.hp[s].validationFraction != null) return m.hp[s].validationFraction;
+    return null;
+}
+
 /** Make sure every slot of the model type holds a config of the right head (the Medium RF preset by default). */
-function ensureSlots() {
+function ensureSlots(m) {
     if (!YAML) return;
-    const slots = getConfigSlots(cfg.modelType);
-    for (const slot of Object.keys(cfg.slots)) if (slots.indexOf(slot) === -1) { delete cfg.slots[slot]; delete cfg.hp[slot]; }
+    const slots = getConfigSlots(m.modelType);
+    for (const slot of Object.keys(m.slots)) if (slots.indexOf(slot) === -1) { delete m.slots[slot]; delete m.hp[slot]; }
     for (const slot of slots) {
-        const want = slotToHeadType(cfg.modelType, slot);
-        const cur = cfg.slots[slot];
+        const want = slotToHeadType(m.modelType, slot);
+        const cur = m.slots[slot];
         if (cur && (cur.head === want || !cur.preset)) continue;
-        const p = defaultProfile(cfg.modelType, slot);
-        if (p) setSlotConfig(slot, p.content, p.label, p.filename, true);
+        const p = defaultProfile(m.modelType, slot);
+        if (p) setSlotConfig(m, slot, p.content, p.label, p.filename, true);
     }
-    if (slots.indexOf(cfg.activeTab) === -1) cfg.activeTab = slots[0];
+    if (slots.indexOf(m.activeTab) === -1) m.activeTab = slots[0];
 }
 
-function setModelType(t) {
-    if (t === cfg.modelType) return;
-    cfg.modelType = t;
-    cfg.modelTypeTouched = true;
-    // A preset of the old pipeline does not fit the new one: start the new slots from their presets.
-    for (const slot of Object.keys(cfg.slots)) if (cfg.slots[slot].preset) { delete cfg.slots[slot]; delete cfg.hp[slot]; }
-    ensureSlots();
+function setModelType(m, t) {
+    if (t === m.modelType) return;
+    m.modelTypeTouched = true;
+    replacePipeline(m, t);
 }
 
-function slotOptions(slot) {
-    const head = slotToHeadType(cfg.modelType, slot);
+function slotOptions(m, slot) {
+    const head = slotToHeadType(m.modelType, slot);
     const opts = profilesForHead(head).map(function (p) { return ['preset:' + p.filename, p.label]; });
     // sleap-app: every trained run of this head in the runs folder, newest first (this computer's runs: local only).
     if (!isRemoteRun()) trainedRunsFor(head).forEach(function (r) { opts.push(['trained:' + r.path, '[Trained] ' + (r.runName || r.name) + ' (training_config.yaml)']); });
-    const cur = cfg.slots[slot];
+    const cur = m.slots[slot];
     const listed = !!cur && !!cur.trainedPath && !isRemoteRun() && trainedRunsFor(cur.head).some(function (r) { return r.path === cur.trainedPath; });
     if (cur && !cur.preset && !listed) opts.push(['file:' + cur.filename, cur.trainedPath ? cur.name : cur.filename]);
     opts.push(['__browse__', 'Browse for config file...']);
     return opts;
 }
 
-function slotValue(slot) {
-    const cur = cfg.slots[slot];
+function slotValue(m, slot) {
+    const cur = m.slots[slot];
     if (!cur) return '';
     if (cur.trainedPath && !isRemoteRun() && trainedRunsFor(cur.head).some(function (r) { return r.path === cur.trainedPath; })) return 'trained:' + cur.trainedPath;
     return cur.preset ? 'preset:' + cur.filename : 'file:' + cur.filename;
@@ -408,40 +501,40 @@ async function scanTrainedRuns() {
 }
 
 /** Load a trained run's config into a slot, offering its checkpoint for Fine-tune / Resume (sleap-app `handleSelectRun`). */
-async function selectTrainedRun(slot, path) {
+async function selectTrainedRun(m, slot, path) {
     const r = local.trained.find(function (x) { return x.path === path; });
     if (!r) return;
     try {
         const text = new TextDecoder().decode(await fsApi.readFile(joinRunDir(r.path, 'training_config.yaml')));
-        setSlotConfig(slot, text, '[Trained] ' + (r.runName || r.name), 'training_config.yaml', false, { trainedPath: r.path, checkpoint: r.checkpoint });
+        setSlotConfig(m, slot, text, '[Trained] ' + (r.runName || r.name), 'training_config.yaml', false, { trainedPath: r.path, checkpoint: r.checkpoint });
     } catch (e) {
         run.note = 'Could not read ' + r.name + '/training_config.yaml: ' + ((e && e.message) || e);
     }
     refresh();
 }
 
-function browseConfig(slot) {
+function browseConfig(m, slot) {
     const input = el('input');
     input.type = 'file';
     input.accept = '.yaml,.yml';
     input.addEventListener('change', function () {
         const f = input.files && input.files[0];
-        if (f) readConfigFile(slot, f);
+        if (f) readConfigFile(m, slot, f);
     });
     input.click();
 }
 
-function readConfigFile(slot, file) {
+function readConfigFile(m, slot, file) {
     if (!/\.ya?ml$/i.test(file.name)) { run.note = file.name + ' is not a YAML config.'; refresh(); return; }
     file.text().then(function (text) {
-        if (setSlotConfig(slot, text, file.name, file.name, false)) refresh();
+        if (setSlotConfig(m, slot, text, file.name, file.name, false)) refresh();
     }, function (e) { run.note = 'Could not read ' + file.name + ': ' + e.message; refresh(); });
 }
 
-/** A slot's panel fields as `applyPanelSettings` takes them (Top-Down: the panel's one Anchor Part). */
-function effectiveHp(slot) {
-    const hp = Object.assign({}, cfg.hp[slot]);
-    if (cfg.modelType === 'top_down' || cfg.modelType === 'top_down_id') hp.anchorPart = cfg.anchorPart || null;
+/** A slot's fields as `applyPanelSettings` takes them (Top-Down: the model's one Anchor Part). */
+function effectiveHp(m, slot) {
+    const hp = Object.assign({}, m.hp[slot]);
+    if (m.modelType === 'top_down' || m.modelType === 'top_down_id') hp.anchorPart = m.anchorPart || null;
     return hp;
 }
 
@@ -449,75 +542,65 @@ function effectiveHp(slot) {
 // The centered-instance crop (sleap-app AnchorPartField's crop preview, ModelStatsPreview's "Crop Size", cropWarnings)
 // ---------------------------------------------------------------------------
 
-function cropsAround() { return cfg.modelType === 'top_down' || cfg.modelType === 'top_down_id'; }
-
-/** The Training panel is on screen (open, expanded, the info panel shown). */
-function paneShown() { return !!pane && pane.offsetParent !== null; }
+function cropsAround(m) { return !!m && (m.modelType === 'top_down' || m.modelType === 'top_down_id'); }
 
 /**
- * The crop the centered-instance model of each group trains on: the config's Crop Size, or what sleap-nn computes
- * for Auto from that group's labels (`pose/training-crop-size.js`). Null outside Top-Down or without the config.
+ * The crop a model's centered-instance head trains on: the config's Crop Size, or what sleap-nn computes for Auto
+ * from that model's own labels (`pose/training-crop-size.js`). Null outside Top-Down or without the config.
  * @returns {{cropSize: number, low: number, auto: boolean, maxBboxDim: number, warnings: string[],
  *            byView: Object<string, {cropSize: number, target: {height: number|null, width: number|null}}>}|null}
  */
-function cropInfo() {
-    if (!cropsAround() || !cfg.slots.centered_instance || !cfg.slots.centered_instance.doc) return null;
-    const doc = applyPanelSettings(cfg.slots.centered_instance.doc, effectiveHp('centered_instance'));
-    const key = [analysis.key, analysis.at, cfg.anchorPart || '', cfg.groupMode, includedViewNames().join(','),
+function cropInfo(m, rc) {
+    if (!cropsAround(m) || !m.slots.centered_instance || !m.slots.centered_instance.doc) return null;
+    const doc = applyPanelSettings(m.slots.centered_instance.doc, effectiveHp(m, 'centered_instance'));
+    const frames = modelFrames(m, rc);
+    const views = modelViews(m, includedViewNames(rc));
+    const key = [analysis.key, analysis.at, m.anchorPart || '', views.join(','), frames.length,
         JSON.stringify(doc.data_config), JSON.stringify(doc.model_config && doc.model_config.backbone_config)].join('|');
-    if (key === crop.key) return crop.info;
+    const hit = crop.cache.get(m);
+    if (hit && hit.key === key) return hit.info;
     const names = analysis.nodeNames || [];
-    const ai = cfg.anchorPart ? names.indexOf(cfg.anchorPart) : -1;
-    const frames = analysis.frames || [];
-    const per = groups().map(function (g) {
-        const mine = frames.filter(function (f) { return g.views.indexOf(f.view) !== -1; });
-        return Object.assign(effectiveCropSize(doc, mine, ai >= 0 ? ai : null), { views: g.views, target: sizeMatchTarget(doc, mine) });
-    }).filter(function (c) { return c.cropSize != null; });
+    const ai = m.anchorPart ? names.indexOf(m.anchorPart) : -1;
+    const c = Object.assign(effectiveCropSize(doc, frames, ai >= 0 ? ai : null), { views: views, target: sizeMatchTarget(doc, frames) });
     let info = null;
-    if (per.length) {
-        const sizes = per.map(function (c) { return c.cropSize; });
-        const top = per.reduce(function (a, b) { return b.cropSize > a.cropSize ? b : a; });
+    if (c.cropSize != null) {
         const scale = Number(doc.data_config && doc.data_config.preprocessing && doc.data_config.preprocessing.scale) || 1;
-        const warnings = [];
         const byView = {};
         const centroid = configCentroid(doc);
-        per.forEach(function (c) {
-            cropSizeWarnings(c, scale).forEach(function (w) { if (warnings.indexOf(w) === -1) warnings.push(w); });
-            c.views.forEach(function (v) { byView[v] = { cropSize: c.cropSize, target: c.target, centroid: centroid }; });
-        });
-        info = {
-            cropSize: Math.max.apply(null, sizes), low: Math.min.apply(null, sizes), auto: top.auto,
-            maxBboxDim: Math.max.apply(null, per.map(function (c) { return c.maxBboxDim; })), warnings: warnings, byView: byView,
-        };
+        views.forEach(function (v) { byView[v] = { cropSize: c.cropSize, target: c.target, centroid: centroid }; });
+        info = { cropSize: c.cropSize, low: c.cropSize, auto: c.auto, maxBboxDim: c.maxBboxDim, warnings: cropSizeWarnings(c, scale), byView: byView };
     }
-    crop.key = key; crop.info = info;
+    crop.cache.set(m, { key: key, info: info });
     return info;
 }
 
-/** "752 px (Auto)", "512 px", or "512–752 px (Auto)" when one model per view gives several. */
-function cropText(info) {
-    if (!info) return analysis.frames && analysis.frames.length ? '—' : 'Label an animal to size it.';
-    const n = function (v) { return v.toLocaleString('en-US'); };
-    const size = info.low != null && info.low !== info.cropSize ? n(info.low) + '–' + n(info.cropSize) : n(info.cropSize);
-    return size + ' px' + (info.auto ? ' (Auto)' : '');
+/** "752 px (Auto)", "512 px". */
+function cropText(info, m, rc) {
+    if (!info) return m && modelFrames(m, rc).length ? '—' : 'Label an animal to size it.';
+    return info.cropSize.toLocaleString('en-US') + ' px' + (info.auto ? ' (Auto)' : '');
 }
 
-/** Keep the on-canvas preview in step with the crop and the anchor (sleap-app: while its toggle is on). */
+/**
+ * Keep the on-canvas preview in step with the crop and the anchor (sleap-app: while its toggle is on): the crop of the
+ * model the Models modal shows (`crop.model`), on that model's views, while the modal is open.
+ */
 function syncCropPreview() {
-    const info = crop.preview && cropsAround() ? cropInfo() : null;
-    const changed = setAnchorCropPreview(info ? { anchor: cfg.anchorPart || null, byView: info.byView, isShown: paneShown } : null);
+    const m = crop.model;
+    const mm = trainingModelsModal();
+    const info = crop.preview && mm && m && cropsAround(m) ? cropInfo(m, mm.runCfg()) : null;
+    const changed = setAnchorCropPreview(info ? { anchor: m.anchorPart || null, byView: info.byView, isShown: function () { return !!trainingModelsModal(); } } : null);
     if (changed && state.session) { try { drawAllOverlays(state.currentFrame); } catch (e) { console.warn('[training] crop preview redraw failed:', e); } }
 }
 
-/** The finished YAML of a slot for one group's run. */
-function configText(slot, runName) {
-    return YAML.stringify(sentConfig(slot, runName));
+/** The finished YAML of a model's slot for one run. */
+function configText(m, slot, runName) {
+    return YAML.stringify(sentConfig(m, slot, runName));
 }
 
-/** The config a worker gets (and Save writes): the panel's fields, LUC3D's finishing, the training mode. */
-function sentConfig(slot, runName) {
-    const c = cfg.slots[slot];
-    return applyTrainingMode(finalizeConfig(applyPanelSettings(c.doc, effectiveHp(slot)), runName ? { runName: runName } : {}), c.mode, c.checkpoint);
+/** The config a worker gets (and Save writes): the model's fields, LUC3D's finishing, the training mode. */
+function sentConfig(m, slot, runName) {
+    const c = m.slots[slot];
+    return applyTrainingMode(finalizeConfig(applyPanelSettings(c.doc, effectiveHp(m, slot)), runName ? { runName: runName } : {}), c.mode, c.checkpoint);
 }
 
 /**
@@ -534,8 +617,8 @@ function slotCheckpointProblem(c) {
 }
 
 /** A local model's start (Rust checks the checkpoint is inside a model grant and writes the keys). */
-function initOf(slot) {
-    const c = cfg.slots[slot];
+function initOf(m, slot) {
+    const c = m.slots[slot];
     return c && c.mode !== 'scratch' && c.checkpoint ? { mode: c.mode, checkpoint: c.checkpoint } : undefined;
 }
 
@@ -546,8 +629,8 @@ function baseName(p) { return String(p).split(/[\\/]/).pop(); }
  * inference model), and its checkpoint is taken from it (sleap-app `pickCheckpointFile`). A head that does
  * not match the slot's is said (sleap-app warns, it does not block).
  */
-async function chooseCheckpoint(slot) {
-    const c = cfg.slots[slot];
+async function chooseCheckpoint(m, slot) {
+    const c = m.slots[slot];
     if (!c || !sn) return;
     let dir;
     try { dir = await sn.pickModelDirectory('Select the trained model to start from'); } catch (e) { c.checkpointNote = plainError(e); refresh(); return; }
@@ -570,38 +653,39 @@ async function chooseCheckpoint(slot) {
 }
 
 /**
- * sleap-app's Full Configuration... (`ui/training-config-dialog.js`). It edits the configs themselves, so the
- * panel's fields are written into them first and re-read from them after each edit: both always agree.
+ * sleap-app's Full Configuration... (`ui/training-config-dialog.js`) for one model. It edits the configs themselves,
+ * so the model's fields are written into them first and re-read from them after each edit: both always agree.
  */
-function openFullConfig(initialTab) {
-    if (!YAML || isRunning()) return;
-    const slots = getConfigSlots(cfg.modelType).filter(function (s) { return !!cfg.slots[s]; });
+function openFullConfig(m, initialTab, rc) {
+    if (!YAML || isRunning() || !m) return;
+    const slots = getConfigSlots(m.modelType).filter(function (s) { return !!m.slots[s]; });
     if (!slots.length) return;
-    slots.forEach(function (s) { cfg.slots[s].doc = applyPanelSettings(cfg.slots[s].doc, effectiveHp(s)); });
+    slots.forEach(function (s) { m.slots[s].doc = applyPanelSettings(m.slots[s].doc, effectiveHp(m, s)); });
     openTrainingConfigDialog({
-        slots: function () { return slots.filter(function (s) { return !!cfg.slots[s]; }).map(function (s) { return { slot: s, label: getSlotLabel(s).replace(' Config', '') }; }); },
-        doc: function (s) { return cfg.slots[s] ? cfg.slots[s].doc : null; },
+        slots: function () { return slots.filter(function (s) { return !!m.slots[s]; }).map(function (s) { return { slot: s, label: getSlotLabel(s).replace(' Config', '') }; }); },
+        doc: function (s) { return m.slots[s] ? m.slots[s].doc : null; },
         changed: function (s) {
-            const keep = cfg.hp[s] ? cfg.hp[s].anchorPart : null;
-            cfg.hp[s] = Object.assign(hyperparamsFromConfig(cfg.slots[s].doc), { anchorPart: keep });
+            const keep = m.hp[s] ? m.hp[s].anchorPart : null;
+            m.hp[s] = Object.assign(hyperparamsFromConfig(m.slots[s].doc), { anchorPart: keep });
             refresh();
         },
         reset: function (which) {
-            (which || slots).forEach(function (s) { const c = cfg.slots[s]; if (c && c.text) setSlotConfig(s, c.text, c.name, c.filename, c.preset, c.extra); });
+            (which || slots).forEach(function (s) { const c = m.slots[s]; if (c && c.text) setSlotConfig(m, s, c.text, c.name, c.filename, c.preset, c.extra); });
             refresh();
         },
-        yamlOf: function (s) { return YAML.stringify(sentConfig(s, null)); },
+        yamlOf: function (s) { return YAML.stringify(sentConfig(m, s, null)); },
         mode: function (s) {
-            const c = cfg.slots[s];
+            const c = m.slots[s];
             return c ? { mode: c.mode, checkpoint: c.checkpoint, note: c.checkpointNote, problem: slotCheckpointProblem(c), local: !isRemoteRun() } : null;
         },
-        setMode: function (s, m) { const c = cfg.slots[s]; if (c) { c.mode = m; c.checkpointNote = null; } refresh(); },
-        setCheckpoint: function (s, p) { const c = cfg.slots[s]; if (c) { c.checkpoint = p || null; c.checkpointWhere = 'worker'; c.checkpointNote = null; } refresh(); },
-        chooseCheckpoint: function (s) { return chooseCheckpoint(s); },
-        fileNameOf: function (s) { return (cfg.slots[s].head || s) + '.yaml'; },
+        setMode: function (s, mode) { const c = m.slots[s]; if (c) { c.mode = mode; c.checkpointNote = null; } refresh(); },
+        setCheckpoint: function (s, p) { const c = m.slots[s]; if (c) { c.checkpoint = p || null; c.checkpointWhere = 'worker'; c.checkpointNote = null; } refresh(); },
+        chooseCheckpoint: function (s) { return chooseCheckpoint(m, s); },
+        fileNameOf: function (s) { return (m.slots[s].head || s) + '.yaml'; },
         isBusy: function () { return isRunning() || dry.status === 'running'; },
-        cropInfo: function (s) { return s === 'centered_instance' ? cropInfo() : null; },
+        cropInfo: function (s) { return s === 'centered_instance' ? cropInfo(m, rc) : null; },
         initialTab: initialTab,
+        title: models.length > 1 || (trainingModelsModal() && trainingModelsModal().modelCount() > 1) ? m.name : null,
     });
 }
 
@@ -609,62 +693,81 @@ function openFullConfig(initialTab) {
 // Can it start?
 // ---------------------------------------------------------------------------
 
-function pipelineProblem() {
-    if (isBoxModelType(cfg.modelType)) return 'Box Detector types need box labels, which LUCID does not have.';
+/** What stops a model's pipeline from training on this project, or null. */
+function pipelineProblem(m, rc) {
+    if (isBoxModelType(m.modelType)) return 'Box Detector types need box labels, which LUCID does not have.';
     const sk = skeletonOf();
-    if (cfg.modelType === 'bottom_up' && sk) {
+    if (m.modelType === 'bottom_up' && sk) {
         const p = arborescenceProblems(sk);
         if (p) return arborescenceMessage(p);
     }
-    if (isIdModelType(cfg.modelType) && analysis.idReport) {
-        const views = cfg.groupMode === 'perview' ? 1 : includedViewNames().length;
-        const p = idModelProblem(analysis.idReport, { views: views });
+    if (isIdModelType(m.modelType) && analysis.idReport) {
+        const p = idModelProblem(analysis.idReport, { views: Math.max(1, modelViews(m, includedViewNames(rc)).length) });
         if (p) return p;
     }
+    return projectProblem(rc);
+}
+
+/** What stops any model from training on this project (names that sleap-nn would interpolate, mixed skeletons), or null. */
+function projectProblem(rc) {
     const interp = interpolationProblem([{ kind: 'node', names: analysis.nodeNames }, { kind: 'identity / track', names: analysis.trackNames }]);
     if (interp) return interp;
-    const sels = includedSelections();
+    const sels = includedSelections(rc);
     if (sels.length > 1) {
         const bySession = [];
         const seen = new Set();
         for (const s of sels) if (!seen.has(s.session)) { seen.add(s.session); bySession.push(s); }
         const mm = findSkeletonMismatch(bySession);
-        if (mm) return mm + '. Uncheck that session’s views to train without it.';
+        if (mm) return mm + '. Uncheck that session’s views to train without it (Edit models… ▸ Run settings).';
     }
     return null;
 }
 
-function hasAllConfigs() {
-    return getConfigSlots(cfg.modelType).every(function (s) { return !!cfg.slots[s]; });
+function hasAllConfigs(m) {
+    return getConfigSlots(m.modelType).every(function (s) { return !!m.slots[s]; });
+}
+
+/** The (session, view) pairs some model trains on. */
+function trainedSelections(rc, list) {
+    const used = [];
+    runModels(list, rc).forEach(function (x) { x.views.forEach(function (v) { if (used.indexOf(v) === -1) used.push(v); }); });
+    return includedSelections(rc).filter(function (s) { return used.indexOf(s.cameraName) !== -1; });
 }
 
 /** Views that train but are not on the worker yet. */
 function unplacedViews() {
     if (!remote || !remote.connected()) return [];
-    return includedSelections().filter(function (s) { return !remote.workerVideo(s.sessionIndex, s.cameraName); });
+    return trainedSelections().filter(function (s) { return !remote.workerVideo(s.sessionIndex, s.cameraName); });
 }
 
+/** Why the models cannot start, as one line, or '' (the panel's Start button and the Models modal's footer). */
 function whyNotStart() {
     if (isRunning()) return '';
     if (!YAML) return 'Loading presets…';
     if (!projectSessions().length) return 'Open a session first.';
-    if (pipelineProblem()) return 'Fix the problem under Model Type to start';
-    if (!hasAllConfigs()) return 'Upload config file(s) to begin';
     if (totalLabelledFrames() === 0) return 'Label at least one frame before training';
-    for (const sl of getConfigSlots(cfg.modelType)) {
-        const c = cfg.slots[sl];
-        const cp = c && slotCheckpointProblem(c);
-        if (cp) return getSlotLabel(sl).replace(' Config', '') + ': ' + cp + ' (Full Configuration).';
+    if (!models.length) return 'Add a model to train (Edit models…).';
+    const probs = modelProblems(models, includedViewNames());
+    if (probs.empty.length) return '“' + probs.empty[0].name + '” has no labelled view to train on (Edit models…).';
+    for (const m of models) {
+        const named = models.length > 1 ? m.name + ': ' : '';
+        if (pipelineProblem(m)) return named + 'fix the problem under Model Type to start (Edit models…).';
+        if (!hasAllConfigs(m)) return named + 'upload config file(s) to begin (Edit models…).';
+        for (const sl of getConfigSlots(m.modelType)) {
+            const c = m.slots[sl];
+            const cp = c && slotCheckpointProblem(c);
+            if (cp) return named + getSlotLabel(sl).replace(' Config', '') + ': ' + cp + ' (Full Configuration).';
+        }
     }
     if (isRemoteRun()) {
         const w = remote ? remote.whyNot() : 'Select a worker';
         if (w) return w;
-        if (unplacedViews().length) return 'Locate each view’s video on the worker (Data).';
-        if (!remote.outputDir()) return 'Choose an output folder on the worker (Data).';
+        if (unplacedViews().length) return 'Locate each view’s video on the worker (Edit models… ▸ Run settings).';
+        if (!remote.outputDir()) return 'Choose an output folder on the worker (Edit models… ▸ Run settings).';
     } else {
         if (!env.checked) return 'Checking for sleap-nn…';
         if (!sleapNnAvailable()) return 'sleap-nn was not found on this machine (Remote: pick a worker instead).';
-        if (!local.runsRoot) return 'Choose a runs folder (Data).';
+        if (!local.runsRoot) return 'Choose a runs folder (Edit models… ▸ Run settings).';
         if (local.resolving) return 'Finding the videos on disk…';
         if (missingLocalVideos().length) return 'Open each view’s video from its file so the app knows where it is on disk (' + missingLocalVideos()[0].cameraName + ').';
         if (dry.status === 'running') return '';
@@ -686,7 +789,8 @@ function isAbsolutePath(p) { return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(String(p ||
  *  .slp recorded (when the app may read it). Re-run when the views or their files change. */
 async function resolveLocalVideos() {
     if (!fsApi || local.resolving) return;
-    const sels = includedSelections();
+    // Every labelled view, checked or not: the Models modal can check a view before Apply.
+    const sels = labelledSelections();
     const key = sels.map(function (s) {
         const f = s.videoFileInfo && s.videoFileInfo.file;
         return viewKey(s.sessionIndex, s.cameraName) + '|' + (f ? f.name + ':' + f.size + ':' + (f.webkitRelativePath || '') : '') + '|' + (s.videoFileInfo.videoPath || '');
@@ -719,7 +823,7 @@ async function resolveLocalVideos() {
 }
 
 function localVideo(sIdx, view) { return local.videos.get(viewKey(sIdx, view)) || null; }
-function missingLocalVideos() { return includedSelections().filter(function (s) { return !localVideo(s.sessionIndex, s.cameraName); }); }
+function missingLocalVideos() { return trainedSelections().filter(function (s) { return !localVideo(s.sessionIndex, s.cameraName); }); }
 
 async function chooseRunsFolder() {
     if (!sn || !sn.training) return;
@@ -775,9 +879,9 @@ function startElapsed() {
 }
 function stopElapsed() { if (elapsedTimer) clearInterval(elapsedTimer); elapsedTimer = null; }
 
-/** One group's selections, with each video named by its worker path. */
-function groupSelections(group) {
-    return includedSelections().filter(function (s) { return group.views.indexOf(s.cameraName) !== -1; })
+/** One model's selections (`x`: a `runModels` entry), with each video named by its worker path. */
+function modelSelections(x) {
+    return includedSelections().filter(function (s) { return x.views.indexOf(s.cameraName) !== -1; })
         .map(function (s) { return Object.assign({}, s, { videoFilename: remote.workerVideo(s.sessionIndex, s.cameraName) }); });
 }
 
@@ -786,50 +890,55 @@ function startTraining() {
     if (isRemoteRun()) startRemoteTraining(); else startLocalTraining(false);
 }
 
-/** The progress-row plan of one group's models. */
-function groupModels(g, slots, runNames) {
+/** The progress-row plan of one model's heads (`x`: a `runModels` entry; `multi`: the run trains several models). */
+function headRows(x, slots, runNames, multi) {
+    const m = x.model;
     return slots.map(function (s, i) {
-        const h = cfg.slots[s].head;
-        const pl = plateauSettings(cfg.slots[s].doc);
-        return { head: h, label: groupModelLabel(headLabel(h), g), maxEpochs: cfg.hp[s].maxEpochs, runName: runNames[i],
+        const h = m.slots[s].head;
+        const pl = plateauSettings(m.slots[s].doc);
+        return { head: h, label: modelRunLabel(headLabel(h), m, multi), maxEpochs: m.hp[s].maxEpochs, runName: runNames[i],
             plateauPatience: pl.patience, plateauMinDelta: pl.minDelta };
     });
 }
 
-/** The finished config (an object) of a slot for one run name. */
-function configObject(slot, runName) {
-    return finalizeConfig(applyPanelSettings(cfg.slots[slot].doc, effectiveHp(slot)), { runName: runName });
+/** The finished config (an object) of a model's slot for one run name. */
+function configObject(m, slot, runName) {
+    return finalizeConfig(applyPanelSettings(m.slots[slot].doc, effectiveHp(m, slot)), { runName: runName });
 }
 
 /**
- * Plan a local run: per group, the training and validation files (split by moment, videos named by
- * placeholders), each video's disk path in table order, and each model's config.
+ * Plan a local run: per model, the training and validation files of its views (split by moment, videos
+ * named by their disk paths), each video's disk path in table order, and each head's config.
  */
 async function planLocal(stamp, dryRun) {
-    const slots = getConfigSlots(cfg.modelType);
     const plans = [];
-    for (const g of groups()) {
-        const sels = includedSelections().filter(function (s) { return g.views.indexOf(s.cameraName) !== -1; })
+    const xs = runModels();
+    const multi = xs.length > 1;
+    const parts = uniqueRunParts(xs.map(function (x) { return x.model; }));
+    for (const x of xs) {
+        const m = x.model;
+        const slots = getConfigSlots(m.modelType);
+        const sels = includedSelections().filter(function (s) { return x.views.indexOf(s.cameraName) !== -1; })
             // The file names each video by its disk path (what a reader of the file expects); Rust still
             // passes the same grant-checked paths as --video-paths, which is what sleap-nn uses.
             .map(function (s) { return Object.assign({}, s, { videoFilename: localVideo(s.sessionIndex, s.cameraName) }); });
-        const hp0 = cfg.hp[slots[0]];
+        const hp0 = m.hp[slots[0]];
         const built = buildTrainingLabels(sels, { split: { fraction: hp0.validationFraction, seed: hp0.seed == null ? 0 : hp0.seed } });
         const train = await trainingSlpBytes(built.train);
         const val = built.split.sameAsTrain ? null : await trainingSlpBytes(built.val);
         const runNames = slots.map(function (s) {
-            return trainingRunName({ timestamp: stamp, head: cfg.slots[s].head, group: g, mode: cfg.groupMode, nFrames: built.stats.frames }) + (dryRun ? '.dryrun' : '');
+            return trainingRunName({ timestamp: stamp, head: m.slots[s].head, model: { name: parts.get(m.id) }, multi: multi, nFrames: built.stats.frames }) + (dryRun ? '.dryrun' : '');
         });
         plans.push({
-            group: g, stats: built.stats, split: built.split,
+            group: modelSnapshot(x), stats: built.stats, split: built.split,
             args: {
                 runsRoot: local.runsRoot,
-                models: slots.map(function (s, i) { return { config: configObject(s, runNames[i]), runName: runNames[i], init: initOf(s) }; }),
+                models: slots.map(function (s, i) { return { config: configObject(m, s, runNames[i]), runName: runNames[i], init: initOf(m, s) }; }),
                 trainSlp: bytesToBase64(train),
                 valSlp: val ? bytesToBase64(val) : null,
                 videoPaths: sels.map(function (s) { return localVideo(s.sessionIndex, s.cameraName); }),
             },
-            models: groupModels(g, slots, runNames),
+            models: headRows(x, slots, runNames, multi),
         });
     }
     return plans;
@@ -868,8 +977,8 @@ function runLocalModel(token, index, k, dryRun, onLine) {
 async function startLocalTraining() {
     const stamp = formatRunTimestamp();
     run.status = 'running'; run.error = null; run.log = []; run.errorTail = []; run.modelDirs = [];
-    run.groups = groups(); run.trainedNodes = currentNodeNames(); postRun.status = null; postRun.message = null; postSeq++;
-    run.remote = isRemoteRun();
+    run.groups = runModels().map(modelSnapshot); run.trainedNodes = currentNodeNames(); postRun.status = null; postRun.message = null; postSeq++;
+    run.remote = isRemoteRun(); run.post = Object.assign({}, runCfg.post); run.inferWith = Object.assign({}, runCfg.inferWith);
     dry.status = 'idle'; dry.rows = []; dry.log = []; dry.error = null;   // sleap-app: a Start clears the dry run's result
     run.cancelled = false; run.stopRequested = false; run.startedAt = Date.now(); run.endedAt = null; run.note = null;
     refresh();
@@ -960,8 +1069,10 @@ function joinRunDir(root, name) {
 
 /** The config + data a dry run checked, to say when it no longer matches. */
 function dryRunKey() {
-    return JSON.stringify([cfg.modelType, cfg.groupMode, getConfigSlots(cfg.modelType).map(function (s) { return [slotValue(s), cfg.hp[s]]; }),
-        cfg.anchorPart, includedSelections().map(function (s) { return viewKey(s.sessionIndex, s.cameraName); }), local.runsRoot]);
+    return JSON.stringify([runModels().map(function (x) {
+        const m = x.model;
+        return [m.id, m.name, x.views, m.modelType, getConfigSlots(m.modelType).map(function (s) { return [slotValue(m, s), m.hp[s]]; }), m.anchorPart];
+    }), includedSelections().map(function (s) { return viewKey(s.sessionIndex, s.cameraName); }), local.runsRoot]);
 }
 
 /** sleap-app's Dry run: setup plus one training and one validation batch per model, nothing kept. */
@@ -1015,43 +1126,39 @@ async function startDryRun() {
 }
 
 async function startRemoteTraining() {
-    const gs = groups();
-    const slots = getConfigSlots(cfg.modelType);
+    const xs = runModels();
+    const multi = xs.length > 1;
+    const parts = uniqueRunParts(xs.map(function (x) { return x.model; }));
     const stamp = formatRunTimestamp();
     run.status = 'running'; run.error = null; run.log = []; run.errorTail = []; run.modelDirs = [];
-    run.groups = groups(); run.trainedNodes = currentNodeNames(); postRun.status = null; postRun.message = null; postSeq++;
-    run.remote = isRemoteRun();
+    run.groups = xs.map(modelSnapshot); run.trainedNodes = currentNodeNames(); postRun.status = null; postRun.message = null; postSeq++;
+    run.remote = isRemoteRun(); run.post = Object.assign({}, runCfg.post); run.inferWith = Object.assign({}, runCfg.inferWith);
     dry.status = 'idle'; dry.rows = []; dry.log = []; dry.error = null;   // sleap-app: a Start clears the dry run's result
     run.cancelled = false; run.stopRequested = false; run.startedAt = Date.now(); run.endedAt = null; run.note = null;
-    // Plan every group first (data + configs), so nothing is sent if one of them cannot be built.
+    // Plan every model first (data + configs), so nothing is sent if one of them cannot be built.
     const plans = [];
     try {
-        for (const g of gs) {
-            const sels = groupSelections(g);
+        for (const x of xs) {
+            const m = x.model;
+            const slots = getConfigSlots(m.modelType);
+            const sels = modelSelections(x);
             const built = buildTrainingLabels(sels, { split: { overfit: true } });
             const bytes = await trainingSlpBytes(built.train);
             const check = payloadCheck(bytes.byteLength);
-            if (check.level === 'refuse') throw new Error(check.message + ' Train fewer views per model (One per view).');
+            if (check.level === 'refuse') throw new Error(check.message + ' Train fewer views per model (Edit models…).');
             if (check.level === 'warn' && !(await askConfirm(check.message + ' Send it?', { okLabel: 'Send' }))) {
                 throw new Error('Not sent.');
             }
-            const heads = slots.map(function (s) { return cfg.slots[s].head; });
+            const heads = slots.map(function (s) { return m.slots[s].head; });
             const runNames = heads.map(function (h) {
-                return trainingRunName({ timestamp: stamp, head: h, group: g, mode: cfg.groupMode, nFrames: built.stats.frames });
+                return trainingRunName({ timestamp: stamp, head: h, model: { name: parts.get(m.id) }, multi: multi, nFrames: built.stats.frames });
             });
-            const configs = slots.map(function (s, i) { return configText(s, runNames[i]); });
+            const configs = slots.map(function (s, i) { return configText(m, s, runNames[i]); });
             const spec = buildTrainSpec({
                 configs: configs, modelTypes: heads, labelsContent: bytesToBase64(bytes),
                 project: remote.tag(), outputDir: remote.outputDir(),
             });
-            plans.push({
-                group: g, spec: spec, stats: built.stats,
-                models: heads.map(function (h, i) {
-                    const pl = plateauSettings(cfg.slots[slots[i]].doc);
-                    return { head: h, label: groupModelLabel(headLabel(h), g), maxEpochs: cfg.hp[slots[i]].maxEpochs, runName: runNames[i],
-                        plateauPatience: pl.patience, plateauMinDelta: pl.minDelta };
-                }),
-            });
+            plans.push({ group: modelSnapshot(x), spec: spec, stats: built.stats, models: headRows(x, slots, runNames, multi) });
         }
     } catch (e) {
         run.status = 'error'; run.error = (e && e.message) || String(e); run.endedAt = Date.now();
@@ -1139,11 +1246,12 @@ function postTargetLabel(v) {
  * the run (progress, log, Cancel, Fetch & Load); the status box here says how it went.
  */
 async function postTrainingInference(remoteRun) {
-    const p = cfg.post;
+    const p = run.post || runCfg.post;
     if (p.target === 'nothing') return;
     const seq = ++postSeq;
     postRun.remote = remoteRun;
     const tm = trainedModels(run.rows, run.groups);
+    const plan = handoffPlan(tm.models, run.groups, run.inferWith || {});
     const skip = function (msg) {
         postRun.status = 'skipped'; postRun.message = msg;
         appendLog('\u2014 Post-training inference skipped: ' + msg);
@@ -1154,19 +1262,20 @@ async function postTrainingInference(remoteRun) {
     if (sk) return skip(sk);
     postRun.status = 'running'; postRun.message = null;
     appendLog('\u2014 Running inference (' + postTargetLabel(p.target) + ') with models: ' +
-        tm.models.map(function (m) { return m.paths.join(' + '); }).join(', ') + '...');
+        plan.models.map(function (m) { return m.paths.join(' + ') + ' on ' + m.views.join(', '); }).join('; ') + '...');
     refresh();
     let r;
     try {
         r = await runTrainedModels({
-            remote: remoteRun, pipeline: inferencePipelineFor(cfg.modelType), models: tm.models, frameRange: p.target,
+            remote: remoteRun, pipeline: inferencePipelineFor(plan.modelType), models: plan.models, frameRange: p.target,
             sampleCount: p.sampleCount, excludeUserLabeled: p.skipUserLabeled, existingPredictions: p.existingPredictions,
         });
     } catch (e) {
         r = { ok: false, error: (e && e.message) || String(e) };
     }
     if (seq !== postSeq) return;   // a new run started meanwhile; the Inference panel still shows this one
-    const left = tm.incomplete.length ? ' No model folder for: ' + tm.incomplete.join(', ') + '.' : '';
+    const left = (tm.incomplete.length ? ' No model folder for: ' + tm.incomplete.join(', ') + '.' : '') +
+        (plan.skipped.length ? ' Not run (another model type; run it from the Inference panel): ' + plan.skipped.join(', ') + '.' : '');
     if (r.ok) {
         postRun.status = 'completed';
         postRun.message = (remoteRun ? 'Use Fetch & Load in the Inference panel once its jobs finish.' : '') + left || null;
@@ -1283,10 +1392,8 @@ function resetRun(keepConfig) {
     run.groups = []; run.trainedNodes = null;
     if (postRun.status !== 'running') { postRun.status = null; postRun.message = null; }
     if (!keepConfig) {
-        cfg.slots = {}; cfg.hp = {}; cfg.anchorPart = null; cfg.modelTypeTouched = false; cfg.modelType = DEFAULT_MODEL_TYPE;
-        cfg.groupMode = DEFAULT_GROUP_MODE; cfg.unchecked.clear();
-        cfg.post = Object.assign({}, POST_TRAINING_DEFAULTS);
-        ensureSlots();
+        models = defaultModels();
+        runCfg = { unchecked: new Set(), post: Object.assign({}, POST_TRAINING_DEFAULTS), inferWith: {} };
     }
     refresh();
 }
@@ -1327,22 +1434,61 @@ function copyText(text) {
 // Build
 // ---------------------------------------------------------------------------
 
-function buildModelSection(top) {
-    const sec = form.section(top, 'Model Type & Configs', true);
-    form.selectField(sec, null, null, function () {
+// ---------------------------------------------------------------------------
+// The Models modal's settings (`ui/training-models-modal.js`): one model's, and the run's
+// ---------------------------------------------------------------------------
+
+function modelTypeLabel(t) {
+    const o = MODEL_TYPE_OPTIONS.find(function (x) { return x.value === t; });
+    return o ? o.label : String(t || '');
+}
+
+/** "Medium RF" from "Preset: Centroid (Medium RF)"; a file's or trained run's own name otherwise. */
+function slotShortName(c) {
+    if (!c) return '?';
+    const m = /^Preset: .*\((.+)\)$/.exec(c.name || '');
+    return m ? m[1] : (c.name || c.filename || '?');
+}
+
+/** One line of a model's settings: its frames, configs, anchor, crop and epochs (the panel's cards and the modal's). */
+function modelMeta(m, rc) {
+    const frames = modelFrames(m, rc).length;
+    const slots = getConfigSlots(m.modelType).filter(function (s) { return !!m.slots[s]; });
+    const parts = [frames.toLocaleString('en-US') + ' labelled frame' + (frames === 1 ? '' : 's')];
+    if (slots.length) parts.push(slots.map(function (s) { return slotShortName(m.slots[s]); }).join(' / '));
+    if (cropsAround(m)) {
+        if (m.anchorPart) parts.push(m.anchorPart);
+        const info = cropInfo(m, rc);
+        if (info) parts.push('crop ' + cropText(info, m, rc));
+    }
+    const epochs = [];
+    slots.forEach(function (s) { const e = m.hp[s] && m.hp[s].maxEpochs; if (e != null && epochs.indexOf(e) === -1) epochs.push(e); });
+    if (epochs.length) parts.push(epochs.join(' / ') + ' epochs');
+    return parts.join(' · ');
+}
+
+/**
+ * One model's settings, in the Models modal's side panel (sleap-app's Model Type & Configs and Hyperparameters
+ * sections): `dm()` is the model shown (the modal's working copy), `rc()` the run settings edited with it.
+ */
+function buildModelSettings(box, f, dm, rc) {
+    const sec = f.section(box, 'Model Type & Configs', true);
+    f.selectField(sec, null, null, function () {
+        const m = dm();
+        if (!m) return [];
         const sk = skeletonOf();
         const compat = skeletonCompatibility(sk);
-        const recType = analysis.rec ? analysis.rec.recommended : null;
+        const r = modelRecommendation(m, rc());
+        const recType = r ? r.recommended : null;
         return MODEL_TYPE_OPTIONS.map(function (o) {
-            const box = isBoxModelType(o.value);
+            const boxType = isBoxModelType(o.value);
             const edges = compat.disabledTypes.has(o.value);
-            return [o.value, o.label + (box ? ' (needs box labels)' : edges ? ' (requires edges)' : '') +
-                (recType === o.value && !box && !edges ? ' ★' : '') + (compat.warnings.has(o.value) ? ' ⚠' : ''), box || edges];
+            return [o.value, o.label + (boxType ? ' (needs box labels)' : edges ? ' (requires edges)' : '') +
+                (recType === o.value && !boxType && !edges ? ' ★' : '') + (compat.warnings.has(o.value) ? ' ⚠' : ''), boxType || edges];
         });
-    }, function () { return cfg.modelType; }, setModelType, { id: 'trnModelType' });
+    }, function () { const m = dm(); return m ? m.modelType : ''; }, function (v) { const m = dm(); if (m) setModelType(m, v); }, { id: 'trnModelType' });
     // The label sits above the select (sleap-app), with the long ⓘ.
-    const typeLabel = form.fieldLabel('Model Type', MODEL_TYPE_HINT);
-    sec.insertBefore(typeLabel, sec.firstChild);
+    sec.insertBefore(f.fieldLabel('Model Type', MODEL_TYPE_HINT), sec.firstChild);
     const rec = el('p', 'trn-rec');
     rec.id = 'trnRecommendation';
     sec.appendChild(rec);
@@ -1351,20 +1497,22 @@ function buildModelSection(top) {
     const problem = el('p', 'inf-error-text');
     problem.id = 'trnPipelineProblem';
     sec.appendChild(problem);
-    form.onRefresh(function () {
-        const r = analysis.rec;
+    f.onRefresh(function () {
+        const m = dm();
+        if (!m) return;
+        const r = modelRecommendation(m, rc());
         const compat = skeletonCompatibility(skeletonOf());
-        rec.hidden = !r || compat.disabledTypes.has(cfg.modelType);
+        rec.hidden = !r || compat.disabledTypes.has(m.modelType);
         if (r) {
             rec.innerHTML = '';
             rec.appendChild(icon('lightbulb'));
             const lab = (MODEL_TYPE_OPTIONS.find(function (o) { return o.value === r.recommended; }) || {}).label;
-            rec.appendChild(document.createTextNode(' ' + (cfg.modelType === r.recommended ? r.reason : 'Recommended: ' + lab + ' — ' + r.reason)));
+            rec.appendChild(document.createTextNode(' ' + (m.modelType === r.recommended ? r.reason : 'Recommended: ' + lab + ' — ' + r.reason)));
         }
-        const w = compat.warnings.get(cfg.modelType);
+        const w = compat.warnings.get(m.modelType);
         warnLine.textContent = w ? '⚠ ' + w : '';
         warnLine.hidden = !w;
-        const p = pipelineProblem();
+        const p = pipelineProblem(m, rc());
         problem.textContent = p || '';
         problem.hidden = !p;
     });
@@ -1372,23 +1520,28 @@ function buildModelSection(top) {
     const slotsBox = el('div', 'trn-slots');
     sec.appendChild(slotsBox);
     let slotsKey = '';
-    form.onRefresh(function () {
-        const slots = getConfigSlots(cfg.modelType);
-        const key = slots.join(',') + '|' + slots.map(slotValue).join(',') + '|' + isRunning() + '|' + isRemoteRun() + '|' + local.trained.map(function (r) { return r.path; }).join(',') + '|' +
-            slots.map(function (s) { const c = cfg.slots[s]; return c ? c.mode + ':' + (c.checkpoint || '') : ''; }).join(',');
-        if (key === slotsKey) return;
+    let slotsFor = null;          // the model OBJECT the block was built for (a split can make a new model with the same id)
+    f.onRefresh(function () {
+        const m = dm();
+        if (!m) return;
+        const slots = getConfigSlots(m.modelType);
+        const key = slots.join(',') + '|' + slots.map(function (s) { return slotValue(m, s); }).join(',') + '|' + isRunning() + '|' + isRemoteRun() + '|' +
+            local.trained.map(function (r) { return r.path; }).join(',') + '|' +
+            slots.map(function (s) { const c = m.slots[s]; return c ? c.mode + ':' + (c.checkpoint || '') : ''; }).join(',');
+        if (key === slotsKey && slotsFor === m) return;
         slotsKey = key;
+        slotsFor = m;
         slotsBox.textContent = '';
         for (const slot of slots) {
-            const f = el('div', 'inf-block');
-            f.appendChild(form.fieldLabel(getSlotLabel(slot), 'Config file for this model in the pipeline. Pick a preset, or browse to a training_config.yaml (also one from a trained model) to reuse its settings.'));
-            const box = el('div', 'trn-slot' + (cfg.slots[slot] ? ' trn-slot-set' : ''));
-            box.dataset.slot = slot;
+            const fb = el('div', 'inf-block');
+            fb.appendChild(f.fieldLabel(getSlotLabel(slot), 'Config file for this model in the pipeline. Pick a preset, or browse to a training_config.yaml (also one from a trained model) to reuse its settings.'));
+            const sbox = el('div', 'trn-slot' + (m.slots[slot] ? ' trn-slot-set' : ''));
+            sbox.dataset.slot = slot;
             const sel = el('select', 'inf-select');
             sel.id = 'trnSlot-' + slot;
-            const cur = slotValue(slot);
+            const cur = slotValue(m, slot);
             if (!cur) { const ph = el('option', null, 'Select training config file...'); ph.value = ''; sel.appendChild(ph); }
-            for (const o of slotOptions(slot)) {
+            for (const o of slotOptions(m, slot)) {
                 const op = el('option', null, o[1]);
                 op.value = o[0];
                 sel.appendChild(op);
@@ -1397,51 +1550,163 @@ function buildModelSection(top) {
             sel.disabled = isRunning();
             sel.addEventListener('change', function () {
                 const v = sel.value;
-                if (v === '__browse__') { sel.value = cur; browseConfig(slot); return; }
+                const mm = dm();
+                if (!mm) return;
+                if (v === '__browse__') { sel.value = cur; browseConfig(mm, slot); return; }
                 if (v.indexOf('preset:') === 0) {
                     const p = BASELINE_PROFILES.find(function (x) { return 'preset:' + x.filename === v; });
-                    if (p) setSlotConfig(slot, p.content, p.label, p.filename, true);
+                    if (p) setSlotConfig(mm, slot, p.content, p.label, p.filename, true);
                 }
-                if (v.indexOf('trained:') === 0) { selectTrainedRun(slot, v.slice(8)); return; }
+                if (v.indexOf('trained:') === 0) { selectTrainedRun(mm, slot, v.slice(8)); return; }
                 refresh();
             });
-            box.appendChild(sel);
-            const c = cfg.slots[slot];
-            const meta = el('div', 'trn-slot-meta', c ? 'head: ' + c.head + (c.mode === 'finetune' ? ' \u00b7 fine-tune from ' + baseName(c.checkpoint || '?')
-                : c.mode === 'resume' ? ' \u00b7 resume ' + baseName(c.checkpoint || '?') : '') : 'or drop a YAML config here');
-            box.appendChild(meta);
-            box.addEventListener('dragover', function (e) { e.preventDefault(); box.classList.add('trn-slot-drag'); });
-            box.addEventListener('dragleave', function () { box.classList.remove('trn-slot-drag'); });
-            box.addEventListener('drop', function (e) {
-                e.preventDefault(); box.classList.remove('trn-slot-drag');
+            sbox.appendChild(sel);
+            const c = m.slots[slot];
+            sbox.appendChild(el('div', 'trn-slot-meta', c ? 'head: ' + c.head + (c.mode === 'finetune' ? ' · fine-tune from ' + baseName(c.checkpoint || '?')
+                : c.mode === 'resume' ? ' · resume ' + baseName(c.checkpoint || '?') : '') : 'or drop a YAML config here'));
+            sbox.addEventListener('dragover', function (e) { e.preventDefault(); sbox.classList.add('trn-slot-drag'); });
+            sbox.addEventListener('dragleave', function () { sbox.classList.remove('trn-slot-drag'); });
+            sbox.addEventListener('drop', function (e) {
+                e.preventDefault(); sbox.classList.remove('trn-slot-drag');
                 const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-                if (file && !isRunning()) readConfigFile(slot, file);
+                const mm = dm();
+                if (file && mm && !isRunning()) readConfigFile(mm, slot, file);
             });
-            f.appendChild(box);
-            slotsBox.appendChild(f);
+            fb.appendChild(sbox);
+            slotsBox.appendChild(fb);
         }
     });
     const filled = el('div', 'trn-ok-note', 'Auto-filled from config files. All fields are editable.');
-    sec.appendChild(form.shownIf(filled, function () { return hasAllConfigs(); }));
+    sec.appendChild(f.shownIf(filled, function () { const m = dm(); return !!m && hasAllConfigs(m); }));
     const note = el('p', 'inf-error-text');
     sec.appendChild(note);
-    form.onRefresh(function () { note.textContent = run.note || ''; note.hidden = !run.note; });
+    f.onRefresh(function () { note.textContent = run.note || ''; note.hidden = !run.note; });
+
+    const hsec = f.section(box, 'Hyperparameters', true);
+    const none = el('p', 'inf-muted', 'Upload config file(s) above to see hyperparameters.');
+    hsec.appendChild(f.shownIf(none, function () { const m = dm(); return !m || !hasAllConfigs(m); }));
+    const body = el('div', 'inf-sub0');
+    hsec.appendChild(f.shownIf(body, function () { const m = dm(); return !!m && hasAllConfigs(m); }));
+
+    // sleap-app AnchorPartField: each node with how often it is visible in this model's labels, and the eye that
+    // previews the crop on this model's views; LUC3D adds the crop's size under it.
+    const anchor = f.selectField(body, 'Anchor Part', ANCHOR_HINT, function () {
+        const m = dm();
+        const names = analysis.nodeNames || [];
+        const frames = m ? modelFrames(m, rc()) : [];
+        return anchorChoices(names, frames.length ? nodeVisibility(frames, names.length) : null);
+    }, function () { const m = dm(); return m ? m.anchorPart || '' : ''; }, function (v) { const m = dm(); if (m) m.anchorPart = v || null; }, { id: 'trnAnchor' });
+    f.shownIf(anchor, function () { return cropsAround(dm()); });
+    const eye = el('button', 'trn-eye');
+    eye.type = 'button';
+    eye.id = 'trnCropPreview';
+    eye.addEventListener('click', function () { crop.preview = !crop.preview; refresh(); });
+    anchor.appendChild(eye);
+    anchor.classList.add('trn-anchor-row');
+    const cropRow = el('div', 'inf-row');
+    cropRow.id = 'trnCrop';
+    cropRow.appendChild(f.fieldLabel('Crop Size', CROP_HINT));
+    const cropVal = el('span', 'trn-crop-size');
+    cropRow.appendChild(cropVal);
+    body.appendChild(cropRow);
+    const cropWarn = el('div', 'trn-crop-warn');
+    cropWarn.id = 'trnCropWarnings';
+    body.appendChild(cropWarn);
+    let warnKey = '';
+    f.onRefresh(function () {
+        const m = dm();
+        const on = cropsAround(m);
+        cropRow.hidden = !on;
+        if (!on) crop.preview = false;
+        const info = on ? cropInfo(m, rc()) : null;
+        if (!info) crop.preview = false;
+        cropVal.textContent = cropText(info, m, rc());
+        eye.innerHTML = railIconSvg(crop.preview ? 'eye-off' : 'eye');
+        eye.title = crop.preview ? 'Hide crop preview' : 'Preview crop on canvas';
+        eye.setAttribute('aria-label', eye.title);
+        eye.setAttribute('aria-pressed', crop.preview ? 'true' : 'false');
+        eye.disabled = !info || isRunning();
+        const warnings = info ? info.warnings : [];
+        cropWarn.hidden = !warnings.length;
+        if (warnings.join('\n') !== warnKey) {
+            warnKey = warnings.join('\n');
+            cropWarn.textContent = '';
+            warnings.forEach(function (w) { cropWarn.appendChild(el('p', 'trn-warnline', w)); });
+        }
+    });
+
+    const tabs = el('div', 'trn-seg trn-tabs');
+    body.appendChild(tabs);
+    f.onRefresh(function () {
+        const m = dm();
+        if (!m) return;
+        const slots = getConfigSlots(m.modelType);
+        tabs.hidden = slots.length < 2;
+        const key = slots.join(',');
+        if (tabs.dataset.key !== key) {
+            tabs.dataset.key = key;
+            tabs.textContent = '';
+            for (const slot of slots) {
+                const b = button(getSlotLabel(slot).replace(' Config', ''), 'trn-seg-btn');
+                b.dataset.slot = slot;
+                b.addEventListener('click', function () { const mm = dm(); if (mm) mm.activeTab = slot; refresh(); });
+                tabs.appendChild(b);
+            }
+        }
+        for (const b of tabs.children) b.setAttribute('aria-pressed', b.dataset.slot === m.activeTab ? 'true' : 'false');
+    });
+    function hp() { const m = dm(); return m ? m.hp[m.activeTab] || m.hp[firstSlot(m)] || null : null; }
+    f.numField(body, 'Max Epochs', MAX_EPOCHS_HINT, function () { const h = hp(); return h ? h.maxEpochs : null; },
+        function (v) { const h = hp(); if (h) h.maxEpochs = v; }, { min: 1, max: 1000, integer: true, id: 'trnMaxEpochs' });
+    f.numField(body, 'Batch Size', BATCH_SIZE_HINT, function () { const h = hp(); return h ? h.batchSize : null; },
+        function (v) { const h = hp(); if (h) h.batchSize = v; }, { min: 1, max: 512, integer: true, id: 'trnBatchSize' });
+    f.selectField(body, 'Rotation Augmentation', ROTATION_HINT, ROTATION_OPTIONS, function () { const h = hp(); return h ? h.rotationPreset : 'off'; },
+        function (v) { const h = hp(); if (h) h.rotationPreset = v; }, { id: 'trnRotation' });
+    const custom = f.numField(body, 'Rotation (± degrees)', null, function () { const h = hp(); return h ? h.rotationCustomAngle : null; },
+        function (v) { const h = hp(); if (h) h.rotationCustomAngle = v; }, { min: 0, max: 180, integer: true });
+    f.shownIf(custom, function () { const h = hp(); return !!h && h.rotationPreset === 'custom'; });
+    f.check(body, 'Scale Augmentation', SCALE_HINT, function () { const h = hp(); return !!h && h.scaleEnabled; },
+        function (v) { const h = hp(); if (h) h.scaleEnabled = v; });
+
+    // sleap-app: "Full Configuration..." once there are configs; not while a run goes.
+    const full = button('Full Configuration...', 'btn btn-sm trn-fullcfg', 'settings-2');
+    full.id = 'trnFullConfig';
+    full.addEventListener('click', function () { openFullConfig(dm(), null, rc()); });
+    box.appendChild(f.shownIf(full, function () {
+        const m = dm();
+        return !!m && getConfigSlots(m.modelType).some(function (s) { return !!m.slots[s]; });
+    }));
+    f.onRefresh(function () { full.disabled = isRunning(); });
 }
 
-function buildDataSection(top) {
-    const sec = form.section(top, 'Data', true);
+/** Labelled frames and instances of one camera, over every session. */
+function viewStats(view) {
+    let frames = 0, instances = 0;
+    for (const s of projectSessions()) {
+        if (sessionViews(s.index, s.session).indexOf(view) === -1) continue;
+        const c = labelCount(s.index, view);
+        frames += c.frames; instances += c.instances;
+    }
+    return { frames: frames, instances: instances };
+}
 
+/**
+ * The run's settings, in the Models modal's "Run settings" fold: which sessions' views train (and where each
+ * video is), the validation split (every model), where models go, and post-training inference. `rc()` is the run
+ * settings edited (the modal's copy), `wm()` its models.
+ */
+function buildRunSettings(box, f, rc, wm) {
     // Training data: sessions × views
-    sec.appendChild(form.fieldLabel('Training data', 'The labelled frames of every checked view are training data: your own instances only (predictions are not), ' +
+    box.appendChild(f.fieldLabel('Training data', 'The labelled frames of every checked view train the models it is in: your own instances only (predictions are not), ' +
         'with identities as tracks. Your current edits are used; nothing has to be saved first.'));
     const list = el('div', 'trn-views');
     list.id = 'trnViews';
-    sec.appendChild(list);
+    box.appendChild(list);
     const summary = el('p', 'inf-muted');
     summary.id = 'trnDataSummary';
-    sec.appendChild(summary);
+    box.appendChild(summary);
     let listKey = '';
-    form.onRefresh(function () {
+    f.onRefresh(function () {
         const sess = projectSessions();
         const rows = [];
         for (const s of sess) {
@@ -1452,9 +1717,9 @@ function buildDataSection(top) {
                 const vf = videoFileOf(s.index, view);
                 const file = vf && vf.file ? (vf.file.webkitRelativePath || vf.file.name) : (vf && vf.videoPath ? vf.videoPath : '');
                 rows.push({ s: s, view: view, c: c, file: file,
-                    checked: !cfg.unchecked.has(viewKey(s.index, view)),
+                    checked: !rc().unchecked.has(viewKey(s.index, view)),
                     worker: isRemoteRun() ? (remote && remote.connected() ? remote.videoStatus(s.index, view) : '')
-                        : (local.resolving && !localVideo(s.index, view) ? 'finding it on disk\u2026' : localVideo(s.index, view) || 'not found among the files you opened'),
+                        : (local.resolving && !localVideo(s.index, view) ? 'finding it on disk…' : localVideo(s.index, view) || 'not found among the files you opened'),
                     locate: isRemoteRun() && remote && remote.canLocate(s.index, view) && c.frames > 0 });
             }
         }
@@ -1478,8 +1743,7 @@ function buildDataSection(top) {
                 cb.setAttribute('aria-label', 'Train on ' + r.view + ' of ' + (r.s.session.name || 'this session'));
                 cb.addEventListener('change', function () {
                     const k = viewKey(r.s.index, r.view);
-                    if (cb.checked) cfg.unchecked.delete(k); else cfg.unchecked.add(k);
-                    analyze(true);
+                    if (cb.checked) rc().unchecked.delete(k); else rc().unchecked.add(k);
                     refresh();
                 });
                 row.appendChild(cb);
@@ -1502,51 +1766,22 @@ function buildDataSection(top) {
             if (!rows.length) list.appendChild(el('p', 'inf-muted', 'Open a session to see its views.'));
         }
         let frames = 0, inst = 0, vids = 0;
-        for (const sel of includedSelections()) { const c = labelCount(sel.sessionIndex, sel.cameraName); frames += c.frames; inst += c.instances; vids++; }
+        for (const sel of includedSelections(rc())) { const c = labelCount(sel.sessionIndex, sel.cameraName); frames += c.frames; inst += c.instances; vids++; }
         summary.textContent = frames.toLocaleString('en-US') + ' labelled frame' + (frames === 1 ? '' : 's') + ' · ' +
             inst.toLocaleString('en-US') + ' user instance' + (inst === 1 ? '' : 's') + ' · ' + vids + ' video' + (vids === 1 ? '' : 's');
     });
 
-    // Models for views
-    const mvRow = el('div', 'inf-block');
-    mvRow.appendChild(form.fieldLabel('Models for views', 'One model for all views trains one model (or top-down pair) on every view together. ' +
-        'One per view trains a separate model for each camera, one after another: for rigs whose cameras see the animals very differently.'));
-    const seg = el('div', 'trn-seg');
-    seg.setAttribute('role', 'group');
-    seg.setAttribute('aria-label', 'Models for views');
-    [['shared', 'One for all views'], ['perview', 'One per view']].forEach(function (m) {
-        const b = button(m[1], 'trn-seg-btn');
-        b.dataset.mode = m[0];
-        b.addEventListener('click', function () { cfg.groupMode = m[0]; refresh(); });
-        seg.appendChild(b);
-        form.onRefresh(function () { b.setAttribute('aria-pressed', cfg.groupMode === m[0] ? 'true' : 'false'); b.disabled = isRunning(); });
-    });
-    mvRow.appendChild(seg);
-    const chips = el('div', 'trn-chips');
-    chips.id = 'trnGroups';
-    mvRow.appendChild(chips);
-    sec.appendChild(mvRow);
-    form.onRefresh(function () {
-        chips.textContent = '';
-        for (const g of groups()) {
-            const c = el('span', 'trn-chip');
-            const dot = el('i');
-            dot.style.background = g.color;
-            c.appendChild(dot);
-            c.appendChild(document.createTextNode(cfg.groupMode === 'shared' ? 'One model · ' + g.views.join(', ') : g.name));
-            chips.appendChild(c);
-        }
-    });
-
-    // Validation split
+    // Validation split (every model)
     const vs = el('div', 'inf-block');
-    vs.appendChild(form.fieldLabel('Validation split', 'A fraction of the labelled frames is held out to measure the validation loss.'));
-    sec.appendChild(vs);
-    form.numField(vs, 'Validation Fraction', null, function () { const hp = cfg.hp[firstSlot()]; return hp ? hp.validationFraction : 0.1; },
-        function (v) { for (const s of Object.keys(cfg.hp)) cfg.hp[s].validationFraction = v; }, { min: 0.01, max: 0.5, step: 0.01, id: 'trnValFraction' });
+    vs.appendChild(f.fieldLabel('Validation split', 'A fraction of each model’s labelled frames is held out to measure its validation loss.'));
+    box.appendChild(vs);
+    f.numField(vs, 'Validation Fraction', null, function () {
+        for (const m of wm()) { const v = runValidationFraction(m); if (v != null) return v; }
+        return 0.1;
+    }, function (v) { for (const m of wm()) for (const s of Object.keys(m.hp)) m.hp[s].validationFraction = v; }, { min: 0.01, max: 0.5, step: 0.01, id: 'trnValFraction' });
     const vnote = el('p', 'inf-muted');
     vs.appendChild(vnote);
-    form.onRefresh(function () {
+    f.onRefresh(function () {
         vnote.textContent = isRemoteRun()
             ? 'On a worker, sleap-nn picks the validation frames at random, so another camera’s view of a validation moment can be in training.'
             : 'All views of one moment stay on the same side.';
@@ -1555,7 +1790,7 @@ function buildDataSection(top) {
     // Output folder on the worker
     const outRow = el('div', 'inf-block');
     outRow.id = 'trnOutput';
-    outRow.appendChild(form.fieldLabel('Output folder', 'Where the worker puts the trained models: a models folder inside this folder, one run folder per model.'));
+    outRow.appendChild(f.fieldLabel('Output folder', 'Where the worker puts the trained models: a models folder inside this folder, one run folder per model.'));
     const outLine = el('div', 'trn-pathrow');
     const outPath = el('span', 'trn-path');
     outLine.appendChild(outPath);
@@ -1563,143 +1798,244 @@ function buildDataSection(top) {
     outChange.addEventListener('click', function () { remote.chooseOutputDir(); });
     outLine.appendChild(outChange);
     outRow.appendChild(outLine);
-    sec.appendChild(form.shownIf(outRow, function () { return isRemoteRun() && !!remote && remote.connected(); }));
+    box.appendChild(f.shownIf(outRow, function () { return isRemoteRun() && !!remote && remote.connected(); }));
 
     // Runs folder (local): picked once per app run; read-only to the app (checkpoints are pickles).
     const runsRow = el('div', 'inf-block');
     runsRow.id = 'trnRunsFolder';
-    runsRow.appendChild(form.fieldLabel('Runs folder', 'Where trained models go: one run folder per model. The app reads this folder but never writes in it ' +
+    runsRow.appendChild(f.fieldLabel('Runs folder', 'Where trained models go: one run folder per model. The app reads this folder but never writes in it ' +
         '(only sleap-nn does), so pick a folder for models only, such as a models folder next to the project.'));
     const runsLine = el('div', 'trn-pathrow');
     const runsPath = el('span', 'trn-path');
     runsLine.appendChild(runsPath);
-    const runsChoose = button('Choose\u2026', 'btn btn-sm inf-btn-outline');
+    const runsChoose = button('Choose…', 'btn btn-sm inf-btn-outline');
     runsChoose.id = 'trnRunsChoose';
     runsChoose.addEventListener('click', chooseRunsFolder);
     runsLine.appendChild(runsChoose);
     runsRow.appendChild(runsLine);
     const runsNote = el('p', 'inf-muted');
     runsRow.appendChild(runsNote);
-    sec.appendChild(form.shownIf(runsRow, function () { return !isRemoteRun(); }));
-    form.onRefresh(function () {
+    box.appendChild(f.shownIf(runsRow, function () { return !isRemoteRun(); }));
+    f.onRefresh(function () {
         runsPath.textContent = local.runsRoot || (lastRunsFolder() ? 'choose again: ' + lastRunsFolder() : 'none chosen');
         runsChoose.disabled = isRunning();
         runsNote.textContent = local.runsRoot && local.existingRuns
             ? local.existingRuns.toLocaleString('en-US') + ' trained run' + (local.existingRuns === 1 ? '' : 's') + ' already there.' : '';
         runsNote.hidden = !runsNote.textContent;
     });
-    form.onRefresh(function () {
+    f.onRefresh(function () {
         if (!remote) return;
         outPath.textContent = remote.outputChecking() ? 'Checking…' : (remote.outputDir() ? remote.outputDir() + '/models' : 'none: choose a folder');
         outChange.disabled = isRunning();
     });
 
-    // Post-training inference (sleap-app: Post-Training Inference Target here; Skip user labeled frames and
-    // Existing predictions sit in its Full Configuration dialog, here under the target).
+    // Post-training inference (sleap-app: Post-Training Inference Target in the Data section; Skip user labeled frames
+    // and Existing predictions sit in its Full Configuration dialog, here under the target).
     const post = el('div', 'inf-block');
     post.id = 'trnPost';
-    post.appendChild(form.fieldLabel('Post-Training Inference Target', POST_TRAINING_TARGET_HINT));
-    sec.appendChild(post);
-    form.selectField(post, null, null, POST_TRAINING_TARGETS, function () { return cfg.post.target; },
-        function (v) { cfg.post.target = v; }, { id: 'trnPostTarget' });
-    form.shownIf(form.numField(post, 'Sample count', 'How many frames to randomly sample for post-training inference. Every view runs on the same frames.',
-        function () { return cfg.post.sampleCount; }, function (v) { cfg.post.sampleCount = v; }, { min: 1, integer: true, id: 'trnPostSamples' }),
-    function () { return cfg.post.target === 'random'; });
+    post.appendChild(f.fieldLabel('Post-Training Inference Target', POST_TRAINING_TARGET_HINT + ' A view several models train gets the one picked in the Views table.'));
+    box.appendChild(post);
+    f.selectField(post, null, null, POST_TRAINING_TARGETS, function () { return rc().post.target; },
+        function (v) { rc().post.target = v; }, { id: 'trnPostTarget' });
+    f.shownIf(f.numField(post, 'Sample count', 'How many frames to randomly sample for post-training inference. Every view runs on the same frames.',
+        function () { return rc().post.sampleCount; }, function (v) { rc().post.sampleCount = v; }, { min: 1, integer: true, id: 'trnPostSamples' }),
+    function () { return rc().post.target === 'random'; });
     const postOpts = el('div', 'trn-post-opts');
     post.appendChild(postOpts);
-    form.check(postOpts, 'Skip user labeled frames', 'Do not run inference on frames that already have your labels.',
-        function () { return cfg.post.skipUserLabeled; }, function (v) { cfg.post.skipUserLabeled = v; }).id = 'trnPostSkipUser';
-    form.selectField(postOpts, 'Existing predictions', 'Predictions already in the project: Replace them on the frames inferred again, ' +
+    f.check(postOpts, 'Skip user labeled frames', 'Do not run inference on frames that already have your labels.',
+        function () { return rc().post.skipUserLabeled; }, function (v) { rc().post.skipUserLabeled = v; }).id = 'trnPostSkipUser';
+    f.selectField(postOpts, 'Existing predictions', 'Predictions already in the project: Replace them on the frames inferred again, ' +
         'Keep them (the new ones are added), or Clear all first. Your own labels are never touched.',
     [['replace', 'Replace'], ['keep', 'Keep'], ['clear_all', 'Clear all']],
-    function () { return cfg.post.existingPredictions; }, function (v) { cfg.post.existingPredictions = v; }, { id: 'trnPostExisting' });
-    form.shownIf(postOpts, function () { return cfg.post.target !== 'nothing'; });
+    function () { return rc().post.existingPredictions; }, function (v) { rc().post.existingPredictions = v; }, { id: 'trnPostExisting' });
+    f.shownIf(postOpts, function () { return rc().post.target !== 'nothing'; });
 }
 
-function firstSlot() { return getConfigSlots(cfg.modelType)[0]; }
+function firstSlot(m) { return getConfigSlots(m.modelType)[0]; }
 
-function buildHyperSection(top) {
-    const sec = form.section(top, 'Hyperparameters', true);
-    const none = el('p', 'inf-muted', 'Upload config file(s) above to see hyperparameters.');
-    sec.appendChild(form.shownIf(none, function () { return !hasAllConfigs(); }));
-    const body = el('div', 'inf-sub0');
-    sec.appendChild(form.shownIf(body, function () { return hasAllConfigs(); }));
+/** The modal's footer line: what stands in the way of its models, else a count. */
+function modalStatus(work) {
+    const rc = work.runCfg;
+    const avail = includedViewNames(rc);
+    if (!work.models.length) return { warn: true, text: 'No models yet: + New model, or start from a split above.' };
+    const p = modelProblems(work.models, avail);
+    if (p.empty.length) return { warn: true, text: '“' + p.empty[0].name + '” has no labelled view to train on.' };
+    for (const m of work.models) {
+        const named = work.models.length > 1 ? m.name + ': ' : '';
+        const pp = pipelineProblem(m, rc);
+        if (pp) return { warn: true, text: named + pp };
+        if (!hasAllConfigs(m)) return { warn: true, text: named + 'pick a config for every part of the pipeline.' };
+    }
+    if (p.unused.length) {
+        let frames = 0;
+        p.unused.forEach(function (v) { frames += viewStats(v).frames; });
+        return { warn: true, text: p.unused.join(', ') + (p.unused.length === 1 ? ' trains no model: its ' : ' train no model: their ') +
+            frames.toLocaleString('en-US') + ' labelled frame' + (frames === 1 ? '' : 's') + ' go unused.' };
+    }
+    let jobs = 0;
+    runModels(work.models, rc).forEach(function (x) { jobs += getConfigSlots(x.model.modelType).length; });
+    const n = work.models.length;
+    return { warn: false, text: 'Every labelled view trains a model · ' + n + ' model' + (n === 1 ? '' : 's') + ' · ' +
+        jobs + ' training job' + (jobs === 1 ? '' : 's') };
+}
 
-    // sleap-app AnchorPartField: each node with how often it is visible, and the eye that previews the crop on the
-    // views; LUC3D adds the crop's size under it (sleap-app shows it in Full Configuration's model diagram).
-    const anchor = form.selectField(body, 'Anchor Part', ANCHOR_HINT, function () {
-        const names = analysis.nodeNames || [];
-        return anchorChoices(names, analysis.frames && analysis.frames.length ? nodeVisibility(analysis.frames, names.length) : null);
-    }, function () { return cfg.anchorPart || ''; }, function (v) { cfg.anchorPart = v || null; }, { id: 'trnAnchor' });
-    form.shownIf(anchor, cropsAround);
-    const eye = el('button', 'trn-eye');
-    eye.type = 'button';
-    eye.id = 'trnCropPreview';
-    eye.addEventListener('click', function () { crop.preview = !crop.preview; refresh(); });
-    anchor.appendChild(eye);
-    anchor.classList.add('trn-anchor-row');
-    const cropRow = el('div', 'inf-row');
-    cropRow.id = 'trnCrop';
-    cropRow.appendChild(form.fieldLabel('Crop Size', CROP_HINT));
-    const cropVal = el('span', 'trn-crop-size');
-    cropRow.appendChild(cropVal);
-    body.appendChild(cropRow);
-    const cropWarn = el('div', 'trn-crop-warn');
-    cropWarn.id = 'trnCropWarnings';
-    body.appendChild(cropWarn);
-    let warnKey = '';
-    form.onRefresh(function () {
-        const on = cropsAround();
-        cropRow.hidden = !on;
-        if (!on) crop.preview = false;
-        const info = on ? cropInfo() : null;
-        if (!info) crop.preview = false;
-        cropVal.textContent = cropText(info);
-        eye.innerHTML = railIconSvg(crop.preview ? 'eye-off' : 'eye');
-        eye.title = crop.preview ? 'Hide crop preview' : 'Preview crop on canvas';
-        eye.setAttribute('aria-label', eye.title);
-        eye.setAttribute('aria-pressed', crop.preview ? 'true' : 'false');
-        eye.disabled = !info || isRunning();
-        const warnings = info ? info.warnings : [];
-        cropWarn.hidden = !warnings.length;
-        if (warnings.join('\n') !== warnKey) {
-            warnKey = warnings.join('\n');
-            cropWarn.textContent = '';
-            warnings.forEach(function (w) { cropWarn.appendChild(el('p', 'trn-warnline', w)); });
-        }
-        syncCropPreview();
+let drawerForm = null;
+let runForm = null;
+let modalWork = null;             // the Models modal's working copy while it is open
+
+/**
+ * Open the Models modal on a copy of the models and the run settings; Apply hands the copy back.
+ * @param {{modelId?: string, run?: boolean}} [o] the model to show, or the Run settings fold
+ */
+function openModelsEditor(o) {
+    const oo = o || {};
+    if (!YAML || isRunning() || trainingModelsModal()) return;
+    analyze(false);
+    const work = { models: structuredClone(models), runCfg: structuredClone(runCfg) };
+    modalWork = work;
+    const busy = function () { return isRunning() || dry.status === 'running'; };
+    drawerForm = createPanelForm({ isBusy: busy, refresh: refresh });
+    runForm = createPanelForm({ isBusy: busy, refresh: refresh });
+    const df = drawerForm, rf = runForm;
+    openTrainingModelsModal({
+        work: work,
+        allViews: allViewNames,
+        available: function () { return includedViewNames(work.runCfg); },
+        viewStats: viewStats,
+        newModel: function (list, p, template) { return newTrainingModel(list, p, template); },
+        typeLabel: function (m) { return modelTypeLabel(m.modelType); },
+        metaText: function (m) { return modelMeta(m, work.runCfg); },
+        status: function () { return modalStatus(work); },
+        buildDrawer: function (container, selected) { buildModelSettings(container, df, selected, function () { return work.runCfg; }); },
+        buildRunSettings: function (container) { buildRunSettings(container, rf, function () { return work.runCfg; }, function () { return work.models; }); },
+        refreshForms: function (sel) {
+            work.models.forEach(function (m) { if (!hasAllConfigs(m)) ensureSlots(m); autoModelType(m, work.runCfg); });
+            crop.model = sel || null;
+            df.runRefreshers();
+            rf.runRefreshers();
+            syncCropPreview();
+        },
+        isBusy: busy,
+        onApply: function (w) {
+            models = w.models;
+            runCfg = w.runCfg;
+            dry.key = '';
+        },
+        onClose: function () {
+            drawerForm = null; runForm = null; modalWork = null;
+            crop.preview = false; crop.model = null;
+            syncCropPreview();
+            refresh();
+        },
+        initialModelId: oo.modelId || null,
+        openRun: !!oo.run,
     });
+}
 
-    const tabs = el('div', 'trn-seg trn-tabs');
-    body.appendChild(tabs);
+// ---------------------------------------------------------------------------
+// The panel: a summary of the models and the run (the settings are in the Models modal)
+// ---------------------------------------------------------------------------
+
+/** Each model's views and settings, Edit models…, and what stands in the way. */
+function buildSummarySection(top) {
+    const head = el('div', 'trn-sum-head');
+    const count = el('span', 'inf-label inf-caps');
+    count.id = 'trnModelCount';
+    head.appendChild(count);
+    const edit = button('Edit models…', 'btn btn-sm inf-btn-outline', 'settings-2');
+    edit.id = 'trnEditModels';
+    edit.addEventListener('click', function () { openModelsEditor({}); });
+    head.appendChild(edit);
+    top.appendChild(head);
+    const cards = el('div', 'trn-sum-cards');
+    cards.id = 'trnModelCards';
+    top.appendChild(cards);
+    const probs = el('div', 'trn-sum-problems');
+    probs.id = 'trnProblems';
+    top.appendChild(probs);
+    let key = '';
     form.onRefresh(function () {
-        const slots = getConfigSlots(cfg.modelType);
-        tabs.hidden = slots.length < 2;
-        const key = slots.join(',');
-        if (tabs.dataset.key !== key) {
-            tabs.dataset.key = key;
-            tabs.textContent = '';
-            for (const slot of slots) {
-                const b = button(getSlotLabel(slot).replace(' Config', ''), 'trn-seg-btn');
-                b.dataset.slot = slot;
-                b.addEventListener('click', function () { cfg.activeTab = slot; refresh(); });
-                tabs.appendChild(b);
-            }
+        const avail = includedViewNames();
+        count.textContent = 'Models · ' + models.length;
+        edit.disabled = isRunning() || !YAML;
+        const rows = models.map(function (m) {
+            return { m: m, views: modelViews(m, avail), type: modelTypeLabel(m.modelType), meta: modelMeta(m) };
+        });
+        const k = JSON.stringify(rows.map(function (r) { return [r.m.id, r.m.name, r.m.color, r.views, r.type, r.meta, r.m.auto]; })) + isRunning();
+        if (k !== key) {
+            key = k;
+            cards.textContent = '';
+            rows.forEach(function (r) {
+                const c = el('div', 'trn-sum-card');
+                c.dataset.model = r.m.id;
+                const t = el('div', 'trn-sum-cardtop');
+                const sw = el('span', 'inf-mm-swatch');
+                sw.style.background = r.m.color;
+                t.appendChild(sw);
+                t.appendChild(el('span', 'trn-sum-name', r.m.name));
+                t.appendChild(el('span', 'trn-mm-badge', r.type));
+                const pen = button('', 'inf-mm-icon trn-sum-edit', 'pencil');
+                pen.title = 'Edit ' + r.m.name;
+                pen.setAttribute('aria-label', pen.title);
+                pen.disabled = isRunning();
+                pen.addEventListener('click', function () { openModelsEditor({ modelId: r.m.id }); });
+                t.appendChild(pen);
+                c.appendChild(t);
+                const tags = el('div', 'trn-sum-tags');
+                if (!r.views.length) tags.appendChild(el('span', 'trn-sum-none', 'no labelled views'));
+                r.views.forEach(function (v) { tags.appendChild(el('span', 'trn-sum-tag', v)); });
+                c.appendChild(tags);
+                c.appendChild(el('div', 'trn-sum-meta', r.meta));
+                cards.appendChild(c);
+            });
+            if (!rows.length) cards.appendChild(el('p', 'inf-muted', 'No models: Edit models… to add one.'));
         }
-        for (const b of tabs.children) b.setAttribute('aria-pressed', b.dataset.slot === cfg.activeTab ? 'true' : 'false');
+        // What stands in the way: views in no model (a warning), models that cannot train (Start says why).
+        probs.textContent = '';
+        const p = modelProblems(models, avail);
+        if (p.unused.length) {
+            let frames = 0;
+            p.unused.forEach(function (v) { frames += viewStats(v).frames; });
+            probs.appendChild(el('p', 'trn-warnline', '⚠ ' + p.unused.join(', ') + (p.unused.length === 1 ? ' is in no model: its ' : ' are in no model: their ') +
+                frames.toLocaleString('en-US') + ' labelled frame' + (frames === 1 ? '' : 's') + ' go unused.'));
+        }
+        models.forEach(function (m) {
+            const pp = pipelineProblem(m);
+            if (pp) probs.appendChild(el('p', 'inf-error-text', (models.length > 1 ? m.name + ': ' : '') + pp));
+        });
+        probs.hidden = !probs.children.length;
     });
-    function hp() { return cfg.hp[cfg.activeTab] || cfg.hp[firstSlot()] || null; }
-    form.numField(body, 'Max Epochs', MAX_EPOCHS_HINT, function () { const h = hp(); return h ? h.maxEpochs : null; },
-        function (v) { const h = hp(); if (h) h.maxEpochs = v; }, { min: 1, max: 1000, integer: true, id: 'trnMaxEpochs' });
-    form.numField(body, 'Batch Size', BATCH_SIZE_HINT, function () { const h = hp(); return h ? h.batchSize : null; },
-        function (v) { const h = hp(); if (h) h.batchSize = v; }, { min: 1, max: 512, integer: true, id: 'trnBatchSize' });
-    form.selectField(body, 'Rotation Augmentation', ROTATION_HINT, ROTATION_OPTIONS, function () { const h = hp(); return h ? h.rotationPreset : 'off'; },
-        function (v) { const h = hp(); if (h) h.rotationPreset = v; }, { id: 'trnRotation' });
-    const custom = form.numField(body, 'Rotation (± degrees)', null, function () { const h = hp(); return h ? h.rotationCustomAngle : null; },
-        function (v) { const h = hp(); if (h) h.rotationCustomAngle = v; }, { min: 0, max: 180, integer: true });
-    form.shownIf(custom, function () { const h = hp(); return !!h && h.rotationPreset === 'custom'; });
-    form.check(body, 'Scale Augmentation', SCALE_HINT, function () { const h = hp(); return !!h && h.scaleEnabled; },
-        function (v) { const h = hp(); if (h) h.scaleEnabled = v; });
+}
+
+/** The run's settings in one glance, and the way to them (the modal's Run settings). */
+function buildRunSummary(top) {
+    const head = el('div', 'trn-sum-head');
+    head.appendChild(el('span', 'inf-label inf-caps', 'Run'));
+    const edit = button('Edit', 'btn btn-sm inf-btn-ghost');
+    edit.id = 'trnEditRun';
+    edit.addEventListener('click', function () { openModelsEditor({ run: true }); });
+    head.appendChild(edit);
+    top.appendChild(head);
+    const kv = el('div', 'trn-sum-kv');
+    kv.id = 'trnRunSummary';
+    top.appendChild(kv);
+    form.onRefresh(function () {
+        edit.disabled = isRunning() || !YAML;
+        let vf = null;
+        for (const m of models) { vf = runValidationFraction(m); if (vf != null) break; }
+        const p = runCfg.post;
+        const rows = [
+            ['Validation', (vf == null ? '—' : Math.round(vf * 100) + '% of each model’s frames') + (isRemoteRun() ? ', picked at random' : '')],
+            ['Afterwards', p.target === 'nothing' ? 'no inference' : 'inference on ' + (p.target === 'random' ? p.sampleCount.toLocaleString('en-US') + ' random frames' : postTargetLabel(p.target).toLowerCase())],
+            isRemoteRun() ? ['Output', remote && remote.outputDir() ? remote.outputDir() + '/models' : 'no folder on the worker yet']
+                : ['Runs folder', local.runsRoot || 'none chosen'],
+        ];
+        kv.textContent = '';
+        rows.forEach(function (r) {
+            kv.appendChild(el('span', 'trn-sum-k', r[0]));
+            kv.appendChild(el('span', 'trn-sum-v', r[1]));
+        });
+    });
 }
 
 function buildRemoteSection(top) {
@@ -1729,12 +2065,6 @@ function buildRemoteSection(top) {
 }
 
 function buildRunBlock(top) {
-    // sleap-app: "Full Configuration..." above the run buttons, once there are configs; not while a run goes.
-    const full = button('Full Configuration...', 'btn btn-sm trn-fullcfg', 'settings-2');
-    full.id = 'trnFullConfig';
-    full.addEventListener('click', function () { openFullConfig(); });
-    top.appendChild(form.shownIf(full, function () { return getConfigSlots(cfg.modelType).some(function (s) { return !!cfg.slots[s]; }); }));
-    form.onRefresh(function () { full.disabled = isRunning(); });
     const startRow = el('div', 'trn-btns trn-start-row');
     const startBtn = button('Start Remote Training', 'btn btn-primary inf-run', 'upload');
     startBtn.id = 'trnStart';
@@ -1952,8 +2282,11 @@ function buildProgress(root) {
     prog.appendChild(next);
 
     const fills = new Map();
+    let rowEls = [];
     form.onRefresh(function () {
         const running = isRunning();
+        // Several models: the rows go under a header per model, each row naming its head only.
+        const grouped = run.groups.length > 1;
         const ST = running ? ['loader-circle', 'Training...', 'inf-spin']
             : run.status === 'completed' ? ['circle-check', 'Complete', 'inf-ok']
                 : run.status === 'error' ? ['circle-x', 'Failed', 'inf-bad'] : null;
@@ -1969,13 +2302,30 @@ function buildProgress(root) {
         banner.appendChild(document.createTextNode(run.rows.length > 1 ? 'All ' + run.rows.length + ' models trained successfully.' : 'Model trained successfully.'));
 
         // Rows: rebuilt only when their shape changes, the bars updated in place.
-        const shape = run.rows.map(function (r) { return r.label + '|' + r.status; }).join(',');
+        const shape = run.rows.map(function (r) { return r.label + '|' + r.status; }).join(',') + '|' + grouped;
         if (rowsBox.dataset.shape !== shape) {
             rowsBox.dataset.shape = shape;
             rowsBox.textContent = '';
             fills.clear();
+            rowEls = [];
+            let lastGroup = null;
             run.rows.forEach(function (r, i) {
-                const row = el('div', 'trn-row' + (r.status === 'completed' && running ? ' trn-row-done' : ''));
+                if (grouped && r.groupId !== lastGroup) {
+                    lastGroup = r.groupId;
+                    const g = run.groups.find(function (x) { return x.id === r.groupId; });
+                    if (g) {
+                        const gh = el('div', 'trn-group-head');
+                        gh.dataset.model = g.id;
+                        const sw = el('span', 'inf-mm-swatch');
+                        sw.style.background = g.color;
+                        gh.appendChild(sw);
+                        gh.appendChild(el('span', 'trn-group-name', g.name));
+                        gh.appendChild(el('span', 'trn-group-views', g.views.length + ' view' + (g.views.length === 1 ? '' : 's')));
+                        gh.title = g.views.join(', ');
+                        rowsBox.appendChild(gh);
+                    }
+                }
+                const row = el('div', 'trn-row' + (r.status === 'completed' && running ? ' trn-row-done' : '') + (grouped ? ' trn-row-grouped' : ''));
                 row.dataset.index = String(i);
                 const lab = el('div', 'trn-row-lab trn-' + r.status);
                 const ic = r.status === 'completed' ? 'circle-check' : r.status === 'failed' ? 'circle-x' : r.status === 'cancelled' ? 'ban'
@@ -2000,13 +2350,14 @@ function buildProgress(root) {
                 row.appendChild(bar);
                 row.appendChild(el('div', 'trn-stats'));
                 rowsBox.appendChild(row);
+                rowEls[i] = row;
                 fills.set(i, { fill: fill, last: 0 });
             });
         }
         run.rows.forEach(function (r, i) {
-            const row = rowsBox.children[i];
+            const row = rowEls[i];
             if (!row) return;
-            row.querySelector('.trn-row-text').textContent = rowText(r, i, run.rows.length, running);
+            row.querySelector('.trn-row-text').textContent = rowText(grouped ? Object.assign({}, r, { label: headLabel(r.head) }) : r, i, run.rows.length, running);
             const frac = r.maxEpochs > 0 ? Math.max(0, Math.min(1, r.epoch / r.maxEpochs)) : 0;
             const f = fills.get(i);
             if (f) {
@@ -2043,11 +2394,9 @@ function buildPanel(root) {
         'The settings below are a baseline preset; label some frames to get suggestions tailored to your data.'));
     top.appendChild(form.shownIf(noLabels, function () { return projectSessions().length > 0 && totalLabelledFrames() === 0 && !isRunning(); }));
 
-    buildModelSection(top);
+    buildSummarySection(top);
     form.sep(top);
-    buildDataSection(top);
-    form.sep(top);
-    buildHyperSection(top);
+    buildRunSummary(top);
     form.sep(top);
     buildRemoteSection(top);
     form.sep(top);
@@ -2059,15 +2408,8 @@ function buildPanel(root) {
 function panelRefresh() {
     analyze(false);
     if (!isRemoteRun() && !isRunning()) resolveLocalVideos();
-    // sleap-app auto-selects the recommendation for a project whose type the user has not picked.
-    if (!cfg.modelTypeTouched && analysis.rec && analysis.rec.recommended !== cfg.modelType && !isRunning()) {
-        const compat = skeletonCompatibility(skeletonOf());
-        if (!compat.disabledTypes.has(analysis.rec.recommended)) {
-            cfg.modelType = analysis.rec.recommended;
-            for (const slot of Object.keys(cfg.slots)) if (cfg.slots[slot].preset) { delete cfg.slots[slot]; delete cfg.hp[slot]; }
-            ensureSlots();
-        }
-    }
+    // sleap-app auto-selects the recommendation for a model whose type the user has not picked.
+    models.forEach(function (m) { autoModelType(m); });
     refresh();
 }
 
@@ -2102,17 +2444,10 @@ export async function setupTrainingPanel() {
         return false;
     }
     pane.addEventListener('pointerenter', function () { analyze(true); panelRefresh(); });
-    // The crop preview draws only while the panel shows (`paneShown`): repaint the views the moment it is closed,
-    // folded or shown again (the rail sends no event; a hidden element stops intersecting).
-    if (typeof IntersectionObserver === 'function') {
-        new IntersectionObserver(function () {
-            if (crop.preview && state.session) { try { drawAllOverlays(state.currentFrame); } catch (e) { console.warn('[training] crop preview redraw failed:', e); } }
-        }).observe(pane);
-    }
     setInterval(function () { if (pane && pane.offsetParent !== null && !document.hidden) panelRefresh(); }, 2000);
     try {
         await ensureYaml();
-        ensureSlots();
+        models = defaultModels();
     } catch (e) {
         run.note = 'Could not load the training presets: ' + ((e && e.message) || e);
     }
@@ -2124,17 +2459,38 @@ export async function setupTrainingPanel() {
 /** Test/automation hook: show the panel. */
 export function showTrainingPanel() { return showPanelTab(TRAINING_TAB_ID); }
 
-/** For tests: open Full Configuration (as its button does). */
-export function _openTrainingConfig(tab) { openFullConfig(tab); }
+/** For tests: open Full Configuration of a model (default the first), as its button in the Models modal does. */
+export function _openTrainingConfig(tab, modelId) {
+    const m = modelId ? models.find(function (x) { return x.id === modelId; }) : models[0];
+    openFullConfig(m, tab);
+}
+
+/** Open the Models modal (Edit models…): `{modelId}` shows that model's settings, `{run: true}` the Run settings. */
+export function openTrainingModels(o) { openModelsEditor(o); }
 
 /** For tests: rescan the runs folder's trained runs now. */
 export function _scanTrainedRuns() { return scanTrainedRuns(); }
 
 /** For tests: the live config and run state (read-only use). */
 export function _trainingState() {
-    return { cfg: cfg, run: run, analysis: analysis, groups: groups(), selections: includedSelections(), remote: remote && remote._state(), monitorIndex: monitorIndex,
+    const m0 = models[0] || null;
+    // `cfg`: the model on screen: the Models modal's (its working copy) while it is open, else the first model.
+    const mm = trainingModelsModal();
+    const shown = modalWork ? ((mm && mm.selected()) || modalWork.models[0] || null) : m0;
+    return { cfg: shown, models: models, runCfg: runCfg, work: modalWork, run: run, analysis: analysis, groups: runModels().map(modelSnapshot), selections: includedSelections(),
+        remote: remote && remote._state(), monitorIndex: monitorIndex,
         local: { runsRoot: local.runsRoot, videos: Object.fromEntries(local.videos), token: local.token, trained: local.trained }, dry: dry, backendRemote: isRemoteRun(),
-        post: cfg.post, postRun: postRun, crop: cropInfo(), cropPreview: crop.preview };
+        post: runCfg.post, postRun: postRun, crop: m0 ? cropInfo(m0) : null, cropPreview: crop.preview };
+}
+
+/** For tests: replace the models with the given splits (`[{name, views}]`, as the modal's Start from row makes them). */
+export function _setTrainingModels(parts) {
+    const list = [];
+    (parts || []).forEach(function (p) { list.push(newTrainingModel(list, p)); });
+    models = list;
+    runCfg.inferWith = {};
+    refresh();
+    return models.map(function (m) { return m.id; });
 }
 /** For tests: recompute the label analysis now. */
 export function _trainingAnalyze() { analyze(true); panelRefresh(); }
