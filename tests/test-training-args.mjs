@@ -88,6 +88,7 @@ assert.equal(fin.data_config.train_labels_path, null);
 assert.equal(fin.data_config.validation_fraction, 0.2);
 assert.equal(fin.model_config.head_configs.centered_instance.confmaps.part_names, null, 'a preset\'s node names are cleared');
 assert.deepEqual(anchorChoices(['head', 'tail']), [['', 'Auto'], ['head', 'head'], ['tail', 'tail']]);
+assert.deepEqual(anchorChoices(['head', 'tail'], [100, 63]), [['', 'Auto'], ['head', 'head (100%)'], ['tail', 'tail (63%)']], 'visibility beside each node');
 
 // §5 every preset parses, maps to its head and round-trips (needs the offline yaml package).
 const yamlPath = path.join(root, 'lib', 'yaml', 'browser', 'index.js');

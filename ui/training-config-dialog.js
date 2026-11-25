@@ -162,8 +162,32 @@ export function openTrainingConfigDialog(host) {
         row.classList.add('tcd-field');
         row.dataset.field = f.id;
         if (f.note) row.appendChild(el('span', 'tcd-note', f.note));
+        if (f.id === 'cropSize' && host.cropInfo) cropNote(row);
         rowsById.set(f.id, row);
         if (f.when) form.onRefresh(function () { const d = readDoc(f); row.hidden = !d || !f.when(d); });
+    }
+
+    /**
+     * Under Crop Size: the size Auto comes to (sleap-app's "Auto: N px" in its model diagram) and sleap-app's
+     * crop warnings (`cropWarnings.ts`), from the panel's `host.cropInfo(slot)`.
+     */
+    function cropNote(row) {
+        const note = el('div', 'tcd-crop');
+        note.id = 'tcdCropNote';
+        row.after(note);
+        let key = null;
+        form.onRefresh(function () {
+            const info = host.cropInfo(tab);
+            note.hidden = row.hidden || !info;
+            const lines = !info ? [] : (info.auto ? [['tcd-note', 'Auto: ' + (info.low !== info.cropSize
+                ? info.low.toLocaleString('en-US') + '–' : '') + info.cropSize.toLocaleString('en-US') + ' px from your labels.']] : [])
+                .concat(info ? info.warnings.map(function (w) { return ['trn-warnline', w]; }) : []);
+            const k = JSON.stringify(lines);
+            if (k === key) return;
+            key = k;
+            note.textContent = '';
+            lines.forEach(function (l) { note.appendChild(el('p', l[0], l[1])); });
+        });
     }
 
     /** sleap-app's training mode block at the top of a model tab. */

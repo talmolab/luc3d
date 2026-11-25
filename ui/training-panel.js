@@ -53,7 +53,7 @@ import { createPanelForm, el, icon, button } from './panel-form.js';
 import {
     MODEL_TYPE_OPTIONS, MODEL_TYPE_HINT, DEFAULT_MODEL_TYPE, getConfigSlots, getSlotLabel, slotToHeadType, headLabel,
     profilesForHead, defaultProfile, detectHeadType, hyperparamsFromConfig, applyPanelSettings, finalizeConfig,
-    anchorChoices, ROTATION_OPTIONS, MAX_EPOCHS_HINT, BATCH_SIZE_HINT, ROTATION_HINT, SCALE_HINT, ANCHOR_HINT,
+    anchorChoices, ROTATION_OPTIONS, MAX_EPOCHS_HINT, BATCH_SIZE_HINT, ROTATION_HINT, SCALE_HINT, ANCHOR_HINT, CROP_HINT,
     detectTrainingMode, applyTrainingMode, checkpointProblem, pickCheckpointFile,
 } from './training-args.js';
 import { BASELINE_PROFILES } from '../lib/sleap-app-profiles/profiles.js';
@@ -75,6 +75,9 @@ import { POST_TRAINING_TARGETS, POST_TRAINING_DEFAULTS, POST_TRAINING_TARGET_HIN
 import { runTrainedModels, showInferencePanel } from './inference-panel.js';
 import { openTrainingConfigDialog, trainingConfigDialog } from './training-config-dialog.js';
 import { openTrainingMetricsDialog } from './training-metrics-dialog.js';
+import { effectiveCropSize, cropSizeWarnings, nodeVisibility, sizeMatchTarget, configCentroid } from '../pose/training-crop-size.js';
+import { setAnchorCropPreview } from './anchor-crop-preview.js';
+import { drawAllOverlays } from './rendering.js';
 
 export const TRAINING_TAB_ID = 'tabTraining';
 
@@ -117,7 +120,8 @@ const run = {
 // Post-training inference: status null | 'running' | 'completed' | 'error' | 'skipped'.
 const postRun = { status: null, message: null, remote: false };
 let postSeq = 0;   // the newest post-training inference; an older one finishing late writes nothing
-const analysis = { key: '', at: 0, counts: new Map(), rec: null, idReport: null, nodeNames: [], trackNames: [] };
+const analysis = { key: '', at: 0, counts: new Map(), rec: null, idReport: null, nodeNames: [], trackNames: [], frames: [] };
+const crop = { key: '', info: null, preview: false };   // the centered-instance crop (Anchor Part) and its preview
 let elapsedTimer = null;
 let form = null;
 let monitorIndex = null;          // the row the Training Monitor shows
@@ -239,7 +243,7 @@ function analyze(force) {
             for (const [v, n] of c) analysis.counts.set(viewKey(s.index, v), n);
         } catch (e) { console.warn('[training] counting labels failed:', e); }
     }
-    analysis.rec = null; analysis.idReport = null; analysis.trackNames = [];
+    analysis.rec = null; analysis.idReport = null; analysis.trackNames = []; analysis.frames = [];
     const sk = skeletonOf();
     analysis.nodeNames = sk ? sk.nodes : [];
     const sels = includedSelections();
@@ -250,6 +254,9 @@ function analyze(force) {
             const sel = sels[fr.sel];
             const vf = sel.videoFileInfo || {};
             return {
+                view: sel.cameraName,
+                width: Number(vf.videoWidth) || 0,
+                height: Number(vf.videoHeight) || 0,
                 maxDim: Math.max(Number(vf.videoWidth) || 0, Number(vf.videoHeight) || 0),
                 instances: fr.items.map(function (it) {
                     const pts = [];
@@ -264,6 +271,7 @@ function analyze(force) {
         const tracks = new Set();
         for (const r of collected.sessions.values()) r.trackNames.forEach(function (n) { tracks.add(n); });
         analysis.trackNames = Array.from(tracks);
+        analysis.frames = frames;
         analysis.rec = recommendPipeline({ frames: frames, numEdges: sk ? sk.edges.length : 0, trackCount: tracks.size });
         analysis.idReport = Array.from(collected.sessions.values());
     } catch (e) {
@@ -437,6 +445,70 @@ function effectiveHp(slot) {
     return hp;
 }
 
+// ---------------------------------------------------------------------------
+// The centered-instance crop (sleap-app AnchorPartField's crop preview, ModelStatsPreview's "Crop Size", cropWarnings)
+// ---------------------------------------------------------------------------
+
+function cropsAround() { return cfg.modelType === 'top_down' || cfg.modelType === 'top_down_id'; }
+
+/** The Training panel is on screen (open, expanded, the info panel shown). */
+function paneShown() { return !!pane && pane.offsetParent !== null; }
+
+/**
+ * The crop the centered-instance model of each group trains on: the config's Crop Size, or what sleap-nn computes
+ * for Auto from that group's labels (`pose/training-crop-size.js`). Null outside Top-Down or without the config.
+ * @returns {{cropSize: number, low: number, auto: boolean, maxBboxDim: number, warnings: string[],
+ *            byView: Object<string, {cropSize: number, target: {height: number|null, width: number|null}}>}|null}
+ */
+function cropInfo() {
+    if (!cropsAround() || !cfg.slots.centered_instance || !cfg.slots.centered_instance.doc) return null;
+    const doc = applyPanelSettings(cfg.slots.centered_instance.doc, effectiveHp('centered_instance'));
+    const key = [analysis.key, analysis.at, cfg.anchorPart || '', cfg.groupMode, includedViewNames().join(','),
+        JSON.stringify(doc.data_config), JSON.stringify(doc.model_config && doc.model_config.backbone_config)].join('|');
+    if (key === crop.key) return crop.info;
+    const names = analysis.nodeNames || [];
+    const ai = cfg.anchorPart ? names.indexOf(cfg.anchorPart) : -1;
+    const frames = analysis.frames || [];
+    const per = groups().map(function (g) {
+        const mine = frames.filter(function (f) { return g.views.indexOf(f.view) !== -1; });
+        return Object.assign(effectiveCropSize(doc, mine, ai >= 0 ? ai : null), { views: g.views, target: sizeMatchTarget(doc, mine) });
+    }).filter(function (c) { return c.cropSize != null; });
+    let info = null;
+    if (per.length) {
+        const sizes = per.map(function (c) { return c.cropSize; });
+        const top = per.reduce(function (a, b) { return b.cropSize > a.cropSize ? b : a; });
+        const scale = Number(doc.data_config && doc.data_config.preprocessing && doc.data_config.preprocessing.scale) || 1;
+        const warnings = [];
+        const byView = {};
+        const centroid = configCentroid(doc);
+        per.forEach(function (c) {
+            cropSizeWarnings(c, scale).forEach(function (w) { if (warnings.indexOf(w) === -1) warnings.push(w); });
+            c.views.forEach(function (v) { byView[v] = { cropSize: c.cropSize, target: c.target, centroid: centroid }; });
+        });
+        info = {
+            cropSize: Math.max.apply(null, sizes), low: Math.min.apply(null, sizes), auto: top.auto,
+            maxBboxDim: Math.max.apply(null, per.map(function (c) { return c.maxBboxDim; })), warnings: warnings, byView: byView,
+        };
+    }
+    crop.key = key; crop.info = info;
+    return info;
+}
+
+/** "752 px (Auto)", "512 px", or "512–752 px (Auto)" when one model per view gives several. */
+function cropText(info) {
+    if (!info) return analysis.frames && analysis.frames.length ? '—' : 'Label an animal to size it.';
+    const n = function (v) { return v.toLocaleString('en-US'); };
+    const size = info.low != null && info.low !== info.cropSize ? n(info.low) + '–' + n(info.cropSize) : n(info.cropSize);
+    return size + ' px' + (info.auto ? ' (Auto)' : '');
+}
+
+/** Keep the on-canvas preview in step with the crop and the anchor (sleap-app: while its toggle is on). */
+function syncCropPreview() {
+    const info = crop.preview && cropsAround() ? cropInfo() : null;
+    const changed = setAnchorCropPreview(info ? { anchor: cfg.anchorPart || null, byView: info.byView, isShown: paneShown } : null);
+    if (changed && state.session) { try { drawAllOverlays(state.currentFrame); } catch (e) { console.warn('[training] crop preview redraw failed:', e); } }
+}
+
 /** The finished YAML of a slot for one group's run. */
 function configText(slot, runName) {
     return YAML.stringify(sentConfig(slot, runName));
@@ -528,6 +600,7 @@ function openFullConfig(initialTab) {
         chooseCheckpoint: function (s) { return chooseCheckpoint(s); },
         fileNameOf: function (s) { return (cfg.slots[s].head || s) + '.yaml'; },
         isBusy: function () { return isRunning() || dry.status === 'running'; },
+        cropInfo: function (s) { return s === 'centered_instance' ? cropInfo() : null; },
         initialTab: initialTab,
     });
 }
@@ -1552,9 +1625,50 @@ function buildHyperSection(top) {
     const body = el('div', 'inf-sub0');
     sec.appendChild(form.shownIf(body, function () { return hasAllConfigs(); }));
 
-    const anchor = form.selectField(body, 'Anchor Part', ANCHOR_HINT, function () { return anchorChoices(analysis.nodeNames); },
-        function () { return cfg.anchorPart || ''; }, function (v) { cfg.anchorPart = v || null; }, { id: 'trnAnchor' });
-    form.shownIf(anchor, function () { return cfg.modelType === 'top_down' || cfg.modelType === 'top_down_id'; });
+    // sleap-app AnchorPartField: each node with how often it is visible, and the eye that previews the crop on the
+    // views; LUC3D adds the crop's size under it (sleap-app shows it in Full Configuration's model diagram).
+    const anchor = form.selectField(body, 'Anchor Part', ANCHOR_HINT, function () {
+        const names = analysis.nodeNames || [];
+        return anchorChoices(names, analysis.frames && analysis.frames.length ? nodeVisibility(analysis.frames, names.length) : null);
+    }, function () { return cfg.anchorPart || ''; }, function (v) { cfg.anchorPart = v || null; }, { id: 'trnAnchor' });
+    form.shownIf(anchor, cropsAround);
+    const eye = el('button', 'trn-eye');
+    eye.type = 'button';
+    eye.id = 'trnCropPreview';
+    eye.addEventListener('click', function () { crop.preview = !crop.preview; refresh(); });
+    anchor.appendChild(eye);
+    anchor.classList.add('trn-anchor-row');
+    const cropRow = el('div', 'inf-row');
+    cropRow.id = 'trnCrop';
+    cropRow.appendChild(form.fieldLabel('Crop Size', CROP_HINT));
+    const cropVal = el('span', 'trn-crop-size');
+    cropRow.appendChild(cropVal);
+    body.appendChild(cropRow);
+    const cropWarn = el('div', 'trn-crop-warn');
+    cropWarn.id = 'trnCropWarnings';
+    body.appendChild(cropWarn);
+    let warnKey = '';
+    form.onRefresh(function () {
+        const on = cropsAround();
+        cropRow.hidden = !on;
+        if (!on) crop.preview = false;
+        const info = on ? cropInfo() : null;
+        if (!info) crop.preview = false;
+        cropVal.textContent = cropText(info);
+        eye.innerHTML = railIconSvg(crop.preview ? 'eye-off' : 'eye');
+        eye.title = crop.preview ? 'Hide crop preview' : 'Preview crop on canvas';
+        eye.setAttribute('aria-label', eye.title);
+        eye.setAttribute('aria-pressed', crop.preview ? 'true' : 'false');
+        eye.disabled = !info || isRunning();
+        const warnings = info ? info.warnings : [];
+        cropWarn.hidden = !warnings.length;
+        if (warnings.join('\n') !== warnKey) {
+            warnKey = warnings.join('\n');
+            cropWarn.textContent = '';
+            warnings.forEach(function (w) { cropWarn.appendChild(el('p', 'trn-warnline', w)); });
+        }
+        syncCropPreview();
+    });
 
     const tabs = el('div', 'trn-seg trn-tabs');
     body.appendChild(tabs);
@@ -1988,6 +2102,13 @@ export async function setupTrainingPanel() {
         return false;
     }
     pane.addEventListener('pointerenter', function () { analyze(true); panelRefresh(); });
+    // The crop preview draws only while the panel shows (`paneShown`): repaint the views the moment it is closed,
+    // folded or shown again (the rail sends no event; a hidden element stops intersecting).
+    if (typeof IntersectionObserver === 'function') {
+        new IntersectionObserver(function () {
+            if (crop.preview && state.session) { try { drawAllOverlays(state.currentFrame); } catch (e) { console.warn('[training] crop preview redraw failed:', e); } }
+        }).observe(pane);
+    }
     setInterval(function () { if (pane && pane.offsetParent !== null && !document.hidden) panelRefresh(); }, 2000);
     try {
         await ensureYaml();
@@ -2013,7 +2134,7 @@ export function _scanTrainedRuns() { return scanTrainedRuns(); }
 export function _trainingState() {
     return { cfg: cfg, run: run, analysis: analysis, groups: groups(), selections: includedSelections(), remote: remote && remote._state(), monitorIndex: monitorIndex,
         local: { runsRoot: local.runsRoot, videos: Object.fromEntries(local.videos), token: local.token, trained: local.trained }, dry: dry, backendRemote: isRemoteRun(),
-        post: cfg.post, postRun: postRun };
+        post: cfg.post, postRun: postRun, crop: cropInfo(), cropPreview: crop.preview };
 }
 /** For tests: recompute the label analysis now. */
 export function _trainingAnalyze() { analyze(true); panelRefresh(); }

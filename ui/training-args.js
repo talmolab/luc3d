@@ -290,9 +290,15 @@ export function pickCheckpointFile(names, mode) {
     return h5.find(function (n) { return n === 'best_model.h5'; }) || h5[0] || null;
 }
 
-/** Anchor Part choices: Auto (none) then the skeleton's nodes. */
-export function anchorChoices(nodeNames) {
-    return [['', 'Auto']].concat((nodeNames || []).map(function (n) { return [n, n]; }));
+/**
+ * Anchor Part choices: Auto (none) then the skeleton's nodes, each with how often it is visible across the labelled
+ * instances when `visibility` (whole percentages, node order) is given (sleap-app AnchorPartField).
+ */
+export function anchorChoices(nodeNames, visibility) {
+    return [['', 'Auto']].concat((nodeNames || []).map(function (n, k) {
+        const pct = visibility ? visibility[k] : null;
+        return [n, pct == null ? n : n + ' (' + pct + '%)'];
+    }));
 }
 
 export const ROTATION_OPTIONS = Object.freeze([['off', 'Off'], ['15', '±15°'], ['180', '±180°'], ['custom', 'Custom']]);
@@ -300,4 +306,5 @@ export const MAX_EPOCHS_HINT = 'Maximum number of epochs to train for. Training 
 export const BATCH_SIZE_HINT = 'Number of examples per minibatch. Higher numbers can increase generalization by averaging gradient updates over more examples, at the cost of more GPU memory.';
 export const ROTATION_HINT = 'Rotation augmentation range. Off: disabled. ±15°: side-view cameras where upside-down would be unnatural. ±180°: top-view cameras where all orientations are valid.';
 export const SCALE_HINT = 'Random scaling augmentation, applied to every example when on.';
-export const ANCHOR_HINT = 'The body part used to center the crop around each animal. Choose one that is central and almost always visible; Auto uses each animal’s centre.';
+export const ANCHOR_HINT = 'The body part each animal’s crop is centred on: pick a central one that is almost always visible (the % beside each node); Auto uses each animal’s centre of mass.';
+export const CROP_HINT = 'The square cut around each animal for the centered-instance model: set it in Full Configuration, or Auto for the size sleap-nn computes from your labels.';

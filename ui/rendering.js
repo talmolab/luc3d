@@ -21,6 +21,7 @@ import { isCameraTracked, getTrackingThreshold } from './settings.js';
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
 import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js';
+import { drawAnchorCropPreview } from './anchor-crop-preview.js';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
@@ -723,6 +724,8 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         // Annotated planes (View ▸ Define Planes). Frame-independent, so they
         // are drawn on every frame regardless of the current FrameGroup.
         drawPlaneOverlays(view);
+        // The Training panel's crop preview (Anchor Part ▸ eye); nothing unless it is on.
+        drawAnchorCropPreview(view, vFrameGroup, state.session, vis);
         octx.restore();
     }
 

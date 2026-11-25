@@ -2851,6 +2851,29 @@ Never reads the `.npz` (pickled object arrays). VOC keys read flat (sleap-nn) or
 `joinPath`. **Imports.** None. **Imported by.** `ui/training-metrics-dialog.js`. **Tests.**
 `tests/test-training-model-metrics.mjs` (a REAL run's files, `tests/fixtures/sleap-nn-training/run.full/`).
 
+### pose/training-crop-size.js
+
+**Purpose.** The crop a centered-instance model trains on, DOM-free: the config's `crop_size`, or for Auto
+(null) what sleap-nn 0.3.5 computes from the labels (`find_instance_crop_size`): around each instance's crop centre
+(the anchor node when visible, else the head's `centroid_fallback`; without an anchor its `centroid_method`; both
+default to the centre of mass; `reducePoints` = sleap-nn's mean / box midpoint / Weiszfeld median), twice the largest per-axis reach, in
+size-matched pixels (`compute_eff_scale` against `max_height`/`max_width`, else the largest labelled video), at
+least `min_crop_size`, plus the rotation / scale padding (`compute_augmentation_padding` on the largest box, the
+probabilities read as `_compute_crop_padding` does: left-out `rotation_p`/`scale_p` = 1.0, `affine_p` only when none is
+set; a set `crop_padding` replaces it), rounded up to the backbone's `max_stride`. Measured over every labelled frame
+(sleap-nn measures its training split, so it can come out a little smaller). LUCID change: sleap-app estimates Auto from the largest box only
+(672 px where sleap-nn trained on 752 on a real 5-mouse project). Also sleap-app's `cropSizeWarnings` (crop under
+100 px after input scaling; a set crop smaller than the largest animal) and `nodeVisibility` (Anchor Part's %).
+**Exports.** `effectiveCropSize(doc, frames, anchorIndex)` → `{cropSize, auto, required, padding, maxBboxDim,
+maxStride, instances}`, `augmentationPadding`, `configAugmentation`, `configMaxStride`, `sizeMatchTarget`,
+`frameScale`, `cropCentre(pts, anchorIndex, centroid)`, `configCentroid(doc)`, `reducePoints`, `REDUCE_METHODS`,
+`measureInstances`, `cropSizeWarnings(crop, scale)`, `nodeVisibility(frames, n)`,
+`MIN_CROP_SIZE`, `MIN_EFFECTIVE_CROP_PX`. Frames are the Training panel's label analysis: `{instances: [[x, y,
+visible]…], width, height}` per labelled (view, frame). **Imports.** None. **Imported by.** `ui/training-panel.js`,
+`ui/anchor-crop-preview.js`. **Tests.** `tests/test-training-crop-size.mjs` (the three REAL instances that set a
+5-mouse project's sizes, `tests/fixtures/sleap-nn-training/crop-size-instances.json`, against sleap-nn's own
+numbers), `tests/e2e/training-crop-preview.mjs`.
+
 ### pose/training-metrics.js
 
 **Purpose.** The Training Monitor's runtime lines, port of sleap-app `trainingMetrics.ts`
@@ -7125,6 +7148,8 @@ labels, occluded/null markers.
 **Purpose.** Per-frame multi-view overlay rendering pipeline. Glues
 `overlays.js` draw routines to the live `state` + `triangulation.js`
 data sources. Plus visibility-toggle helpers and frame counter updates.
+Each view's overlay ends with the planes, then the Training panel's crop
+preview (`ui/anchor-crop-preview.js`; nothing unless it is on).
 
 **Key exports.**
 - `setReprojErrorVisible(visible, opts?)` — show/hide the reproj-error info
@@ -13284,6 +13309,21 @@ overlays, info panel. On a lazy project the new instances pin their frames
 
 **Imported by.** `ui/inference-panel.js`. Test: `tests/e2e/desktop-inference.mjs` §5, §7, §8.
 
+### ui/anchor-crop-preview.js
+
+**Purpose.** The Training panel's crop preview (Anchor Part ▸ eye; sleap-app `renderAnchorCropPreview`): a dashed
+orange square of the centered-instance crop around every animal on the current frame, in each view its model trains
+on, for each instance the view shows (User / Predictions), centred where sleap-nn centres the crop (`cropCentre` with
+the config's rule; sleap-app draws Auto at the box centre), the side divided by that view's size-matcher scale. Draws
+nothing while `isShown()` is false (the Training panel closed or folded; the panel's IntersectionObserver repaints
+the views when that flips). **Exports.** `setAnchorCropPreview({anchor, byView: {view: {cropSize,
+target, centroid}}, isShown} | null)` → whether it changed, `anchorCropPreview()`, `previewSquares(view, frameGroup,
+session, shown?)` (video px; tests), `drawAnchorCropPreview(view, frameGroup, session, shown?)` (`shown` = the
+renderer's visibility settings). **Imports.** `./overlays.js`
+(`makeVideoToCanvasTransform`), `./overlay-window.js` (`overlayDrawSize`), `../pose/training-crop-size.js`.
+**Imported by.** `ui/rendering.js` (draws it after the planes), `ui/training-panel.js` (sets it). **Tests.**
+`tests/e2e/training-crop-preview.mjs`.
+
 ### ui/training-panel.js
 
 **Purpose.** The Training panel (rail icon GraduationCap, between Inference and Connect, sleap-app's
@@ -13319,7 +13359,11 @@ never goes to a worker, a typed worker path never runs locally); Choose… picks
 warning on a head mismatch from its `training_config.yaml`. The runs folder's trained runs (`scanTrainedRuns`, after
 picking it and after each local run) are "[Trained] <run> (training_config.yaml)" slot entries of their head
 (`selectTrainedRun` loads the config and offers the run's checkpoint; listed for local runs only; one scan at a
-time, rescanning when asked meanwhile). View Metrics (after a completed run) opens
+time, rescanning when asked meanwhile). Anchor Part (Top-Down) lists each node with its visibility % and has
+sleap-app's crop preview eye (`ui/anchor-crop-preview.js`, drawn while the panel shows); under it Crop Size is the
+centered-instance crop each model trains on (`cropInfo`: the config's Crop Size, or Auto as sleap-nn computes it
+from that group's labels, `pose/training-crop-size.js`; a range with one model per view) with sleap-app's crop
+warnings; Full Configuration shows the same under its Crop Size (`host.cropInfo`). View Metrics (after a completed run) opens
 `ui/training-metrics-dialog.js` on this run's models (+ the trained runs locally), read locally or on the worker
 (`remote.workerFiles`). A row with a chart
 opens the Training Monitor (`ui/training-monitor.js`); rows keep their start / epoch / end times and the
@@ -13334,8 +13378,9 @@ import in `pose/initialization.js`, after the Inference panel. **Exports.** `TRA
 `./connect/backend-picker.js`, `./connect/remote-training.js`, `../pose/connect/remote-training-plan.js`,
 `../pose/connect/store.js` (`configureConnect`: the YAML parser for `withYamlRunName`),
 `../pose/connect/timestamp.js`, `../pose/training-metrics.js`, `./training-monitor.js`, `../pose/training-local-progress.js`,
-`../pose/training-handoff.js`, `./inference-panel.js`, `./training-config-dialog.js`, `./training-metrics-dialog.js`; the importmap's `yaml` (dynamic). **Imported by.**
-`pose/initialization.js` (dynamic). **Exports** also `_openTrainingConfig(tab)`, `_scanTrainedRuns()` (tests). **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/desktop-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/training-config-dialog.mjs`, `tests/e2e/panel-rail.mjs`.
+`../pose/training-handoff.js`, `./inference-panel.js`, `./training-config-dialog.js`, `./training-metrics-dialog.js`,
+`../pose/training-crop-size.js`, `./anchor-crop-preview.js`, `./rendering.js` (`drawAllOverlays`, the preview's redraw); the importmap's `yaml` (dynamic). **Imported by.**
+`pose/initialization.js` (dynamic). **Exports** also `_openTrainingConfig(tab)`, `_scanTrainedRuns()` (tests); `_trainingState()` includes `crop` and `cropPreview`. **Tests.** `tests/e2e/connect-training.mjs`, `tests/e2e/desktop-training.mjs`, `tests/e2e/training-monitor.mjs`, `tests/e2e/training-config-dialog.mjs`, `tests/e2e/training-crop-preview.mjs`, `tests/e2e/panel-rail.mjs`.
 
 ### ui/training-config-dialog.js
 
@@ -13347,7 +13392,8 @@ changes saved"), footer Reset to profile defaults… (confirmed through `ui/ask.
 configuration files… (one `<head>.yaml` per model, as sent, via `<a download>`) / Done. Pipeline fields write every
 model's config, a model tab's only that model's; `host.changed(slot)` after each edit. Rows hide with `field.when`.
 Vanilla DOM card (Esc / Done / scrim close, Tab trapped by `trapModal`, `data-shortcut-modal`); the content column
-is the one scroller. LUCID changes: no W&B, devices fixed at 1, no job package or run scripts, backbone shown (UNet
+is the one scroller. Under Crop Size (`#tcdCropNote`): "Auto: N px from your labels." and sleap-app's crop warnings,
+from the optional `host.cropInfo(slot)`. LUCID changes: no W&B, devices fixed at 1, no job package or run scripts, backbone shown (UNet
 settings only). **Exports.** `openTrainingConfigDialog(host)` → `{close, update, focus, isOpen}`,
 `trainingConfigDialog()`. **Imports.** `./training-config-fields.js`, `./connect/layers.js` (`trapModal`),
 `./panel-form.js`, `./ask.js`, `./training-args.js` (`TRAINING_MODES`). A model tab starts with the training
@@ -13404,7 +13450,8 @@ onCancel, readFile})` → `{update, close, isOpen}`, `trainingMonitor()`. **Impo
 (`profilesForHead`, `defaultProfile` = Medium RF), and the panel's fields ↔ config:
 `hyperparamsFromConfig` (Max Epochs, Batch Size, Rotation / Scale Augmentation, Anchor Part, validation
 fraction, seed) and `applyPanelSettings` (sleap-app's YAML keys; every other value of the config kept),
-`finalizeConfig` (run name, W&B off, no baked-in skeleton / part names / data paths), `anchorChoices`,
+`finalizeConfig` (run name, W&B off, no baked-in skeleton / part names / data paths), `anchorChoices(names, visibility?)`
+(each node with its visibility %, sleap-app's AnchorPartField), `CROP_HINT`,
 `ROTATION_OPTIONS` and the hint texts; training modes (sleap-app): `TRAINING_MODES`, `detectTrainingMode(doc)`
 (a config naming a checkpoint is a Resume / Fine-tune of it), `applyTrainingMode(doc, mode, checkpoint)` (all
 three keys always written, so no stale checkpoint rides along), `checkpointProblem`, `pickCheckpointFile`
@@ -13433,7 +13480,7 @@ Cameras = Camera, Session = FolderTree, plus PanelRightClose / PanelRightOpen
 and the section headers' ChevronDown / ChevronRight / X (sleap-app's). The
 desktop Inference panel adds Zap (its rail icon, sleap-app's) and the glyphs its
 buttons and status use (Folder, FolderOpen, Play, LoaderCircle, CircleCheck,
-CircleX, CircleAlert, Download, Copy, Maximize2). The Connect panel adds Globe (its rail icon), Plug, Unplug, Trash2, ExternalLink and TriangleAlert. The Training panel adds GraduationCap (its rail icon, sleap-app's), Square, Ban, ChartLine, Lightbulb, Upload, FlaskConical and Settings2 (Full Configuration...). Inline strings: no fetch, so offline mode and the version stamp are unaffected.
+CircleX, CircleAlert, Download, Copy, Maximize2). The Connect panel adds Globe (its rail icon), Plug, Unplug, Trash2, ExternalLink and TriangleAlert. The Training panel adds GraduationCap (its rail icon, sleap-app's), Square, Ban, ChartLine, Lightbulb, Upload, FlaskConical, Settings2 (Full Configuration...) and EyeOff (Anchor Part's crop preview, with Eye). Inline strings: no fetch, so offline mode and the version stamp are unaffected.
 
 **Key exports.** `RAIL_ICONS` (Lucide name → SVG child markup),
 `railIconSvg(name)` (wraps it in Lucide's 24x24 stroke-2 currentColor `<svg>`;

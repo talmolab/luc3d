@@ -8941,6 +8941,16 @@ div.track-summary-steps { padding-left: 0; }
 .trn-rec { display: flex; align-items: flex-start; gap: 4px; margin: 0; font-size: 10px; color: var(--success-color); }
 .trn-rec .inf-icon { flex-shrink: 0; margin-top: 1px; }
 .trn-warnline { margin: 0; font-size: 10px; color: var(--warning-color); }
+/* Anchor Part: the select, then the crop preview eye beside it (sleap-app AnchorPartField); Crop Size under it. */
+.trn-anchor-row .inf-select { margin-left: auto; min-width: 0; }
+.trn-eye { flex-shrink: 0; width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-color); border-radius: 4px; background: none; color: var(--text-muted); cursor: pointer; }
+.trn-eye svg { width: 14px; height: 14px; }
+.trn-eye:hover:not(:disabled) { color: var(--text-primary); border-color: var(--accent); }
+.trn-eye[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.trn-eye:disabled { opacity: 0.4; cursor: default; }
+.trn-crop-size { font-size: 11px; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.trn-crop-warn { display: flex; flex-direction: column; gap: 2px; }
 .trn-slots { display: flex; flex-direction: column; gap: 6px; }
 .trn-slot { border: 1px dashed var(--border-light); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; }
 .trn-slot-set { border: 1px solid rgba(46, 204, 113, 0.5); background: rgba(46, 204, 113, 0.05); }
@@ -9078,6 +9088,8 @@ div.track-summary-steps { padding-left: 0; }
 .tcd-field.inf-check { font-size: 12px; }
 .tcd-ro { color: var(--text-secondary); font-size: 12px; }
 .tcd-note { font-size: 10px; color: var(--text-muted); }
+.tcd-crop { display: flex; flex-direction: column; gap: 2px; }
+.tcd-crop p { margin: 0; }
 .tcd-flash { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; transition: outline-color 1.2s; }
 .tcd-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 20px;
   border-top: 1px solid var(--border-color); flex-shrink: 0; }
