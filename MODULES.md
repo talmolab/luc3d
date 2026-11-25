@@ -2843,7 +2843,9 @@ view for a per-view group; `RUN_NAME_RE` is the charset Rust will accept.
 `boxplot.ts`): `buildModelMetricsRow(runDir, io)` reads `metrics.{test,val,train}.0.json` (first found) and
 `training_config.yaml` through injected `{exists, readText, parseYaml}` and returns the table row (run name,
 timestamp from the run name, model type, architecture, node names, `summary`); failures become `row.error`.
-Never reads the `.npz` (pickled object arrays). VOC keys read flat (sleap-nn) or nested. Also
+Never reads the `.npz` (pickled object arrays). VOC keys read flat (sleap-nn) or nested. A centroid model's
+`detection_metrics` (precision / recall / F1 / counts) are read too, and its distances (one per matched animal,
+`distance.perNode === false`) are one "centroid" box in the detail view. Also
 `normalizeMetrics`, `summarizeMetrics`, `trainingConfigInfo`, `labeledMetrics` (classic SLEAP order),
 `computeNodeBoxplots` / `distanceAxisMax` / `percentileSorted`, `parseTimestampFromRunName`, `runDirName`,
 `joinPath`. **Imports.** None. **Imported by.** `ui/training-metrics-dialog.js`. **Tests.**

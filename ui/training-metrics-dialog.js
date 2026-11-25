@@ -150,8 +150,10 @@ function openDetail(row) {
     const m = row.metrics;
     if (!m) k.body.appendChild(el('p', 'tmd-empty', 'This run has no metrics file (metrics.val.0.json). sleap-nn writes it when training ends.'));
     if (m && m.distance && m.distance.dists.length) {
-        k.body.appendChild(el('h3', 'tmd-h3', 'Distance between ground truth and prediction, per node (px)'));
-        k.body.appendChild(boxplotSvg(computeNodeBoxplots(m.distance.dists, row.nodeNames), distanceAxisMax(m.distance.dists)));
+        const perNode = m.distance.perNode !== false;
+        k.body.appendChild(el('h3', 'tmd-h3', perNode ? 'Distance between ground truth and prediction, per node (px)'
+            : 'Distance between ground truth and predicted centroids (px)'));
+        k.body.appendChild(boxplotSvg(computeNodeBoxplots(m.distance.dists, perNode ? row.nodeNames : ['centroid']), distanceAxisMax(m.distance.dists)));
     }
     const list = labeledMetrics(m);
     if (list.length) {
