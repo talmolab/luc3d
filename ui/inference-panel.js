@@ -1429,6 +1429,10 @@ export async function runTrainedModels(o) {
     // The trained views run even if they were unchecked here; the others keep their checkbox.
     assigned.forEach(function (v) { videos.unselected.delete(v); });
     if (rem) {
+        // Results not loaded yet would be loaded together with the new ones (Fetch & Load takes every
+        // pending job), so they come first; then a finished run is dismissed, as the local branch below does.
+        if (remote.hasUnloaded()) return { ok: false, skipped: true, error: 'The last inference run has results that are not loaded yet: Fetch & Load Results in the Inference panel first.' };
+        if (remote.isDone()) remote.dismiss();
         const r = await startRemoteWith(a);
         return Object.assign({ views: assigned }, r);
     }

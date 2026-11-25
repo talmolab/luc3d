@@ -13168,7 +13168,9 @@ a window (Esc closes). Output: `<video folder>/predictions/<view>.<stamp>.predic
 **Key exports.** `setupInferencePanel()` → Promise<bool>, `showInferencePanel()`, `runRemoteInferenceWithModels(models)` (the Connect New job wizard's "This project" hand-off: sets the remote models and starts the panel's own remote Run),
 `runTrainedModels(o)` (the Training panel's post-training inference: `{remote, pipeline, models: [{views, paths}],
 frameRange, sampleCount, excludeUserLabeled, existingPredictions}` → each model on the current session's views it
-was trained for, the panel's settings set to these, then its own Run; local resolves when the run ends, remote
+was trained for, the panel's settings set to these, then its own Run; a finished run is dismissed first, but on a
+worker the current session's results not loaded yet come first (skipped, "Fetch & Load Results … first": Fetch & Load
+takes every pending job, so old and new would load together); local resolves when the run ends, remote
 once the jobs are submitted; `skipped: true` when nothing could start, with the Run note's reason),
 `INFERENCE_TAB_ID` (`tabInference`), `INFERENCE_BACKENDS`, `_inferenceState()` (tests).
 
@@ -13590,7 +13592,7 @@ and `!isDone`); each job records the Existing-predictions `mergeMode` at submit,
 (a job without one uses the panel's current mode). Progress shows frames / percent / fps / ETA
 ("Initializing..." first); the log holds the echoed spec (`$ Remote (N videos): …`), submit / fetch lines
 and each job's worker output (`[cam1] …`), with Expand and Copy Log. **Exports.**
-`createRemoteInference(host)` (`pickModel`, `getAssignment`, `setAssignment`, `connected`, `workerVideo`, …), and for the Connect window's Jobs tab: `fetchAndLoadJobs(jobs, {mode, mergeFile?, onLog?})`
+`createRemoteInference(host)` (`pickModel`, `getAssignment`, `setAssignment`, `connected`, `workerVideo`, `isDone`, `dismiss`, `hasUnloaded` (the current session's unloaded results), …), and for the Connect window's Jobs tab: `fetchAndLoadJobs(jobs, {mode, mergeFile?, onLog?})`
 (the Fetch & Load loop: overlay per job, Esc cancels, `{loaded, failures, cancelled}`; the panel's own button runs
 through it), `fetchJobPredictions(workerId, jobId, {name, onProgress})` (blob or `fs.read` of the job's `output_path` →
 `{file, outPath, detail}`), `openProjectInfo()` (the open file name + session folder names, for `lucidProjectTag`).

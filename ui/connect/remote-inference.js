@@ -303,6 +303,11 @@ export function createRemoteInference(host) {
         }).sort(function (a, b) { return a.submittedAt - b.submittedAt; });
     }
     function pending() { return pendingFetches(S().trackedJobs, { projectTagId: tag().id }); }
+    /** Whether the current session has finished results on a worker that Fetch & Load has not loaded yet. */
+    function hasUnloaded() {
+        const session = host.getSession();
+        return !!session && pending().some(function (j) { return j.sessionId === session.name; });
+    }
 
     function ensureStreams(jobs) {
         jobs.forEach(function (j) {
@@ -700,7 +705,7 @@ export function createRemoteInference(host) {
     }
 
     return {
-        pickModel, getAssignment, setAssignment, connected, workerVideo, buildViews, buildRun, sync, start, cancel, fetchAndLoad, canRun, whyNot, isRunning, onChange, refreshUi,
+        pickModel, getAssignment, setAssignment, connected, workerVideo, buildViews, buildRun, sync, start, cancel, fetchAndLoad, canRun, whyNot, isRunning, isDone, dismiss, hasUnloaded, onChange, refreshUi,
         _state: function () { return { views: views, out: out, run: run, log: log, runIds: runIds, assignment: assignment }; },
     };
 }
