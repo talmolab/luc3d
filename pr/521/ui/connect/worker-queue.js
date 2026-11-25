@@ -10,9 +10,9 @@
  *  - the context menu is a small menu at the pointer (Esc closes just it, arrows move, menu key opens it);
  *  - Tailwind chip classes become `cw-chip-*` (styled exactly as the Jobs tab's `cj-chip-*`).
  */
-import { isActiveGroup, unfinishedJobs, cancelRunConfirm, queueRows, queueRunEntries } from '../../pose/connect/job-groups.js?v=d8c111d6b6c2';
-import { layerAbove } from './layers.js?v=d8c111d6b6c2';
-import { el, button } from './dom.js?v=d8c111d6b6c2';
+import { isActiveGroup, unfinishedJobs, cancelRunConfirm, queueRows, queueRunEntries } from '../../pose/connect/job-groups.js?v=8802bcaa2489';
+import { layerAbove } from './layers.js?v=8802bcaa2489';
+import { el, button } from './dom.js?v=8802bcaa2489';
 
 export { isActiveGroup, unfinishedJobs, cancelRunConfirm, queueRows, queueRunEntries };
 
@@ -88,7 +88,7 @@ function openContextMenu(x, y, items, returnFocus) {
 /**
  * @param {HTMLElement} container
  * @param {{
- *   entries: Array<import('../../pose/connect/job-groups.js?v=d8c111d6b6c2').QueueRunEntry>,
+ *   entries: Array<import('../../pose/connect/job-groups.js?v=8802bcaa2489').QueueRunEntry>,
  *   canManage: (group: any) => boolean,
  *   onOpen: (entry: any) => void,
  *   onStopEarly: (job: any) => void,

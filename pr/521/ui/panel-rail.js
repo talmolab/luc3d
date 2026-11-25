@@ -44,7 +44,7 @@
  * `setupPanelRail` (it lives in `ui/ui-wiring.js`, which would close a cycle
  * for `ui/id-switch-modal.js` and `ui/plane-definition.js`).
  */
-import { railIconSvg } from './panel-rail-icons.js?v=d8c111d6b6c2';
+import { railIconSvg } from './panel-rail-icons.js?v=8802bcaa2489';
 
 /** Rail and stack order = the old tab bar's order. `tab` is the `.panel-tab-content` element id. */
 export const PANEL_RAIL_PANELS = [

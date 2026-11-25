@@ -11,9 +11,9 @@
  * `data-shortcut-modal`, one scroller each); "Add Trained Model(s)…" only where a folder can be picked
  * (desktop); the boxplot is drawn with the theme's colours.
  */
-import { buildModelMetricsRow, labeledMetrics, computeNodeBoxplots, distanceAxisMax, runDirName } from '../pose/training-model-metrics.js?v=d8c111d6b6c2';
-import { trapModal } from './connect/layers.js?v=d8c111d6b6c2';
-import { el, button } from './panel-form.js?v=d8c111d6b6c2';
+import { buildModelMetricsRow, labeledMetrics, computeNodeBoxplots, distanceAxisMax, runDirName } from '../pose/training-model-metrics.js?v=8802bcaa2489';
+import { trapModal } from './connect/layers.js?v=8802bcaa2489';
+import { el, button } from './panel-form.js?v=8802bcaa2489';
 
 const COLUMNS = ['Path', 'Timestamp', 'Model Type', 'Architecture', 'OKS mAP', 'Vis Precision', 'Vis Recall', 'Dist 95%', 'Dist 75%', 'Dist Avg'];
 const SVG_NS = 'http://www.w3.org/2000/svg';

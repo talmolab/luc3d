@@ -15,12 +15,12 @@
  *    fields are written, never the actions. A missing, corrupt or wrong-version blob loads as
  *    the defaults; storage failures never throw. `now` (default `Date.now`) stamps Recents.
  *
- * @typedef {import("./remote-browser.js?v=d8c111d6b6c2").BrowserView} BrowserView
- * @typedef {import("./remote-browser.js?v=d8c111d6b6c2").SortSpec} SortSpec
+ * @typedef {import("./remote-browser.js?v=8802bcaa2489").BrowserView} BrowserView
+ * @typedef {import("./remote-browser.js?v=8802bcaa2489").SortSpec} SortSpec
  * @typedef {{ path: string, isDir: boolean, openedAt: number }} RecentItem `openedAt` is `Date.now()` when it was last picked.
  */
-import { createStore, persist } from "./mini-store.js?v=d8c111d6b6c2";
-import { DEFAULT_SORT } from "./remote-browser.js?v=d8c111d6b6c2";
+import { createStore, persist } from "./mini-store.js?v=8802bcaa2489";
+import { DEFAULT_SORT } from "./remote-browser.js?v=8802bcaa2489";
 
 export const MAX_RECENTS = 10;
 export const REMOTE_BROWSER_STORAGE_KEY = "lucid-connect-remote-browser";

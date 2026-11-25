@@ -26,7 +26,7 @@
  * @typedef {{ text: string, className: string }} JobStatusChip
  * @typedef {{ title: string, message: string, confirmLabel: string, cancelLabel: string, destructive?: boolean }} ConfirmRequest
  */
-import { timeAgo, modelRunTimestamp } from "./timestamp.js?v=d8c111d6b6c2";
+import { timeAgo, modelRunTimestamp } from "./timestamp.js?v=8802bcaa2489";
 
 // ── WorkerJobs.tsx ──────────────────────────────────────────────────
 

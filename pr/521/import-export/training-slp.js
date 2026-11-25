@@ -24,10 +24,10 @@
  * sleap-nn reads points with `invisible_as_nan=True` (sleap-io `Instance.numpy`), so they are
  * masked, not trained on.
  */
-import { _buildSioPoints, cameraExportVideo, exportTrackSource } from './file-io.js?v=d8c111d6b6c2';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=d8c111d6b6c2';
-import { lazyRowInstance } from '../pose/lazy-residency.js?v=d8c111d6b6c2';
-import { momentKey, splitMoments, interpolationProblem } from '../pose/training-data.js?v=d8c111d6b6c2';
+import { _buildSioPoints, cameraExportVideo, exportTrackSource } from './file-io.js?v=8802bcaa2489';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=8802bcaa2489';
+import { lazyRowInstance } from '../pose/lazy-residency.js?v=8802bcaa2489';
+import { momentKey, splitMoments, interpolationProblem } from '../pose/training-data.js?v=8802bcaa2489';
 
 function nodeNames(skeleton) {
     return ((skeleton && skeleton.nodes) || []).map(function (n) { return typeof n === 'string' ? n : (n && n.name) || ''; });

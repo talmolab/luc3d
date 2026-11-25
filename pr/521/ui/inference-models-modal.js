@@ -19,16 +19,16 @@
  *
  * Data: `ui/inference-model-assignment.js` (plain, Node-tested).
  */
-import { state, viewport3d } from './app-state.js?v=d8c111d6b6c2';
-import { Viewport3D } from './viewport3d.js?v=d8c111d6b6c2';
-import { viewport3DDisplayOptions } from './viewport3d-options.js?v=d8c111d6b6c2';
-import { getTrackColor, getGroupColor } from './overlays.js?v=d8c111d6b6c2';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=d8c111d6b6c2';
-import { trapModal } from './connect/layers.js?v=d8c111d6b6c2';
+import { state, viewport3d } from './app-state.js?v=8802bcaa2489';
+import { Viewport3D } from './viewport3d.js?v=8802bcaa2489';
+import { viewport3DDisplayOptions } from './viewport3d-options.js?v=8802bcaa2489';
+import { getTrackColor, getGroupColor } from './overlays.js?v=8802bcaa2489';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=8802bcaa2489';
+import { trapModal } from './connect/layers.js?v=8802bcaa2489';
 import {
     cloneAssignment, addModel, addFolderToModel, removeModel, assignView, assignViews, clearAssignments,
     modelOfView, viewsOfModel, modelLabel, foldersNeeded, pruneViews,
-} from './inference-model-assignment.js?v=d8c111d6b6c2';
+} from './inference-model-assignment.js?v=8802bcaa2489';
 
 const UNASSIGNED_COLOR = '#6b6b6b';
 const NO_VIEWS_TEXT = 'Import a session or project first.';

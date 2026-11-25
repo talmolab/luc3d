@@ -37,7 +37,7 @@
  *    range; hashes compare case-insensitively and the blob id is lowercased before
  *    it reaches Rust (which accepts only lowercase hex).
  */
-import { WorkerProtocolError, BLOB_HASH_MISMATCH, BLOB_INCOMPLETE } from "./errors.js?v=d8c111d6b6c2";
+import { WorkerProtocolError, BLOB_HASH_MISMATCH, BLOB_INCOMPLETE } from "./errors.js?v=8802bcaa2489";
 
 /** Largest single `iroh_blob_read_range` (matches `MAX_BLOB_RANGE` in iroh_client.rs). */
 export const MAX_BLOB_RANGE = 4 * 1024 * 1024;

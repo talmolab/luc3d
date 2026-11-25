@@ -16,7 +16,7 @@
  * 3. none — outputs stay in the worker's job folder.
  * The user can pick another folder (Change…), remembered per project+worker.
  */
-import { isWorkerPath, translatePath } from "./path-mappings.js?v=d8c111d6b6c2";
+import { isWorkerPath, translatePath } from "./path-mappings.js?v=8802bcaa2489";
 
 /**
  * @typedef {"project" | "serve-folder" | "chosen"} OutputDirSource
@@ -43,7 +43,7 @@ export function projectFolderName(projectName) {
  * @param {{
  *   projectPath: string | null,
  *   projectName: string,
- *   rules: import("./path-mappings.js?v=d8c111d6b6c2").PathMapping[],
+ *   rules: import("./path-mappings.js?v=8802bcaa2489").PathMapping[],
  *   mounts: string[],
  *   serveFolder: string | null,
  *   isSharedFolder: (path: string) => Promise<boolean>,

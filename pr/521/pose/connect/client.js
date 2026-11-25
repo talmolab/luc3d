@@ -19,7 +19,7 @@
  *    request; a throwing job listener doesn't starve the rest; unsubscribe prunes emptied sets.
  */
 
-import { buildHello, buildReq, parseEnvelope, PROTOCOL_VERSION } from "./envelope.js?v=d8c111d6b6c2";
+import { buildHello, buildReq, parseEnvelope, PROTOCOL_VERSION } from "./envelope.js?v=8802bcaa2489";
 import {
   BLOB_HASH_MISMATCH,
   BLOB_INCOMPLETE,
@@ -33,7 +33,7 @@ import {
   FS_NOT_FOUND,
   INTERNAL,
   WorkerProtocolError,
-} from "./errors.js?v=d8c111d6b6c2";
+} from "./errors.js?v=8802bcaa2489";
 
 /**
  * The `WebSocket` subset this client needs (tests inject a fake).
@@ -159,8 +159,8 @@ import {
 /**
  * @typedef {object} WorkerClientOptions
  * @property {string} url
- * @property {import("./identity.js?v=d8c111d6b6c2").ClientIdentity} identity
- * @property {import("./envelope.js?v=d8c111d6b6c2").AgentInfo} [agent]
+ * @property {import("./identity.js?v=8802bcaa2489").ClientIdentity} identity
+ * @property {import("./envelope.js?v=8802bcaa2489").AgentInfo} [agent]
  * @property {number} [protoMin]
  * @property {number} [protoMax]
  * @property {number} [requestTimeoutMs]
@@ -737,7 +737,7 @@ export class WorkerClient {
     }
   }
 
-  /** @param {import("./envelope.js?v=d8c111d6b6c2").HelloFrame} hello */
+  /** @param {import("./envelope.js?v=8802bcaa2489").HelloFrame} hello */
   _handleHello(hello) {
     if (this._state !== "connecting") {
       console.warn("[protocolV1] Unexpected 'hello' frame after handshake, ignoring");
@@ -790,7 +790,7 @@ export class WorkerClient {
   /**
    * `hello.proof` = the worker's signature over OUR nonce, checked against the key in its `node_id`.
    * A missing or malformed proof is false (an unproven peer is unverified).
-   * @param {import("./envelope.js?v=d8c111d6b6c2").HelloFrame} hello
+   * @param {import("./envelope.js?v=8802bcaa2489").HelloFrame} hello
    * @returns {Promise<boolean>}
    */
   async _verifyWorkerProof(hello) {
@@ -814,7 +814,7 @@ export class WorkerClient {
     }
   }
 
-  /** @param {import("./envelope.js?v=d8c111d6b6c2").ResFrame} res */
+  /** @param {import("./envelope.js?v=8802bcaa2489").ResFrame} res */
   _handleRes(res) {
     const pending = this._pending.get(res.id);
     if (!pending) return;
@@ -827,7 +827,7 @@ export class WorkerClient {
     }
   }
 
-  /** @param {import("./envelope.js?v=d8c111d6b6c2").EventFrame} event */
+  /** @param {import("./envelope.js?v=8802bcaa2489").EventFrame} event */
   _handleEvent(event) {
     if (!event.job_id) return; // connection-level events: none defined yet
     const listeners = this._jobListeners.get(event.job_id);

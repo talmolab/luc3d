@@ -16,10 +16,10 @@
  * in — no store/connectStore dependency here, so it's trivially testable and
  * reusable from both the data-summary UI (PR3b) and `trainingStore`.
  */
-import { isWorkerPath, translatePath, detectPrefixDiff } from "./path-mappings.js?v=d8c111d6b6c2";
+import { isWorkerPath, translatePath, detectPrefixDiff } from "./path-mappings.js?v=8802bcaa2489";
 
 /**
- * @typedef {import("./path-mappings.js?v=d8c111d6b6c2").PathMapping} PathMapping
+ * @typedef {import("./path-mappings.js?v=8802bcaa2489").PathMapping} PathMapping
  *
  * @typedef {"no-location" | "not-found" | "outside-shares" | "error"} HiddenReason
  *

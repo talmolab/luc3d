@@ -15,7 +15,7 @@
  * owns (run name, W&B off, no baked-in skeleton or data paths): the worker (remote) and Rust
  * (local) then set the paths and ports.
  */
-import { BASELINE_PROFILES } from '../lib/sleap-app-profiles/profiles.js?v=d8c111d6b6c2';
+import { BASELINE_PROFILES } from '../lib/sleap-app-profiles/profiles.js?v=8802bcaa2489';
 
 /** sleap-app `MODEL_TYPE_OPTIONS`; LUCID disables the box types (no box labels). */
 export const MODEL_TYPE_OPTIONS = Object.freeze([

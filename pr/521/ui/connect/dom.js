@@ -3,7 +3,7 @@
  *
  * LUCID addition (no sleap-app counterpart: React builds its elements itself).
  */
-import { railIconSvg } from '../panel-rail-icons.js?v=d8c111d6b6c2';
+import { railIconSvg } from '../panel-rail-icons.js?v=8802bcaa2489';
 
 /** `<tag class="cls">text</tag>`: no class when `cls` is falsy, no text when `text` is undefined. */
 export function el(tag, cls, text) {

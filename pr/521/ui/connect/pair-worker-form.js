@@ -10,8 +10,8 @@
  *  - `reset()` stands in for sleap-app's unmount (the panel calls it whenever the form is hidden);
  *  - Enter in either box pairs when Pair is enabled. iroh cases: `tests/e2e/connect-iroh.mjs`.
  */
-import { useConnectStore, planPairingForText } from '../../pose/connect/store.js?v=d8c111d6b6c2';
-import { el, button, icon } from './dom.js?v=d8c111d6b6c2';
+import { useConnectStore, planPairingForText } from '../../pose/connect/store.js?v=8802bcaa2489';
+import { el, button, icon } from './dom.js?v=8802bcaa2489';
 
 function codeTag(text) {
     return el('code', 'connect-code', text);

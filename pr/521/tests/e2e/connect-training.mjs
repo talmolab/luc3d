@@ -26,7 +26,10 @@
  *     → the centroid job's config resumes from it (`resume_ckpt_path`), the other model's does not; then the
  *     failing job: the error banner names the model and "exit code 1", and Error output (sleap-nn) shows the
  *     worker's error line.
- *  8. The Inference panel's Backend keeps its own ids (two pickers on one page).
+ *  8. Post-training inference after a finished Inference run: results not loaded yet → it waits for
+ *     Fetch & Load (nothing submitted); once they are loaded, the finished run is dismissed and the
+ *     trained models run.
+ *  The Inference panel's Backend keeps its own ids (two pickers on one page).
  *
  * Usage: node tests/e2e/connect-training.mjs   (PORT= to move its server)
  */
@@ -245,6 +248,30 @@ await runConnectE2E(9395, async ({ browser, BASE }) => {
         outShown: !document.querySelector('.trn-errout').hidden }));
     check(/^Training Centroid · cam1 failed: exit code 1/.test(fl.err), 'the error names the model and the exit code', fl.err);
     check(fl.outShown && /CUDA out of memory/.test(fl.out), 'Error output (sleap-nn) shows the worker\'s error line', fl.out);
+
+    console.log('\n8. Post-training inference after a finished Inference run');
+    const postJobs = [...worker.jobs.values()].filter((j) => j.spec.type === 'track');
+    for (const j of postJobs) await worker.completeJob(j.job_id);
+    const handoff = () => page.evaluate(async () => {
+        const I = await import('./ui/inference-panel.js');
+        return I.runTrainedModels({ remote: true, pipeline: 'top-down', frameRange: 'random', sampleCount: 5,
+            models: [{ views: ['cam1', 'cam2'], paths: ['/data/sess/models/run.centroid', '/data/sess/models/run.centered_instance'] }] });
+    });
+    await page.waitForFunction(async () => {
+        const { useConnectStore } = await import('./pose/connect/store.js');
+        return useConnectStore.getState().trackedJobs.filter((j) => j.kind === 'track').every((j) => j.state === 'completed');
+    }, null, { timeout: 20000 });
+    const tracks0 = [...worker.jobs.values()].filter((j) => j.spec.type === 'track').length;
+    const h1 = await handoff();
+    check(h1.skipped && /not loaded yet: Fetch & Load Results/.test(h1.error) && [...worker.jobs.values()].filter((j) => j.spec.type === 'track').length === tracks0,
+        'results not loaded yet: the trained models wait for Fetch & Load (nothing submitted, nothing dropped)', h1);
+    await page.evaluate(async (ids) => {
+        const { useConnectStore } = await import('./pose/connect/store.js');
+        ids.forEach((id) => useConnectStore.getState().markJobFetched(id));
+    }, postJobs.map((j) => j.job_id));
+    const h2 = await handoff();
+    await waitFor(() => [...worker.jobs.values()].filter((j) => j.spec.type === 'track').length === tracks0 + 2);
+    check(h2.ok && h2.jobs === 2, 'results loaded: the finished run is dismissed and the trained models run (one track job per view)', h2);
 
     async function waitJobs(n) { await waitFor(() => worker.jobs.size >= n, 20000); }
     async function waitFor(pred, ms = 10000) {

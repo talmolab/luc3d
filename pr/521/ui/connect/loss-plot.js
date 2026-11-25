@@ -11,8 +11,8 @@
  *  - a one-line title (epoch / loss / best val): wall-clock metrics do not exist for a replayed job.
  */
 
-import { downloadBytes } from '../../import-export/file-io.js?v=d8c111d6b6c2';
-import { el, button } from './dom.js?v=d8c111d6b6c2';
+import { downloadBytes } from '../../import-export/file-io.js?v=8802bcaa2489';
+import { el, button } from './dom.js?v=8802bcaa2489';
 
 /** Cap on drawn batch dots (a 20k-point scatter is not legible and costs a frame). */
 const MAX_BATCH_DOTS = 2000;

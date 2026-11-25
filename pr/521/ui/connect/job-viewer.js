@@ -11,17 +11,17 @@
  *  - resumes the stream when its worker's link comes back; the log follows its end while read there;
  *  - Copy falls back to a hidden textarea.
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=d8c111d6b6c2';
-import { createJobStream } from '../../pose/connect/job-stream.js?v=d8c111d6b6c2';
-import { isErrorLine, logLineClassName } from '../../pose/connect/process-log.js?v=d8c111d6b6c2';
-import { endJobConfirm } from '../../pose/connect/job-groups.js?v=d8c111d6b6c2';
-import { toTrainingStatus } from '../../pose/connect/worker-ui-helpers.js?v=d8c111d6b6c2';
-import { askConfirm } from '../ask.js?v=d8c111d6b6c2';
-import { notify } from './notify.js?v=d8c111d6b6c2';
-import { railIconSvg } from '../panel-rail-icons.js?v=d8c111d6b6c2';
-import { createLossPlot } from './loss-plot.js?v=d8c111d6b6c2';
-import { trapModal } from './layers.js?v=d8c111d6b6c2';
-import { el, button } from './dom.js?v=d8c111d6b6c2';
+import { useConnectStore } from '../../pose/connect/store.js?v=8802bcaa2489';
+import { createJobStream } from '../../pose/connect/job-stream.js?v=8802bcaa2489';
+import { isErrorLine, logLineClassName } from '../../pose/connect/process-log.js?v=8802bcaa2489';
+import { endJobConfirm } from '../../pose/connect/job-groups.js?v=8802bcaa2489';
+import { toTrainingStatus } from '../../pose/connect/worker-ui-helpers.js?v=8802bcaa2489';
+import { askConfirm } from '../ask.js?v=8802bcaa2489';
+import { notify } from './notify.js?v=8802bcaa2489';
+import { railIconSvg } from '../panel-rail-icons.js?v=8802bcaa2489';
+import { createLossPlot } from './loss-plot.js?v=8802bcaa2489';
+import { trapModal } from './layers.js?v=8802bcaa2489';
+import { el, button } from './dom.js?v=8802bcaa2489';
 
 /** Tailwind class names of `logLineClassName` mapped to the Connect window's own. */
 function logClass(line) {

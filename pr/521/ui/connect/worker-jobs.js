@@ -13,22 +13,22 @@
  *  - Run again is hidden on a failed TRAIN job (Inference-only wizard);
  *  - Fetch & Load connects first when needed, then `loadJobPredictions`; confirms via `ui/ask.js`.
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=d8c111d6b6c2';
-import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=d8c111d6b6c2';
+import { useConnectStore } from '../../pose/connect/store.js?v=8802bcaa2489';
+import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=8802bcaa2489';
 import {
     isManagedJob, siblingJobIds, jobTitle, canDeleteRun, deleteRunMessage, statusChipFor, jobStatusChip,
     jobTimeLabel, groupTimeLabel, groupJobs, jobMatches, isActiveGroup, unfinishedJobs, cancelRunConfirm,
     endJobConfirm,
-} from '../../pose/connect/job-groups.js?v=d8c111d6b6c2';
-import { DEFAULT_POLL_MS } from '../../pose/connect/worker-ui-helpers.js?v=d8c111d6b6c2';
-import { askConfirm } from '../ask.js?v=d8c111d6b6c2';
-import { railIconSvg } from '../panel-rail-icons.js?v=d8c111d6b6c2';
-import { notify } from './notify.js?v=d8c111d6b6c2';
-import { openJobViewer } from './job-viewer.js?v=d8c111d6b6c2';
-import { loadJobPredictions } from './merge-predictions-dialog.js?v=d8c111d6b6c2';
-import { openProjectInfo } from './remote-inference.js?v=d8c111d6b6c2';
-import * as wizard from './new-job-wizard.js?v=d8c111d6b6c2';
-import { el, button, errMsg } from './dom.js?v=d8c111d6b6c2';
+} from '../../pose/connect/job-groups.js?v=8802bcaa2489';
+import { DEFAULT_POLL_MS } from '../../pose/connect/worker-ui-helpers.js?v=8802bcaa2489';
+import { askConfirm } from '../ask.js?v=8802bcaa2489';
+import { railIconSvg } from '../panel-rail-icons.js?v=8802bcaa2489';
+import { notify } from './notify.js?v=8802bcaa2489';
+import { openJobViewer } from './job-viewer.js?v=8802bcaa2489';
+import { loadJobPredictions } from './merge-predictions-dialog.js?v=8802bcaa2489';
+import { openProjectInfo } from './remote-inference.js?v=8802bcaa2489';
+import * as wizard from './new-job-wizard.js?v=8802bcaa2489';
+import { el, button, errMsg } from './dom.js?v=8802bcaa2489';
 
 function confirmOpts(req) { return { title: req.title, okLabel: req.confirmLabel, cancelLabel: req.cancelLabel }; }
 

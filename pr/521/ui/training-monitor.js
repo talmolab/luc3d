@@ -16,10 +16,10 @@
  *    run folder's `viz/` while sleap-nn writes them (it deletes them when the run ends unless
  *    `keep_viz`); a worker's run folder is not reachable from the page.
  */
-import { createLossPlot } from './connect/loss-plot.js?v=d8c111d6b6c2';
-import { trapModal } from './connect/layers.js?v=d8c111d6b6c2';
-import { el, button } from './panel-form.js?v=d8c111d6b6c2';
-import { rowRuntimeLines } from '../pose/training-metrics.js?v=d8c111d6b6c2';
+import { createLossPlot } from './connect/loss-plot.js?v=8802bcaa2489';
+import { trapModal } from './connect/layers.js?v=8802bcaa2489';
+import { el, button } from './panel-form.js?v=8802bcaa2489';
+import { rowRuntimeLines } from '../pose/training-metrics.js?v=8802bcaa2489';
 
 let open = null;
 

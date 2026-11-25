@@ -8,11 +8,11 @@
  *  - a vanilla factory `(container, {workerId, refreshToken}) -> {update, destroy}`: a new worker or token
  *    refetches the mounts; the rules follow the store.
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=d8c111d6b6c2';
-import { isWorkerPath } from '../../pose/connect/path-mappings.js?v=d8c111d6b6c2';
-import { openRemoteFileBrowser } from './remote-file-browser.js?v=d8c111d6b6c2';
-import { railIconSvg } from '../panel-rail-icons.js?v=d8c111d6b6c2';
-import { el, button } from './dom.js?v=d8c111d6b6c2';
+import { useConnectStore } from '../../pose/connect/store.js?v=8802bcaa2489';
+import { isWorkerPath } from '../../pose/connect/path-mappings.js?v=8802bcaa2489';
+import { openRemoteFileBrowser } from './remote-file-browser.js?v=8802bcaa2489';
+import { railIconSvg } from '../panel-rail-icons.js?v=8802bcaa2489';
+import { el, button } from './dom.js?v=8802bcaa2489';
 
 const NO_PATH_RULES = [];
 

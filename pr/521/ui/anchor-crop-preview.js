@@ -10,9 +10,9 @@
  * own model's crop, and a view no model trains on shows none. Drawn by `drawAllOverlays` (`ui/rendering.js`) after
  * the planes, through the same transform; the panel sets and clears it.
  */
-import { makeVideoToCanvasTransform } from './overlays.js?v=d8c111d6b6c2';
-import { overlayDrawSize } from './overlay-window.js?v=d8c111d6b6c2';
-import { cropCentre, frameScale } from '../pose/training-crop-size.js?v=d8c111d6b6c2';
+import { makeVideoToCanvasTransform } from './overlays.js?v=8802bcaa2489';
+import { overlayDrawSize } from './overlay-window.js?v=8802bcaa2489';
+import { cropCentre, frameScale } from '../pose/training-crop-size.js?v=8802bcaa2489';
 
 const COLOR = '#f97316';
 

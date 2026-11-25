@@ -26,10 +26,10 @@
  *
  * Imports only inside `pose/connect/` (Node tests: tests/test-connect-new-job-plan.mjs).
  */
-import { buildRunInferenceSpecs, inferModelType } from "./launcher-spec.js?v=d8c111d6b6c2";
-import { buildRemoteTrackSpecs } from "./remote-track-spec.js?v=d8c111d6b6c2";
-import { projectTag } from "./project-tag.js?v=d8c111d6b6c2";
-import { WORKER_FILE_INFERENCE_TARGETS } from "./worker-ui-helpers.js?v=d8c111d6b6c2";
+import { buildRunInferenceSpecs, inferModelType } from "./launcher-spec.js?v=8802bcaa2489";
+import { buildRemoteTrackSpecs } from "./remote-track-spec.js?v=8802bcaa2489";
+import { projectTag } from "./project-tag.js?v=8802bcaa2489";
+import { WORKER_FILE_INFERENCE_TARGETS } from "./worker-ui-helpers.js?v=8802bcaa2489";
 
 export const VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv", ".m4v"];
 

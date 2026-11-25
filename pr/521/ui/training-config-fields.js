@@ -16,7 +16,7 @@
  * panel's Data section (the dialog shows the same values).
  */
 
-import { hyperparamsFromConfig, ROTATION_OPTIONS, MAX_EPOCHS_HINT, BATCH_SIZE_HINT, ROTATION_HINT, SCALE_HINT } from './training-args.js?v=d8c111d6b6c2';
+import { hyperparamsFromConfig, ROTATION_OPTIONS, MAX_EPOCHS_HINT, BATCH_SIZE_HINT, ROTATION_HINT, SCALE_HINT } from './training-args.js?v=8802bcaa2489';
 
 function obj(v) { return v && typeof v === 'object' && !Array.isArray(v) ? v : null; }
 

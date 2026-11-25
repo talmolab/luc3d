@@ -26,7 +26,7 @@
  *    subscribe is still awaiting invalidates it; that subscribe unsubscribes what it got and
  *    installs nothing, so no second subscription or interval leaks.
  *
- * @typedef {import("./client.js?v=d8c111d6b6c2").WorkerEvent} WorkerEvent
+ * @typedef {import("./client.js?v=8802bcaa2489").WorkerEvent} WorkerEvent
  * @typedef {"unknown" | "queued" | "running" | "completed" | "failed" | "canceled"} JobStreamStatus
  * @typedef {{ epoch: number, trainLoss: number | null, valLoss: number | null }} EpochSample
  * @typedef {{ globalBatch: number, loss: number }} BatchSample
@@ -57,8 +57,8 @@
  * @property {Record<string, any> | null} result
  * @property {number} lastSeq Highest event `seq` applied so far.
  */
-import { parseJobTelemetry } from "./job-telemetry.js?v=d8c111d6b6c2";
-import { MAX_LOG_LINES } from "./process-log.js?v=d8c111d6b6c2";
+import { parseJobTelemetry } from "./job-telemetry.js?v=8802bcaa2489";
+import { MAX_LOG_LINES } from "./process-log.js?v=8802bcaa2489";
 
 // ── trainingStore.ts pieces (verbatim) ──────────────────────────────
 

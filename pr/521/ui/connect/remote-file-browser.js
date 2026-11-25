@@ -14,14 +14,14 @@
  *  - one scroller (the list); Lucide icons from the rail's set;
  *  - a scrim + card (`.rfb-*`): Esc and a scrim click close, Tab trapped (`trapModal`).
  */
-import { useConnectStore } from '../../pose/connect/store.js?v=d8c111d6b6c2';
-import { createRemoteBrowserStore } from '../../pose/connect/remote-browser-store.js?v=d8c111d6b6c2';
+import { useConnectStore } from '../../pose/connect/store.js?v=8802bcaa2489';
+import { createRemoteBrowserStore } from '../../pose/connect/remote-browser-store.js?v=8802bcaa2489';
 import {
     KIND_LABELS, baseName, fileKind, filterLabel, formatModified, formatSize, joinPath, matchesFilter,
     matchesSearch, mountRootFor, normalizeFilter, parentPath, pathTrail, sortEntries,
-} from '../../pose/connect/remote-browser.js?v=d8c111d6b6c2';
-import { trapModal } from './layers.js?v=d8c111d6b6c2';
-import { el, button, icon as baseIcon } from './dom.js?v=d8c111d6b6c2';
+} from '../../pose/connect/remote-browser.js?v=8802bcaa2489';
+import { trapModal } from './layers.js?v=8802bcaa2489';
+import { el, button, icon as baseIcon } from './dom.js?v=8802bcaa2489';
 
 export { mountRootFor };
 

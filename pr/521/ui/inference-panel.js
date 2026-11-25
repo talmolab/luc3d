@@ -39,22 +39,22 @@
  * `window.lucidDesktop` (src-tauri/js/lucid-desktop.js), looked up inside
  * `setupInferencePanel` and never on the web; it imports no desktop code.
  */
-import { state } from './app-state.js?v=d8c111d6b6c2';
-import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=d8c111d6b6c2';
-import { railIconSvg } from './panel-rail-icons.js?v=d8c111d6b6c2';
-import { setInfoTip } from './info-tip.js?v=d8c111d6b6c2';
-import { noteProgress, resetProgress } from './progress-delta.js?v=d8c111d6b6c2';
+import { state } from './app-state.js?v=8802bcaa2489';
+import { registerPanelRailPanel, showPanelTab } from './panel-rail.js?v=8802bcaa2489';
+import { railIconSvg } from './panel-rail-icons.js?v=8802bcaa2489';
+import { setInfoTip } from './info-tip.js?v=8802bcaa2489';
+import { noteProgress, resetProgress } from './progress-delta.js?v=8802bcaa2489';
 import {
     defaultInferenceConfig, INFERENCE_DEFAULTS, targetFrames, sampleFrames, pickInferenceSubcommand,
     parseProgressLine, formatDuration, formatEta, framesToSpec,
-} from './inference-args.js?v=d8c111d6b6c2';
-import { planInferenceJobs, runJobQueue, joinPath, viewInferenceBlocker } from './inference-jobs.js?v=d8c111d6b6c2';
-import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=d8c111d6b6c2';
-import { mergeViewPredictions } from './inference-merge.js?v=d8c111d6b6c2';
-import { createRemoteInference } from './connect/remote-inference.js?v=d8c111d6b6c2';
-import { createBackendPicker } from './connect/backend-picker.js?v=d8c111d6b6c2';
-import { createAssignment, addModel, assignViews, perViewModelPaths, viewsOfModel, modelLabel, pruneViews } from './inference-model-assignment.js?v=d8c111d6b6c2';
-import { openModelsModal } from './inference-models-modal.js?v=d8c111d6b6c2';
+} from './inference-args.js?v=8802bcaa2489';
+import { planInferenceJobs, runJobQueue, joinPath, viewInferenceBlocker } from './inference-jobs.js?v=8802bcaa2489';
+import { matchViewVideos, isVideoName } from './inference-video-paths.js?v=8802bcaa2489';
+import { mergeViewPredictions } from './inference-merge.js?v=8802bcaa2489';
+import { createRemoteInference } from './connect/remote-inference.js?v=8802bcaa2489';
+import { createBackendPicker } from './connect/backend-picker.js?v=8802bcaa2489';
+import { createAssignment, addModel, assignViews, perViewModelPaths, viewsOfModel, modelLabel, pruneViews } from './inference-model-assignment.js?v=8802bcaa2489';
+import { openModelsModal } from './inference-models-modal.js?v=8802bcaa2489';
 
 export const INFERENCE_TAB_ID = 'tabInference';
 
@@ -1429,6 +1429,10 @@ export async function runTrainedModels(o) {
     // The trained views run even if they were unchecked here; the others keep their checkbox.
     assigned.forEach(function (v) { videos.unselected.delete(v); });
     if (rem) {
+        // Results not loaded yet would be loaded together with the new ones (Fetch & Load takes every
+        // pending job), so they come first; then a finished run is dismissed, as the local branch below does.
+        if (remote.hasUnloaded()) return { ok: false, skipped: true, error: 'The last inference run has results that are not loaded yet: Fetch & Load Results in the Inference panel first.' };
+        if (remote.isDone()) remote.dismiss();
         const r = await startRemoteWith(a);
         return Object.assign({ views: assigned }, r);
     }

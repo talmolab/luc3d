@@ -13,25 +13,25 @@
  *  - one job per view; another session's result is refused until that session is current;
  *  - the output folder must already exist (no mkdir in the protocol); a progress card shows the fetch.
  */
-import { useConnectStore, pathRulesFor } from '../../pose/connect/store.js?v=d8c111d6b6c2';
-import { shallowEqual } from '../../pose/connect/mini-store.js?v=d8c111d6b6c2';
-import { createJobStream } from '../../pose/connect/job-stream.js?v=d8c111d6b6c2';
-import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=d8c111d6b6c2';
-import { defaultOutputDir } from '../../pose/connect/remote-output-dir.js?v=d8c111d6b6c2';
-import { formatRunTimestamp, formatDuration } from '../../pose/connect/timestamp.js?v=d8c111d6b6c2';
+import { useConnectStore, pathRulesFor } from '../../pose/connect/store.js?v=8802bcaa2489';
+import { shallowEqual } from '../../pose/connect/mini-store.js?v=8802bcaa2489';
+import { createJobStream } from '../../pose/connect/job-stream.js?v=8802bcaa2489';
+import { lucidProjectTag } from '../../pose/connect/project-tag.js?v=8802bcaa2489';
+import { defaultOutputDir } from '../../pose/connect/remote-output-dir.js?v=8802bcaa2489';
+import { formatRunTimestamp, formatDuration } from '../../pose/connect/timestamp.js?v=8802bcaa2489';
 import {
     VIDEO_EXTENSIONS, resolveViewVideos, describeViewStatus, inferLocateRule, planRemoteRun, pendingFetches,
     lastProgress, lastErrorLine, sessionRootOf, unresolvedViews, progressFromLine,
-} from '../../pose/connect/remote-inference-plan.js?v=d8c111d6b6c2';
-import { openRemoteFileBrowser } from './remote-file-browser.js?v=d8c111d6b6c2';
-import { state } from '../app-state.js?v=d8c111d6b6c2';
-import { mergeViewPredictions } from '../inference-merge.js?v=d8c111d6b6c2';
-import { railIconSvg } from '../panel-rail-icons.js?v=d8c111d6b6c2';
-import { noteProgress, resetProgress } from '../progress-delta.js?v=d8c111d6b6c2';
-import { formatEta } from '../inference-args.js?v=d8c111d6b6c2';
-import { showLoading, showLoadingProgress, hideLoading } from '../loading-overlay.js?v=d8c111d6b6c2';
-import { el, button, icon as baseIcon } from './dom.js?v=d8c111d6b6c2';
-import { createAssignment, modelOfView, perViewModelPaths } from '../inference-model-assignment.js?v=d8c111d6b6c2';
+} from '../../pose/connect/remote-inference-plan.js?v=8802bcaa2489';
+import { openRemoteFileBrowser } from './remote-file-browser.js?v=8802bcaa2489';
+import { state } from '../app-state.js?v=8802bcaa2489';
+import { mergeViewPredictions } from '../inference-merge.js?v=8802bcaa2489';
+import { railIconSvg } from '../panel-rail-icons.js?v=8802bcaa2489';
+import { noteProgress, resetProgress } from '../progress-delta.js?v=8802bcaa2489';
+import { formatEta } from '../inference-args.js?v=8802bcaa2489';
+import { showLoading, showLoadingProgress, hideLoading } from '../loading-overlay.js?v=8802bcaa2489';
+import { el, button, icon as baseIcon } from './dom.js?v=8802bcaa2489';
+import { createAssignment, modelOfView, perViewModelPaths } from '../inference-model-assignment.js?v=8802bcaa2489';
 
 function icon(name, cls) { return baseIcon(name, cls, 'inf-icon'); }
 function basename(p) { return String(p).split(/[\\/]/).pop(); }
@@ -303,6 +303,11 @@ export function createRemoteInference(host) {
         }).sort(function (a, b) { return a.submittedAt - b.submittedAt; });
     }
     function pending() { return pendingFetches(S().trackedJobs, { projectTagId: tag().id }); }
+    /** Whether the current session has finished results on a worker that Fetch & Load has not loaded yet. */
+    function hasUnloaded() {
+        const session = host.getSession();
+        return !!session && pending().some(function (j) { return j.sessionId === session.name; });
+    }
 
     function ensureStreams(jobs) {
         jobs.forEach(function (j) {
@@ -700,7 +705,7 @@ export function createRemoteInference(host) {
     }
 
     return {
-        pickModel, getAssignment, setAssignment, connected, workerVideo, buildViews, buildRun, sync, start, cancel, fetchAndLoad, canRun, whyNot, isRunning, onChange, refreshUi,
+        pickModel, getAssignment, setAssignment, connected, workerVideo, buildViews, buildRun, sync, start, cancel, fetchAndLoad, canRun, whyNot, isRunning, isDone, dismiss, hasUnloaded, onChange, refreshUi,
         _state: function () { return { views: views, out: out, run: run, log: log, runIds: runIds, assignment: assignment }; },
     };
 }

@@ -9,7 +9,7 @@
  *  - vanilla DOM; not a modal (no scrim, no focus, ignores Esc), text selectable;
  *  - no notification history (LUCID has no Notifications panel).
  */
-import { button, icon } from './dom.js?v=d8c111d6b6c2';
+import { button, icon } from './dom.js?v=8802bcaa2489';
 
 const TOAST_MS = 4000;
 const MAX_VISIBLE = 3;

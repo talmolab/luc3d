@@ -13,7 +13,7 @@
  *
  * Import-free except `./inference-args.js` (Node tests: tests/test-inference-jobs.mjs).
  */
-import { buildInferenceArgs, modelsForView } from './inference-args.js?v=d8c111d6b6c2';
+import { buildInferenceArgs, modelsForView } from './inference-args.js?v=8802bcaa2489';
 
 /** Filesystem-safe piece of a view name for an output file name. */
 export function safeFilePart(name) {
