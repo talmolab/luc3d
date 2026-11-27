@@ -311,6 +311,14 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx, onPr
                 fc = views[vi].frameCount || 0; break;
             }
         }
+        if (!fc && videoFiles) {
+            for (var vfi = 0; vfi < videoFiles.length; vfi++) {
+                if (videoFiles[vfi].name === c.name || videoFiles[vfi].assignedCamera === c.name) {
+                    fc = videoFiles[vfi].frameCount || 0;
+                    break;
+                }
+            }
+        }
         // No attached video (lazily reopened session before File → Load
         // Videos): fall back to the reopened file's own video record so shape
         // and filename round-trip instead of degrading to zeros/<camName>.mp4.
