@@ -2440,6 +2440,12 @@ export async function handleLoadSessionFolderSingleSlp() {
         // on save. This loader reads the file's first session only.
         session.fileProvenance = fileSessionProvenance(slpData.provenance,
             fileSessionNames(slpData.sessions), 0);
+        // What the file says about each camera's video, for a save with none loaded.
+        session.fileVideos = new Map();
+        for (var fvk in videoIdxToCameraName) {
+            var fileVideo = slpData.videos[parseInt(fvk)];
+            if (fileVideo && !fileVideo.embedded) session.fileVideos.set(videoIdxToCameraName[fvk], fileVideo);
+        }
 
         // The session's own `metadata.lucid`: restoreGroupingAndUnlink (below)
         // reads its grouping and identity keys, these two readers the rest —
@@ -3813,6 +3819,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
 
             var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
+
+            // What this camera's file says about its video, for a save with none loaded.
+            if (slpData.videos && slpData.videos[0] && !slpData.videos[0].embedded) {
+                if (!state.session.fileVideos) state.session.fileVideos = new Map();
+                state.session.fileVideos.set(camName, slpData.videos[0]);
+            }
 
             if (slpData.columnar) {
                 addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap);

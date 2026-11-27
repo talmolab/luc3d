@@ -3295,7 +3295,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         sioCameras.push(sioCam);
         lucidCamToSioCam.set(cam.name, sioCam);
 
-        var videoPath = cam.name + '.mp4';
+        var videoPath = null;
         var vw = 0, vh = 0, fc = 0;
         for (var vi = 0; vi < (views || []).length; vi++) {
             var v = views[vi];
@@ -3311,20 +3311,36 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 var vf = videoFiles[vfi];
                 if ((vf.name === cam.name || vf.assignedCamera === cam.name) && vf.videoPath) {
                     videoPath = vf.videoPath;
+                    // A view does not always carry it. Without it another app opens this
+                    // video as 0 frames until the video itself is found.
+                    if (!fc) fc = vf.frameCount || 0;
                     break;
                 }
             }
         }
+        // No video loaded (the project was opened without them): the file's own record
+        // of it, so its shape and filename survive the save, as on the streaming writer.
+        var fileVideo = session.fileVideos ? session.fileVideos.get(cam.name) : null;
+        var channels = 1;
+        if (fileVideo) {
+            var fileShape = fileVideo.shape || [];
+            if (!vw && !vh && fileShape[3]) channels = Number(fileShape[3]) || 1;
+            fc = fc || Number(fileShape[0]) || Number(fileVideo.fileFrames) || 0;
+            vh = vh || Number(fileShape[1]) || 0;
+            vw = vw || Number(fileShape[2]) || 0;
+            if (!videoPath && typeof fileVideo.filename === 'string') videoPath = fileVideo.filename;
+        }
+        if (!videoPath) videoPath = cam.name + '.mp4';
         var video = new SIO.Video({
             filename: videoPath,
             backendMetadata: {
                 type: 'MediaVideo',
-                shape: [fc, vh, vw, 1],
+                shape: [fc, vh, vw, channels],
                 filename: videoPath,
             },
             openBackend: false,
         });
-        video.shape = [fc, vh, vw, 1];
+        video.shape = [fc, vh, vw, channels];
         sioVideos.push(video);
     });
 
@@ -4074,6 +4090,9 @@ export async function parseSlpViaSleapIO(file, onProgress) {
             sourceFilename: srcName,
             backendType: embedded ? 'HDF5Video' : 'MediaVideo',
             shape: v.shape != null ? v.shape : null,
+            // A file can know a video's frame count but not its size, `[600, 0, 0, 1]`,
+            // which leaves `shape` empty (patch `(video frame count)`).
+            fileFrames: (v.backendMetadata && v.backendMetadata.lucidFileFrames) || 0,
             embedded: embedded,
             dataset: (v.backendMetadata && v.backendMetadata.dataset) != null ? v.backendMetadata.dataset : null,
         };

@@ -3544,6 +3544,11 @@ export class Session {
     renameCameraInAllData(oldName, newName) {
         if (oldName === newName) return;
 
+        if (this.fileVideos && this.fileVideos.has(oldName)) {
+            this.fileVideos.set(newName, this.fileVideos.get(oldName));
+            this.fileVideos.delete(oldName);
+        }
+
         // Rename in all FrameGroups
         for (const fg of this.frameGroups.values()) {
             // Rename in fg.instances (Map<string, Instance[]>)
