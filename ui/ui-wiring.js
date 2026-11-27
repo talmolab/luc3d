@@ -50,7 +50,7 @@ import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
 import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
          loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
+import { OnDemandVideoDecoder, VideoController, hasEmbeddedVideos } from '../loading/video.js';
 import { loadDemoProject } from '../loading/demo-project.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
@@ -1579,11 +1579,15 @@ export function setupMenus() {
                 var file = await handles[0].getFile();
                 // The loader adopts the handle (File ▸ Save's target) only once it
                 // replaces the open project: a cancelled load keeps the old one.
-                handleLoadProject(file, saveTargetHandle(handles[0], file));
+                // Awaited, so the embedded-images check below sees the new project.
+                await handleLoadProject(file, saveTargetHandle(handles[0], file));
             } catch (e) {
                 if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
                 handleLoadProject();
             }
+            // Never a file with embedded images: a save writes no images, so it would
+            // destroy them. The next Save asks where to save instead.
+            if (hasEmbeddedVideos(state)) state.slpFileHandle = null;
         } else {
             handleLoadProject();
         }
@@ -1640,7 +1644,7 @@ export function setupMenus() {
                     });
                     if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
                     var file = await handles[0].getFile();
-                    handleLoadSlpFile(file, saveTargetHandle(handles[0], file));
+                    await handleLoadSlpFile(file, saveTargetHandle(handles[0], file));   // awaited: see menuLoadProject
                 } catch (e) {
                     if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
                     // Fallback to input picker
@@ -1648,6 +1652,7 @@ export function setupMenus() {
                     if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
                     handleLoadSlpFile(slpFiles[0]);
                 }
+                if (hasEmbeddedVideos(state)) state.slpFileHandle = null;   // see menuLoadProject
             } else {
                 var slpFiles = await pickFiles({ accept: '.slp,.h5' });
                 if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }

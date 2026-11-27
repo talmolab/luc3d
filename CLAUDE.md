@@ -290,6 +290,19 @@ Tests: `tests/test-campy-session.mjs`, `tests/test-calibration-file-pick.mjs` §
 - **Counts and frame numbers** shown to users use `n.toLocaleString('en-US')` or `formatFrameNumber` (`ui/frame-readout.js`). Not in attributes, keys or logs. Join frame ranges with `'; '`. Tests reading counts accept `[\d,]+`.
 - **Track vs identity colours:** paint track colours only through `getTrackColor(trackIdx, colorByIdentity)` (`ui/overlays.js`): vivid `TRACK_COLORS` in Track mode, muted `UNIDENTIFIED_TRACK_COLORS` in Identity mode. Every track-colour painter (labels, timeline rows, Visibility swatches) passes the mode; the `onColorByChange` handler in `ui/ui-wiring.js` recolors them, so change `state.colorByIdentity` only via `setColorByIdentity` (`ui/color-by.js`). Don't change `IDENTITY_COLORS` 0-6. After adding any identity or fixed canvas colour, run `tests/test-track-identity-palette.mjs`; if it fails, change the palette, never the thresholds.
 
+## `.slp` files with embedded images
+
+A `.slp` can hold its own images (`/video{N}/video`, usually `.pkg.slp`): `EmbeddedVideoDecoder` (`loading/video.js`) over a frame worker (`loading/frame-worker.js`, `loading/slp-package-reader.js`), opened by `handleLoadSlpFile` and `handleAddSlp`.
+- **Convert where h5wasm hands it over.** Its int64 comes back as BigInt (`width`, `height`, `channels`, `frame_numbers`, in `SLPPackageReader.getVideos`), and a canvas size or frame arithmetic throws on one.
+- **Read one frame's bytes, never `dataset.value`:** that reads the whole video per frame and, on variable-length rows, never frees it (a real 84 MB package ran the reader out of memory in about 50 frames). Layouts: variable-length rows, fixed-width rows, the JS writer's one run of bytes (`frame_sizes`), and uncompressed pixels (format `hdf5`). `getVideos` tells the first three apart as sleap-io.js does (`classifyLayout`).
+- **Red and blue:** an encoded image stored BGR is swapped; before format 1.4 that is the default. Uncompressed pixels show as stored, as Python reads them.
+- **A list entry's `dataset` says which images are its own** (`embeddedVideoForEntry`), never the group's number: groups need not follow list order. Going by the number shows the wrong camera's images with no error (`out_of_order_embedded.pkg.slp`).
+- **Most frames have no image.** Clear the view (`seekToFrame`), count frames up to the last labeled one (`minFrames`), and open on a frame with an image (`session.lastFrame`, which `switchSession` goes to).
+- **A save writes poses and video names, not images, so it must never write over the file they are in.** The menus don't record that file's handle (`hasEmbeddedVideos`), the next Save asks where to save, and its status says what is in the new file. This is why a large one must not take the lazy route (`slpHasEmbeddedImages`): no decoder there, so no way to tell.
+- **The decoder is not in the pool.** `switchSession` keeps it and drops only its frames, and a loader that replaces the project calls `closeEmbeddedFrames`, or its frames stay alive through the worker's listener.
+- A frame that fails to read still answers (`{type:'frame', error}`), or the seek and the load behind it wait forever.
+Tests: `tests/test-slp-package-reader.mjs`, e2e `slp-embedded-images` (fixtures: `tests/fixtures/slp-embedded/`, `make_fixture.py`).
+
 ## Cloud-synced files: read a user's File through `loading/cold-read-guard.js`
 
 In Google Drive for desktop (macOS File Provider), a Blob read of a not-yet-downloaded range can throw or return runs of zeros with no error. Never call `file.arrayBuffer()` / `slice().arrayBuffer()` on a user's file directly; use `readBlobRange` / `readBlobArrayBuffer` (retries thrown reads; re-reads all-zero 4 KiB blocks **plus the block on each side**, filling in only zero bytes, since a zero run can start or end part-way into a block — the same rule as h5wasm's `lucidColdReadGuard`).

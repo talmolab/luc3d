@@ -1858,6 +1858,45 @@ export class OnDemandVideoDecoder {
 // ---------------------------------------------------------------------------
 // EmbeddedVideoDecoder - On-demand frame extraction from SLP via frame-worker
 // ---------------------------------------------------------------------------
+
+/**
+ * Uncompressed pixels (format 'hdf5'), a row at a time, as a bitmap. Shown as stored,
+ * whatever `channel_order` says, as Python reads them: that is about encoded images.
+ * @param {Uint8Array} bytes - one frame, height x width x channels
+ * @param {Object} info - the video (`SLPPackageReader.getVideos`)
+ */
+function rawPixelsBitmap(bytes, info) {
+    var n = info.width * info.height;
+    var channels = info.channels || Math.round(bytes.length / n);
+    var rgba = new Uint8ClampedArray(n * 4);
+    var green = channels === 1 ? 0 : 1;
+    var blue = channels === 1 ? 0 : 2;
+    for (var i = 0; i < n; i++) {
+        var p = i * channels;
+        rgba[i * 4] = bytes[p];
+        rgba[i * 4 + 1] = bytes[p + green];
+        rgba[i * 4 + 2] = bytes[p + blue];
+        rgba[i * 4 + 3] = 255;
+    }
+    return createImageBitmap(new ImageData(rgba, info.width, info.height));
+}
+
+/** An image stored blue-first, as it should show. Closes the bitmap it is given. */
+async function swapRedBlue(bitmap) {
+    var canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    var ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0);
+    var image = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+    var px = image.data;
+    for (var i = 0; i < px.length; i += 4) {
+        var r = px[i];
+        px[i] = px[i + 2];
+        px[i + 2] = r;
+    }
+    bitmap.close();
+    return createImageBitmap(image);
+}
+
 export class EmbeddedVideoDecoder {
     /**
      * Decoder for embedded video frames in SLP files.
@@ -1868,6 +1907,8 @@ export class EmbeddedVideoDecoder {
      * @param {Worker} options.worker - frame-worker.js Worker instance
      * @param {Object} options.videoInfo - Video metadata from SLPPackageReader.getVideos()
      * @param {number} [options.cacheSize=60] - Number of decoded ImageBitmaps to cache
+     * @param {number} [options.minFrames=0] - Frames to count even past the last image:
+     *   the labeled frames, or those after it could not be reached
      */
     constructor(options) {
         this._worker = options.worker;
@@ -1880,24 +1921,30 @@ export class EmbeddedVideoDecoder {
         var info = this._videoInfo;
         var width = info.width || 0;
         var height = info.height || 0;
+        // A grey image has nothing to swap, and a swap costs a pixel loop per frame.
+        this._swapRedBlue = info.channelOrder === 'BGR' && info.channels !== 1;
 
         // Build display frame → embedded index lookup
         this._displayToEmbedded = new Map();
         var maxDisplayFrame = 0;
+        /** The first frame with an image, or null when the video holds none. */
+        this.firstFrame = null;
         var frameNumbers = info.frameNumbers || [];
         for (var i = 0; i < frameNumbers.length; i++) {
             var df = frameNumbers[i];
             this._displayToEmbedded.set(df, i);
             if (df > maxDisplayFrame) maxDisplayFrame = df;
+            if (this.firstFrame === null || df < this.firstFrame) this.firstFrame = df;
         }
         if (frameNumbers.length === 0) {
             for (var j = 0; j < info.frameCount; j++) {
                 this._displayToEmbedded.set(j, j);
             }
             maxDisplayFrame = Math.max(info.frameCount - 1, 0);
+            if (info.frameCount > 0) this.firstFrame = 0;
         }
 
-        var totalFrames = maxDisplayFrame + 1;
+        var totalFrames = Math.max(maxDisplayFrame + 1, options.minFrames || 0);
         this.samples = new Array(totalFrames);
         for (var k = 0; k < totalFrames; k++) {
             this.samples[k] = { index: k };
@@ -1932,11 +1979,24 @@ export class EmbeddedVideoDecoder {
         var pending = this._pending.get(embeddedIdx);
         if (!pending) return;
 
+        if (data.error) {
+            videoLog("Could not read embedded frame " + embeddedIdx + " of " + data.videoKey + ": " + data.error, "error");
+            pending.resolve(null);
+            this._pending.delete(embeddedIdx);
+            return;
+        }
+
         try {
             var format = data.format || 'png';
-            var mimeType = format === 'jpg' || format === 'jpeg' ? 'image/jpeg' : 'image/png';
-            var blob = new Blob([data.pngBytes], { type: mimeType });
-            var bitmap = await createImageBitmap(blob);
+            var bitmap;
+            if (format === 'hdf5') {
+                bitmap = await rawPixelsBitmap(data.pngBytes, this._videoInfo);
+            } else {
+                var mimeType = format === 'jpg' || format === 'jpeg' ? 'image/jpeg' : 'image/png';
+                var blob = new Blob([data.pngBytes], { type: mimeType });
+                bitmap = await createImageBitmap(blob);
+                if (this._swapRedBlue) bitmap = await swapRedBlue(bitmap);
+            }
             this._addToCache(displayFrame, bitmap);
             pending.resolve(bitmap);
         } catch (err) {
@@ -1994,6 +2054,25 @@ export class EmbeddedVideoDecoder {
         this.cache.set(displayFrame, bitmap);
     }
 
+    /** OnDemandVideoDecoder's contract: drop the decoded frames, for a view going off screen. */
+    releaseFrames() {
+        for (var entry of this.cache) {
+            if (entry[1] && typeof entry[1].close === "function") entry[1].close();
+        }
+        this.cache.clear();
+    }
+
+    /** OnDemandVideoDecoder's contract: `VideoController._applyFrameCacheBudget` sizes the cache. */
+    setCacheSize(n) {
+        this.cacheSize = Math.max(1, Math.floor(n));
+        while (this.cache.size > this.cacheSize) {
+            var oldest = this.cache.keys().next().value;
+            var oldBitmap = this.cache.get(oldest);
+            if (oldBitmap && typeof oldBitmap.close === "function") oldBitmap.close();
+            this.cache.delete(oldest);
+        }
+    }
+
     /**
      * OnDemandVideoDecoder.peekFrame's contract (a caller-owned copy, scaled to
      * `width`): only frames embedded in the .slp have one. Goes through getFrame
@@ -2027,6 +2106,26 @@ export class EmbeddedVideoDecoder {
         this.videoTrack = null;
         videoLog("EmbeddedVideoDecoder closed");
     }
+}
+
+/** Whether any of the project's videos is embedded in a `.slp` it was opened from. */
+export function hasEmbeddedVideos(state) {
+    return (state.videoFiles || []).some(function (vf) {
+        return vf.decoder instanceof EmbeddedVideoDecoder;
+    });
+}
+
+/**
+ * Close a project's embedded images before it is replaced. Their decoders are
+ * not in the decoder pool, each keeps its decoded frames, and its worker's
+ * message listener keeps it alive until that worker is stopped.
+ */
+export function closeEmbeddedFrames(state) {
+    (state.videoFiles || []).forEach(function (vf) {
+        if (vf.decoder instanceof EmbeddedVideoDecoder) vf.decoder.close();
+    });
+    (state.frameWorkers || []).forEach(function (worker) { worker.terminate(); });
+    state.frameWorkers = [];
 }
 
 // ---------------------------------------------------------------------------
@@ -2647,6 +2746,7 @@ export class VideoController {
         if (frameIndex >= this.state.totalFrames) frameIndex = this.state.totalFrames - 1;
 
         this.state.currentFrame = frameIndex;
+        var seekNumber = this._seeksStarted = (this._seeksStarted || 0) + 1;
 
         // Decode the shown views in parallel
         var views = this._shownViews();
@@ -2659,6 +2759,12 @@ export class VideoController {
 
         var frames = await Promise.all(framePromises);
 
+        // A later seek has already painted (its frame was cached, say): this one
+        // must not put its older picture over it. Seeks finishing in order all
+        // paint, so stepping faster than frames decode still shows them.
+        if (seekNumber < this._lastSeekPainted) return;
+        this._lastSeekPainted = seekNumber;
+
         // Render each frame to its canvas and clear/redraw overlays
         for (var i = 0; i < views.length; i++) {
             var view = views[i];
@@ -2670,6 +2776,10 @@ export class VideoController {
                 // went off screen: `releaseFrames`) — skip it rather than throw.
                 try { view.ctx.drawImage(videoFrame, 0, 0, view.canvas.width, view.canvas.height); }
                 catch (e) { /* closed bitmap — the view is no longer shown */ }
+            } else if (view.decoder instanceof EmbeddedVideoDecoder && view.ctx && view.canvas) {
+                // A .slp's embedded images cover only some frames. Without this,
+                // the last picture stays up under this frame's poses.
+                view.ctx.clearRect(0, 0, view.canvas.width, view.canvas.height);
             }
 
             // Clear the overlay canvas for fresh overlay drawing
@@ -3001,6 +3111,16 @@ export class VideoController {
             d._vfTsCheck = null;
             if (d._vfTimestamps === 'bad' && d._vfTsWhy === 'timeout') { d._vfTimestamps = undefined; d._vfTsWhy = null; }
         });
+
+        // Images embedded in a .slp have no <video> to play.
+        if (this._shownViews().some(function (v) { return v.decoder instanceof EmbeddedVideoDecoder; })) {
+            this._startEmbeddedPlayback();
+            if (this.callbacks.onPlaybackStateChange) {
+                this.callbacks.onPlaybackStateChange(true);
+            }
+            videoLog("Playback started (embedded images)");
+            return;
+        }
 
         // ------------------------------------------------------------------
         // Buffered mediabunny playback (issue #115 follow-up) — OPT-IN.
@@ -3416,6 +3536,30 @@ export class VideoController {
         }
 
         videoLog("Playback started (native)");
+    }
+
+    /**
+     * Play by seeking, one frame at a time at the frame rate and speed, dropping
+     * frames when a seek takes longer than a frame. Frames with no image show
+     * only their poses, as they do when stepped to (`seekToFrame`).
+     */
+    _startEmbeddedPlayback() {
+        var self = this;
+        var rate = (this.state.fps || 30) * (this.state.speedMultiplier || 1) / 1000;
+        var startFrame = this.state.currentFrame;
+        var startTime = performance.now();
+        var tick = async function () {
+            self._playRAF = null;
+            if (!self.state.isPlaying) return;
+            var frame = startFrame + Math.floor((performance.now() - startTime) * rate);
+            if (frame >= self.state.totalFrames) {
+                self.stopPlayback();
+                return;
+            }
+            if (frame !== self.state.currentFrame) await self.seekToFrame(frame);
+            if (self.state.isPlaying) self._playRAF = requestAnimationFrame(tick);
+        };
+        this._playRAF = requestAnimationFrame(tick);
     }
 
     /**

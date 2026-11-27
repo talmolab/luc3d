@@ -46,6 +46,7 @@ export const state = {
     set trailLength(frames) { this.trailSeconds = frames > 0 ? frames / trailRate(this.fps) : 0; },
     trailShade: DEFAULT_TRAIL_SHADE, // node-trail color vs the track's: a TRAIL_SHADES key (ui/overlays.js). Set via Tracks menu / Trails button; remembered in localStorage.
     decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
+    frameWorkers: [],           // Workers reading embedded images from the open .slp (closeEmbeddedFrames)
     slpFileHandle: null,        // FileSystemFileHandle for quick save
     isDirty: false,             // true when unsaved annotation changes exist
     isSaving: false,            // true while save is in progress

@@ -129,7 +129,14 @@ function handleGetVideos() {
 function handleGetFrame(videoKey, embeddedIdx) {
     const startTime = performance.now();
 
-    const result = reader.getFrame(videoKey, embeddedIdx);
+    let result;
+    try {
+        result = reader.getFrame(videoKey, embeddedIdx);
+    } catch (err) {
+        // Answer the request: whoever asked for this frame is waiting for it.
+        postMessage({ type: 'frame', videoKey, embeddedIdx, error: err.message });
+        return;
+    }
 
     const extractTime = performance.now() - startTime;
 

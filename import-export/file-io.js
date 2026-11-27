@@ -4064,13 +4064,15 @@ export async function parseSlpViaSleapIO(file, onProgress) {
 
     // --- videos[] ---
     var videos = (labels.videos || []).map(function (v, i) {
+        // A name is one string below, but an image sequence's is a list of its images.
+        var oneName = function (name) { return Array.isArray(name) ? name[0] : name; };
         var srcName = null;
-        if (v.sourceVideo && v.sourceVideo.filename) srcName = v.sourceVideo.filename;
+        if (v.sourceVideo && v.sourceVideo.filename) srcName = oneName(v.sourceVideo.filename);
         else if (v.backendMetadata && v.backendMetadata.source_filename) srcName = v.backendMetadata.source_filename;
         var embedded = !!v.hasEmbeddedImages;
         return {
             index: i,
-            filename: v.filename != null ? v.filename : null,
+            filename: v.filename != null ? oneName(v.filename) : null,
             sourceFilename: srcName,
             backendType: embedded ? 'HDF5Video' : 'MediaVideo',
             shape: v.shape != null ? v.shape : null,

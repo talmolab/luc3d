@@ -27,13 +27,17 @@
  * @property {string} key - HDF5 group key (e.g., 'video0')
  * @property {string} datasetPath - Full path to video dataset (e.g., '/video0/video')
  * @property {number[]} shape - Dataset shape [numFrames, maxBytes] or [numFrames]
- * @property {string} format - Image format ('png' | 'jpg' | 'hdf5')
+ * @property {string} format - Image format ('png' | 'jpg'), or 'hdf5' for uncompressed pixels
  * @property {string} channelOrder - Color channel order ('RGB' | 'BGR')
  * @property {number} width - Frame width in pixels
  * @property {number} height - Frame height in pixels
  * @property {number} channels - Number of color channels (1=grayscale, 3=color)
  * @property {number} frameCount - Number of embedded frames
  * @property {number[]} frameNumbers - Mapping from embedded index to display frame index
+ * @property {boolean} flat - All images run together in one row of bytes (the JS writer)
+ *   instead of a row per frame
+ * @property {number[]|null} frameOffsets - For a flat video: where each frame starts,
+ *   then the end of the last. Null until read, when the file has no `frame_sizes`.
  */
 
 /**
@@ -45,6 +49,58 @@
  * @property {number} embeddedIdx - Index within embedded frames
  * @property {number} displayFrame - Original video frame number
  */
+
+/**
+ * An integer attribute as a plain number, or null when absent or 0. SLEAP and
+ * sleap-io write these as int64, which h5wasm returns as BigInt; a canvas size or
+ * frame arithmetic throws on a BigInt, so nothing past this reader may see one.
+ */
+function intAttr(attr) {
+    return Number(attr?.value) || null;
+}
+
+/**
+ * The embedded video (a `getVideos()` entry) holding the images of one entry of
+ * the file's video list, or null when that entry has none (an external video).
+ *
+ * The entry names its group in `dataset` (`video2/video`), and that is the only
+ * link: a package's groups need not follow list order, and their numbers can run
+ * past the list (a package of one video can hold just `video2`). Going by the
+ * group's number puts the images on another camera.
+ *
+ * @param {EmbeddedVideoInfo[]} videos
+ * @param {{embedded: boolean, dataset: ?string}} entry - one entry of `slpData.videos`
+ * @param {number} listIdx - that entry's position in the list
+ * @returns {EmbeddedVideoInfo|null}
+ */
+export function embeddedVideoForEntry(videos, entry, listIdx) {
+    if (!entry || !entry.embedded) return null;
+    if (!entry.dataset) return videos.find((v) => v.idx === listIdx) || null;
+    const path = String(entry.dataset).replace(/^\/+/, '');
+    return videos.find((v) => v.datasetPath.replace(/^\/+/, '') === path) || null;
+}
+
+/**
+ * Where each image starts in one run of image bytes, then where the last one ends.
+ * For a flat video with no `frame_sizes`: sleap-io.js wrote none before March 2026.
+ *
+ * @param {Uint8Array} bytes
+ * @param {string} format - 'png' or 'jpg'
+ * @param {number} count - images expected
+ * @returns {number[]}
+ */
+function imageStartOffsets(bytes, format, count) {
+    const magic = format === 'png' ? [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] : [0xff, 0xd8, 0xff];
+    const offsets = [];
+    for (let i = 0; i + magic.length <= bytes.length && offsets.length < count; i++) {
+        if (bytes[i] === magic[0] && magic.every((b, k) => bytes[i + k] === b)) {
+            offsets.push(i);
+            i += magic.length - 1;
+        }
+    }
+    offsets.push(bytes.length);
+    return offsets;
+}
 
 export class SLPPackageReader {
     /**
@@ -238,6 +294,7 @@ export class SLPPackageReader {
         const root = this._file.get('/');
         const keys = root.keys();
         const videos = [];
+        const formatId = Number(this._file.get('metadata')?.attrs?.format_id?.value ?? 1);
 
         for (const key of keys) {
             // Match video{N} pattern
@@ -255,21 +312,40 @@ export class SLPPackageReader {
             // Read frame_numbers mapping
             let frameNumbers = [];
             if (frameNumbersDs && frameNumbersDs.shape[0] > 0) {
-                frameNumbers = Array.from(frameNumbersDs.value);
+                frameNumbers = Array.from(frameNumbersDs.value, Number);
             }
+
+            // One row per frame, except from the JS writer: all images in one run
+            // of bytes, its `frame_sizes` saying where each one ends.
+            const frameSizesDs = this._file.get(`/${key}/frame_sizes`);
+            const frameSizes = frameSizesDs && frameSizesDs.shape[0] > 0
+                ? Array.from(frameSizesDs.value, Number) : null;
+            const stored = frameNumbers.length || (frameSizes ? frameSizes.length : 0);
+            const flat = videoDataset.shape.length === 1 && stored > 0 && videoDataset.shape[0] !== stored;
+            let frameOffsets = null;
+            if (flat && frameSizes) {
+                frameOffsets = [0];
+                for (const size of frameSizes) frameOffsets.push(frameOffsets[frameOffsets.length - 1] + size);
+            }
+
+            // Uncompressed pixels are stored frames x height x width x channels.
+            const pixelShape = videoDataset.shape.length === 4 ? videoDataset.shape : [];
 
             const info = {
                 idx: parseInt(key.replace('video', '')),
                 key: key,
                 datasetPath: `/${key}/video`,
                 shape: videoDataset.shape,
-                format: attrs.format?.value || 'png',
-                channelOrder: attrs.channel_order?.value || 'RGB',
-                width: attrs.width?.value || null,
-                height: attrs.height?.value || null,
-                channels: attrs.channels?.value || null,
-                frameCount: videoDataset.shape[0],
-                frameNumbers: frameNumbers
+                format: String(attrs.format?.value || (pixelShape.length ? 'hdf5' : 'png')).toLowerCase(),
+                // SLEAP stored BGR before format 1.4 and did not say so.
+                channelOrder: attrs.channel_order?.value || (formatId < 1.4 ? 'BGR' : 'RGB'),
+                width: intAttr(attrs.width) || pixelShape[2] || null,
+                height: intAttr(attrs.height) || pixelShape[1] || null,
+                channels: intAttr(attrs.channels) || pixelShape[3] || null,
+                frameCount: flat ? stored : videoDataset.shape[0],
+                frameNumbers: frameNumbers,
+                flat: flat,
+                frameOffsets: frameOffsets
             };
 
             videos.push(info);
@@ -320,30 +396,28 @@ export class SLPPackageReader {
             throw new Error(`Frame index out of range: ${embeddedIdx} (0-${info.frameCount - 1})`);
         }
 
-        // Read frame data from HDF5
+        // Read this frame's bytes only. `dataset.value` reads every frame in the
+        // video each time, and on a variable-length dataset never frees them. A
+        // variable-length dataset gives one array per row; a fixed-width one
+        // (frames x longest image) gives the row's bytes flat.
         const dataset = this._file.get(info.datasetPath);
-        const frameData = dataset.value[embeddedIdx];
-
-        // Convert Int8Array to Uint8Array
-        let bytes;
-        if (frameData instanceof Int8Array) {
-            bytes = new Uint8Array(frameData.length);
-            for (let i = 0; i < frameData.length; i++) {
-                bytes[i] = frameData[i] & 0xFF;
-            }
-        } else if (Array.isArray(frameData)) {
-            bytes = new Uint8Array(frameData.length);
-            for (let i = 0; i < frameData.length; i++) {
-                const b = frameData[i];
-                bytes[i] = b < 0 ? b + 256 : b;
-            }
+        let row;
+        if (info.flat) {
+            if (!info.frameOffsets) info.frameOffsets = imageStartOffsets(dataset.value, info.format, info.frameCount);
+            const end = info.frameOffsets[embeddedIdx + 1];
+            if (end === undefined) throw new Error(`No image ${embeddedIdx} found in ${key}`);
+            row = dataset.slice([[info.frameOffsets[embeddedIdx], end]]);
         } else {
-            bytes = new Uint8Array(frameData);
+            row = dataset.slice([[embeddedIdx, embeddedIdx + 1]]);
         }
+        const frameData = Array.isArray(row) ? row[0] : row;
+        let bytes = new Uint8Array(frameData.buffer, frameData.byteOffset, frameData.byteLength);
 
-        // Trim trailing zeros (padding from fixed-length storage)
+        // Trim trailing zeros (padding from fixed-length storage). Uncompressed
+        // pixels have no padding, and a dark corner must stay. Either way this
+        // copies: the bytes are transferred, and must be this frame's alone.
         let trimEnd = bytes.length;
-        while (trimEnd > 0 && bytes[trimEnd - 1] === 0) {
+        while (info.format !== 'hdf5' && trimEnd > 0 && bytes[trimEnd - 1] === 0) {
             trimEnd--;
         }
         bytes = bytes.slice(0, trimEnd);
