@@ -15,7 +15,7 @@
  *
  * Run: node tests/test-video-table-counts.mjs
  */
-import { videoTableCounts, createVideoTableCounter } from '../ui/video-table-counts.js';
+import { videoTableCounts, createVideoTableCounter, compactCount } from '../ui/video-table-counts.js';
 import { FrameGroup, InstanceGroup, Instance, UnlinkedInstance } from '../pose/pose-data.js';
 
 let passed = 0, failed = 0;
@@ -163,6 +163,22 @@ group('a camera that only has unlinked instances is labeled, with no groups and 
     eq(c.labeled, 1, 'labeled once for the frame');
     eq(c.groups, 0, 'no groups');
     eq(c.scoreCount, 0, 'unlinked scores are not counted');
+}
+
+{
+    group('compactCount: short counts for the narrow columns');
+    const cases = [
+        [0, '0'], [7, '7'], [999, '999'],
+        [1000, '1k'], [1049, '1k'], [1050, '1.1k'], [12000, '12k'], [12345, '12.3k'],
+        [98765, '98.8k'], [87654, '87.7k'], [99949, '99.9k'], [99950, '100k'],
+        [108000, '108k'], [539852, '540k'], [999499, '999k'], [999500, '1M'],
+        [1234567, '1.2M'], [57800000, '57.8M'], [540000000, '540M'], [2.5e9, '2.5B'],
+    ];
+    for (const [n, want] of cases) eq(compactCount(n), want, `compactCount(${n})`);
+    eq(compactCount(NaN), '-', 'NaN is "-"');
+    eq(compactCount(-1), '-', 'a negative is "-"');
+    eq(compactCount(Infinity), '-', 'Infinity is "-"');
+    for (const [n] of cases) ok(compactCount(n).length <= 5, `compactCount(${n}) fits 5 characters`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
