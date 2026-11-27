@@ -12,17 +12,18 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=7690799bebe1';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=7690799bebe1';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=7690799bebe1';
-import { createProgressPacer } from '../ui/loading-overlay.js?v=7690799bebe1';
+         toBoxedPoints3d, hasPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=fb4379568c9b';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=fb4379568c9b';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows, reprojectPointsCamera } from '../pose/triangulation.js?v=fb4379568c9b';
+import { createProgressPacer } from '../ui/loading-overlay.js?v=fb4379568c9b';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=7690799bebe1';
-import { writeOutlineFlagsMetadata } from './outline-flags-metadata.js?v=7690799bebe1';
-import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=7690799bebe1';
-import { writePlaneMetadata } from './plane-metadata.js?v=7690799bebe1';
-import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=7690799bebe1';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=fb4379568c9b';
+import { writeOutlineFlagsMetadata } from './outline-flags-metadata.js?v=fb4379568c9b';
+import { isNewerSlpFormatError } from '../loading/slp-format-check.js?v=fb4379568c9b';
+import { writeFrameIdentityMetadata } from './frame-identity-metadata.js?v=fb4379568c9b';
+import { writePlaneMetadata } from './plane-metadata.js?v=fb4379568c9b';
+import { writeSmoothingMetadata, smoothingSourceFor } from './smoothing-metadata.js?v=fb4379568c9b';
 
 // ============================================
 // Generic file picker
@@ -2629,7 +2630,7 @@ var ROWS_WORKER_QUEUE = 8;
  * every pending and later call.
  */
 function _startRowsWorker(shell) {
-    var w = new Worker(new URL('import-export/slp-rows-worker.js?v=7690799bebe1', document.baseURI), { type: 'module' });
+    var w = new Worker(new URL('import-export/slp-rows-worker.js?v=fb4379568c9b', document.baseURI), { type: 'module' });
     var h = { failed: null, inFlight: 0, waiters: [] };
     var readyFns, doneFns;
     h.ready = new Promise(function (res, rej) { readyFns = [res, rej]; });
@@ -3903,11 +3904,13 @@ function _readColumnar(obj, fieldNames) {
  *
  * @param {File} file - The .slp file
  * @param {Function} [onProgress] - Optional progress callback
- * @param {{columnar?: boolean}} [opts] - `columnar: true` asks the worker for
+ * @param {{columnar?: boolean, formatOnly?: boolean}} [opts] - `columnar: true` asks the worker for
  *   the pose data as flat TRANSFERRED typed arrays (`data.columnar`, see
  *   `buildColumnarFrames` in loading/slp-import-worker.js) instead of the nested
  *   `data.frames` objects, which are expensive to structured-clone. Only callers
  *   that read `data.columnar` should ask for it; `data.frames` is then empty.
+ *   `formatOnly: true` stops after the format check and resolves empty: see
+ *   {@link checkSlpFileFormat}.
  * @returns {Promise<Object>} Raw parsed data from worker
  */
 export function parseSlpH5(file, onProgress, opts) {
@@ -3930,7 +3933,9 @@ export function parseSlpH5(file, onProgress, opts) {
                 resolve(msg.data);
             } else if (msg.type === 'error') {
                 worker.terminate();
-                reject(new Error(msg.message));
+                var workerErr = new Error(msg.message);
+                if (msg.name) workerErr.name = msg.name;
+                reject(workerErr);
             }
         };
 
@@ -3939,8 +3944,33 @@ export function parseSlpH5(file, onProgress, opts) {
             reject(new Error('SLP worker error: ' + (err.message || 'unknown')));
         };
 
-        worker.postMessage({ type: 'parse', file: file, columnar: !!(opts && opts.columnar) });
+        worker.postMessage({
+            type: 'parse', file: file,
+            columnar: !!(opts && opts.columnar),
+            formatOnly: !!(opts && opts.formatOnly),
+        });
     });
+}
+
+/**
+ * Refuse a `.slp` file too new to read WITHOUT reading the rest of it, for a
+ * loader that clears the open project before its read: the readers refuse such a
+ * file themselves, but by then that project would be gone for nothing. Costs one
+ * worker start and a metadata read, so the loaders that change nothing before
+ * they read don't use it.
+ *
+ * Any other failure resolves: it belongs to the real read, in that read's words.
+ *
+ * @param {File} file - The .slp file
+ * @returns {Promise<void>}
+ * @throws {Error} Named `UnsupportedSlpFormatError` (see loading/slp-format-check.js).
+ */
+export async function checkSlpFileFormat(file) {
+    try {
+        await parseSlpH5(file, null, { formatOnly: true });
+    } catch (err) {
+        if (isNewerSlpFormatError(err)) throw err;
+    }
 }
 
 /**
@@ -3998,7 +4028,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=7690799bebe1', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=fb4379568c9b', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },

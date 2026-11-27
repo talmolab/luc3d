@@ -18,100 +18,101 @@
  * can then be retargeted.
  */
 
-import { withCompactNote } from '../import-export/compact-save.js?v=7690799bebe1';
+import { withCompactNote } from '../import-export/compact-save.js?v=fb4379568c9b';
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=7690799bebe1';
+} from '../ui/app-state.js?v=fb4379568c9b';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=7690799bebe1';
+} from '../pose/pose-data.js?v=fb4379568c9b';
 import {
     makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras,
-} from '../pose/placeholder-cameras.js?v=7690799bebe1';
+} from '../pose/placeholder-cameras.js?v=fb4379568c9b';
 
-import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js?v=7690799bebe1';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=7690799bebe1';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=7690799bebe1';
-import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=7690799bebe1';
-import { enumerateDirectoryHandle, pickRecordingFolder } from './recording-folder.js?v=7690799bebe1';
+import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js?v=fb4379568c9b';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=fb4379568c9b';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=fb4379568c9b';
+import { confirmFolderPick } from '../ui/folder-confirm-tip.js?v=fb4379568c9b';
+import { enumerateDirectoryHandle, pickRecordingFolder } from './recording-folder.js?v=fb4379568c9b';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
-    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
+    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO, checkSlpFileFormat,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=7690799bebe1';
+} from '../import-export/file-io.js?v=fb4379568c9b';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=7690799bebe1';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=fb4379568c9b';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=7690799bebe1';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=fb4379568c9b';
+import { isNewerSlpFormatError, slpReadErrorStatus } from './slp-format-check.js?v=fb4379568c9b';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=7690799bebe1';
-import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=7690799bebe1';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=7690799bebe1';
-import { parseCampyCage } from '../pose/cage-mirrors.js?v=7690799bebe1';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy, stampFrameIdentitiesFromGroups } from '../import-export/slp-import.js?v=fb4379568c9b';
+import { readFrameIdentityMetadata } from '../import-export/frame-identity-metadata.js?v=fb4379568c9b';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=fb4379568c9b';
+import { parseCampyCage } from '../pose/cage-mirrors.js?v=fb4379568c9b';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
     isVideoFileName,
-} from './video-file-pick.js?v=7690799bebe1';
+} from './video-file-pick.js?v=fb4379568c9b';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, shouldUseLazySlpFolder, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=7690799bebe1';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=7690799bebe1';
-import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=7690799bebe1';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=7690799bebe1';
+} from '../pose/triangulation.js?v=fb4379568c9b';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=fb4379568c9b';
+import { fileSessionNames, fileSessionProvenance } from '../import-export/slp-provenance.js?v=fb4379568c9b';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=fb4379568c9b';
 import {
     readCampyRecording, campyCameraFor, orderByCampyCameras, preferCampyVideo, campyVideoFile,
     compareCampyCameraNames, compareCalibrationSha256, sha256Hex, frameRatesDisagree,
     withCampyWarnings, findCampyManifestFiles,
-} from './campy-session.js?v=7690799bebe1';
-import { readBlobArrayBuffer } from './cold-read-guard.js?v=7690799bebe1';
-import { projectFolderStart } from './folder-picker-start.js?v=7690799bebe1';
+} from './campy-session.js?v=fb4379568c9b';
+import { readBlobArrayBuffer } from './cold-read-guard.js?v=fb4379568c9b';
+import { projectFolderStart } from './folder-picker-start.js?v=fb4379568c9b';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=7690799bebe1';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=7690799bebe1';
+} from '../import-export/save-load.js?v=fb4379568c9b';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=fb4379568c9b';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=7690799bebe1';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=7690799bebe1';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=7690799bebe1';
-import { noteUnplayableVideos } from '../ui/video-codec-notice.js?v=7690799bebe1';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=7690799bebe1';
-import { setPageProject } from '../ui/page-title.js?v=7690799bebe1';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=7690799bebe1';
+import { drawAllOverlays, setReprojErrorVisible, noteOverlayViewTransform } from '../ui/rendering.js?v=fb4379568c9b';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=fb4379568c9b';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=fb4379568c9b';
+import { noteUnplayableVideos } from '../ui/video-codec-notice.js?v=fb4379568c9b';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=fb4379568c9b';
+import { setPageProject } from '../ui/page-title.js?v=fb4379568c9b';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=fb4379568c9b';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=7690799bebe1';
+} from '../pose/initialization.js?v=fb4379568c9b';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=7690799bebe1';
+} from '../ui/sessions-panes.js?v=fb4379568c9b';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=7690799bebe1';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=7690799bebe1';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=7690799bebe1';
-import { readOutlineFlagsMetadata } from '../import-export/outline-flags-metadata.js?v=7690799bebe1';
-import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js?v=7690799bebe1';
-import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=7690799bebe1';
+} from '../ui/ui-wiring.js?v=fb4379568c9b';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=fb4379568c9b';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=fb4379568c9b';
+import { readOutlineFlagsMetadata } from '../import-export/outline-flags-metadata.js?v=fb4379568c9b';
+import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js?v=fb4379568c9b';
+import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js?v=fb4379568c9b';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -1709,6 +1710,7 @@ export async function handleLoadMultiSession() {
         if (state.sessions.length === 0) setPageProject(parentHandle.name);
 
         // Load each session — first gets full video init, rest defer decoders
+        var unreadSlps = [];
         for (var si = 0; si < sessionDirs.length; si++) {
             var sess = sessionDirs[si];
             showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
@@ -1720,11 +1722,15 @@ export async function handleLoadMultiSession() {
 
             var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
             console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
-            await handleLoadSessionFolderPerCamera(sessionFiles, si > 0, sess.handle);
+            var loadedSession = await handleLoadSessionFolderPerCamera(sessionFiles, si > 0, sess.handle);
+            if (loadedSession) unreadSlps = unreadSlps.concat(loadedSession.slpFailures);
         }
 
         hideLoading();
-        setStatus('Loaded ' + sessionDirs.length + ' sessions', 'success');
+        // Each session's own status named its unreadable files, but only until the
+        // next session's replaced it.
+        var sessionsStatus = 'Loaded ' + sessionDirs.length + ' sessions' + slpFailuresStatus(unreadSlps);
+        setStatus(sessionsStatus, unreadSlps.length > 0 ? 'error' : 'success');
 
         // Display first session's grid (it has live decoders from eager load)
         if (state.sessions.length > 1) {
@@ -1747,6 +1753,8 @@ export async function handleLoadMultiSession() {
         // modals, and the user answers whichever is on top.
         var noteCalibrations = function () {
             noteSessionCalibrationDivergence(state.sessions);
+            // Last, so the skeleton steps' own status can't replace it.
+            if (unreadSlps.length > 0) setStatus(sessionsStatus, 'error');
         };
 
         if (state.sessions.length > 1) {
@@ -2304,6 +2312,12 @@ export async function handleLoadSessionFolderSingleSlp() {
         try {
             slpData = await parseSlpViaSleapIO(slpFile, function (msg) { showLoading(msg); });
         } catch (typedErr) {
+            // Too new for this reader is too new for the raw worker as well.
+            if (isNewerSlpFormatError(typedErr)) {
+                hideLoading();
+                setStatus(typedErr.message, 'error');
+                return;
+            }
             console.warn('[single-slp] typed SLP read failed — falling back to raw h5wasm worker:', typedErr);
             try {
                 slpData = await parseSlpH5(slpFile, function (msg) { showLoading(msg); });
@@ -2972,9 +2986,13 @@ export function createOpenProgress(fileName) {
  */
 export async function handleLoadProjectSlpLazy(slpFile, opts) {
     try {
-        if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return; }
+        if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return false; }
         var openProgress = createOpenProgress(slpFile.name);
         openProgress('read');
+
+        // Everything below frees the open project first, so a file too new to read
+        // has to be refused before any of it, or refusing it costs that project.
+        await checkSlpFileFormat(slpFile);
 
         // Free the PREVIOUS project's memory BEFORE opening the new one. A large
         // lazy session holds ~1 GB in its loader + GBs of grouping/3D; opening a
@@ -3197,7 +3215,8 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
     } catch (err) {
         console.error('[load-project-lazy] Error:', err);
         hideLoading();
-        setStatus('Lazy reopen error: ' + (err && err.message || err), 'error');
+        setStatus(slpReadErrorStatus('Lazy reopen error', err), 'error');
+        if (isNewerSlpFormatError(err)) return false;
     }
 }
 
@@ -3240,6 +3259,23 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
             fg.addInstance(camName, instance);
         }
     }
+}
+
+/**
+ * Status-line text for the annotation files a folder load could not read. The
+ * names alone don't say why, and the way past a file too new to read is the
+ * user's to take, so that reason goes first, once: a folder's files all come from
+ * the same tool, and the names can run past the end of the status bar.
+ *
+ * @param {Array<{camName:string, file:File, message:string, refused?:boolean}>} slpFailures
+ * @returns {string} Text to append, or `''` with no failures.
+ */
+function slpFailuresStatus(slpFailures) {
+    if (slpFailures.length === 0) return '';
+    var refused = slpFailures.find(function (f) { return f.refused; });
+    return (refused ? ' — ' + refused.message : '')
+        + ' — ' + slpFailures.length + ' annotation file(s) could not be read: '
+        + slpFailures.map(function (f) { return f.camName + ' (' + f.file.name + ')'; }).join(', ');
 }
 
 export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos, folderHandle) {
@@ -3650,6 +3686,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             slpFailures.push({
                                 camName: job.camName, file: job.file,
                                 message: (e && e.message) || String(e),
+                                refused: isNewerSlpFormatError(e),
                             });
                             console.error('[session-folder] ' + job.camName
                                 + ': failed to parse "' + job.file.name + '":', e);
@@ -3710,8 +3747,16 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     return lazyLoader.open(job.camName, job.file).then(function (r) {
                         onAnnotationDone();
                         return r;
+                    }, function (e) {
+                        // Too new to read: a view and no data, and said so at the
+                        // end, as on the eager path. Any other failure stops here.
+                        if (!isNewerSlpFormatError(e)) throw e;
+                        console.error('[session-folder] ' + job.camName + ': ' + e.message);
+                        slpFailures.push({ camName: job.camName, file: job.file, message: e.message, refused: true });
+                        onAnnotationDone();
                     });
                 }));
+                if (lazyAreSlp && lazyLoader.labelsByCam.size === 0) lazyLoader = null;
             } catch (lazyErr) {
                 // Do NOT fall back to eager parseSlpH5 — a 100+ MB file would OOM
                 // the tab (the very thing lazy mode avoids). Surface the error.
@@ -4204,8 +4249,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
         var statusKind = 'success';
         if (slpFailures.length > 0) {
-            statusMsg += ' — ' + slpFailures.length + ' annotation file(s) could not be read: '
-                + slpFailures.map(function (f) { return f.camName + ' (' + f.file.name + ')'; }).join(', ');
+            statusMsg += slpFailuresStatus(slpFailures);
             statusKind = 'error';
         }
         if (videoFailures.length > 0) {
@@ -4227,6 +4271,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         var campyStatus = withCampyWarnings(statusMsg, statusKind, state.session && state.session.campyRecording);
         setStatus(campyStatus.message, campyStatus.kind);
         noteUnplayableVideos(videoFailures, nVideosToLoad);
+        return { slpFailures: slpFailures };
 
     } catch (err) {
         console.error('[session-folder] Error:', err);

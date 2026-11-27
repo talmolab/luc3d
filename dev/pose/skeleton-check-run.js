@@ -21,7 +21,7 @@
  *
  * DOM-free (localStorage guarded); imported by pose/triangulation.js and ui/skeleton-check-field.js.
  */
-import { skeletonChains, measureBones, chainBadness, SKELETON_CHECK_DEFAULTS } from './skeleton-check.js?v=7690799bebe1';
+import { skeletonChains, measureBones, chainBadness, SKELETON_CHECK_DEFAULTS } from './skeleton-check.js?v=fb4379568c9b';
 
 const STORAGE_KEY = 'lucidSkeletonCheck';
 const DEFAULT_SETTINGS = Object.freeze({ enabled: false, chains: '' });

@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js?v=7690799bebe1";
+} from "./chunk-H7G4PJNA.js?v=fb4379568c9b";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js?v=7690799bebe1";
+} from "./chunk-YS7Q6CO6.js?v=fb4379568c9b";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -12138,6 +12138,28 @@ function resolveSourceFrameCount(opts) {
 }
 
 // src/codecs/slp/read-streaming.ts
+// LUCID local patch (luc3d newer-format): refuse a `.slp` newer than this reader
+// can read. Format 3.0 (Python sleap-io 0.10's default) stores every table as a
+// group of columns; read with this 2.x code it opens as 0 frames with no error.
+// The rule and the wording match loading/slp-format-check.js, the raw import
+// worker's check (tests/e2e/slp-newer-format.mjs compares the two messages).
+var LUCID_SLP_FORMAT_ID_LIMIT = 3;
+var UnsupportedSlpFormatError = class extends Error {
+  constructor(formatId, labelsPath) {
+    const name = labelsPath && isUrl(labelsPath) ? redactUrl(labelsPath) : labelsPath;
+    const version = Number.isInteger(formatId) ? formatId.toFixed(1) : String(formatId);
+    super(
+      `${name || "This file"} uses SLP format ${version}, which is newer than this version of LUC3D supports (max ${LUCID_SLP_FORMAT_ID_LIMIT - 1}.x). Update LUC3D to read it, or re-save the file from Python sleap-io with \`legacy_format=True\`.`
+    );
+    this.name = "UnsupportedSlpFormatError";
+    this.formatId = formatId;
+  }
+};
+function lucidCheckFormatId(formatId, labelsPath) {
+  if (formatId >= LUCID_SLP_FORMAT_ID_LIMIT) {
+    throw new UnsupportedSlpFormatError(formatId, labelsPath);
+  }
+}
 async function readSlpStreaming(source, options) {
   if (!isStreamingSupported()) {
     throw new Error(
@@ -12215,6 +12237,7 @@ async function readFromStreamingFile(file, url, filenameHint, openVideos = false
   const formatId = Number(
     metadataAttrs["format_id"]?.value ?? metadataAttrs["format_id"] ?? 1
   );
+  lucidCheckFormatId(formatId, labelsPath); // LUCID local patch (luc3d newer-format)
   const metadataJson = parseMetadataJson(
     metadataAttrs["json"],
     labelsPath
@@ -18620,6 +18643,7 @@ async function readSlp(source, options) {
     const formatId = Number(
       metadataAttrs["format_id"]?.value ?? metadataAttrs["format_id"] ?? 1
     );
+    lucidCheckFormatId(formatId, labelsPath); // LUCID local patch (luc3d newer-format)
     const metadataJson = parseMetadataJson(
       metadataAttrs["json"],
       labelsPath
@@ -18838,6 +18862,7 @@ async function readSlpLazy(source, options) {
     const formatId = Number(
       metadataAttrs["format_id"]?.value ?? metadataAttrs["format_id"] ?? 1
     );
+    lucidCheckFormatId(formatId, labelsPath); // LUCID local patch (luc3d newer-format)
     const metadataJson = parseMetadataJson(
       metadataAttrs["json"],
       labelsPath
@@ -20572,7 +20597,9 @@ async function loadSlp(source, options) {
           lazy
         });
       } catch (e) {
-        if (streamMode === "auto") {
+        // LUCID local patch (luc3d newer-format): every reader refuses it, and
+        // reading a picked File on the main thread aborts h5wasm before the check.
+        if (streamMode === "auto" && !(e instanceof UnsupportedSlpFormatError)) {
           console.warn(
             "[sleap-io] Worker-based loading failed, falling back to main thread:",
             redactedCauseSummary(e)

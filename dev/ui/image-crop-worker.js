@@ -26,8 +26,8 @@
  * everywhere.)
  */
 
-import { cutCrop, writeInputTensor, CROP, BUILTIN_INPUT } from './image-embedder.js?v=7690799bebe1';
-import { createSyncTimer } from './load-graph.js?v=7690799bebe1';
+import { cutCrop, writeInputTensor, CROP, BUILTIN_INPUT } from './image-embedder.js?v=fb4379568c9b';
+import { createSyncTimer } from './load-graph.js?v=fb4379568c9b';
 
 let canvas = null;
 const jobs = [];
