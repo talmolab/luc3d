@@ -113,6 +113,7 @@ import { readVisibilityMetadata } from '../import-export/visibility-metadata.js'
 import { readOutlineFlagsMetadata } from '../import-export/outline-flags-metadata.js';
 import { readSmoothingMetadata } from '../import-export/smoothing-metadata.js';
 import { readPlaneMetadata, resetPlaneState, planeMetadataConflict } from '../import-export/plane-metadata.js';
+import { readSuggestions, suggestionEntriesFromLabels } from '../import-export/suggestions-io.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2471,6 +2472,11 @@ export async function handleLoadSessionFolderSingleSlp() {
         } else {
             readPlaneMetadata(session, sessLucid);
         }
+        // Suggestions panel: the file's suggestions on this session's cameras.
+        readSuggestions(session, slpData.suggestions, function (vi) {
+            var cn = videoIdxToCameraName[vi];
+            return cn && session.cameras.some(function (c) { return c.name === cn; }) ? cn : null;
+        });
 
         // Populate frames
         showLoading('Building session...');
@@ -3105,6 +3111,11 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         // Define Planes state — the lazy-reopen mirror of the eager read in
         // `import-export/slp-import.js`.
         readPlaneMetadata(session, lucid);
+        // Suggestions panel: the file's suggestions on this session's videos.
+        readSuggestions(session, suggestionEntriesFromLabels(labels), function (vi) {
+            var cam = typedSession && labels.videos[vi] ? typedSession.getCamera(labels.videos[vi]) : null;
+            return cam && cam.name ? cam.name : null;
+        });
 
         session.lazyLoader = loader;
         session._lazyReopened = true;

@@ -125,6 +125,7 @@ import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
 } from './track-identity-ops.js';
 import { setSessionRotation } from './video-filters.js';
+import { stepSuggestionNav } from './suggestions-panel.js';
 import { refreshOutlinePanel, flagOutlineUnderPointer } from './outline-flags-panel.js';
 import { toggleOutlineBrush } from './outline-brush.js';
 
@@ -2369,6 +2370,8 @@ export function setupUI() {
         var cb = document.getElementById(id);
         if (cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change', { bubbles: true })); }
     }
+    setHandler('nextSuggestion', function () { stepSuggestionNav(1); });
+    setHandler('prevSuggestion', function () { stepSuggestionNav(-1); });
     setHandler('toggleUser', function () { toggleVisCheckbox('visUser'); });
     setHandler('togglePredicted', function () { toggleVisCheckbox('visPredicted'); });
     setHandler('toggleReproj', function () { toggleVisCheckbox('visReprojections'); });

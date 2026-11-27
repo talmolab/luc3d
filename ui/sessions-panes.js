@@ -70,6 +70,7 @@ import { refreshOutlinePanel } from './outline-flags-panel.js';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
 import { getLoadingProgressModal } from './loading-progress-modal.js';
+import { refreshSuggestionsPanel } from './suggestions-panel.js';
 
 // ============================================
 // Dockview Pane Manager
@@ -358,6 +359,8 @@ const _paneManagerImpl = {
                 viewport3d.highlightCamera(activeViewName);
                 viewport3d.selectedCamera = activeViewName;
             }
+            // The Suggestions panel's "current video" follows the focused pane.
+            refreshSuggestionsPanel();
         });
 
         // Track panel removal

@@ -53,6 +53,7 @@ import { writeOutlineFlagsMetadata, readOutlineFlagsMetadata } from './outline-f
 import { writeSmoothingMetadata, readSmoothingMetadata, smoothingSourceFor, adoptSmoothingSource } from './smoothing-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { buildSaveProvenance } from './slp-provenance.js';
+import { sioSuggestionsForSession } from './suggestions-io.js';
 import { withCompactSave } from './compact-save.js';
 import { showCompactSaveModal } from '../ui/compact-save-modal.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
@@ -718,6 +719,7 @@ async function buildSlpBytes(opts) {
     var allSkeletons = [];
     var allTracks = [];
     var allIdentities = [];
+    var allSuggestions = [];
     var seenSkeletonNames = new Set();
     var seenTrackNames = new Set();
 
@@ -869,6 +871,8 @@ async function buildSlpBytes(opts) {
         }
         allIdentities = allIdentities.concat(sessLabels.identities || []);
         allSessions = allSessions.concat(sessLabels.sessions || []);
+        // Suggestions panel: this session's (camera, frame) pairs on its own videos.
+        allSuggestions = allSuggestions.concat(sioSuggestionsForSession(SIO, sess, (sessLabels.sessions || [])[0]));
     }
 
     // Re-point every instance's track to the canonical (deduped) Track object
@@ -902,6 +906,7 @@ async function buildSlpBytes(opts) {
         tracks: allTracks,
         identities: allIdentities,
         sessions: allSessions,
+        suggestions: allSuggestions,
         // Keeps the loaded files' provenance (slp-provenance.js).
         provenance: buildSaveProvenance(sessionsToExport),
     });
@@ -1114,7 +1119,8 @@ export async function finalizeMultiSessionSave(handle, opts) {
     var onProgress = (opts && opts.onProgress) || null;
     if (onProgress) await onProgress('header');
     var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }),
-        buildSaveProvenance(handle.pending.map(function (p) { return p.session; })));
+        buildSaveProvenance(handle.pending.map(function (p) { return p.session; })),
+        handle.pending.map(function (p) { return p.session; }));
     _lap('openProjectWriter (writes /session_data + sessions_json)');
     try {
         for (var j = 0; j < handle.pending.length; j++) {

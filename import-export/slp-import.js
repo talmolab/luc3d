@@ -73,6 +73,7 @@ import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
 import { readOutlineFlagsMetadata } from './outline-flags-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
+import { readSuggestions } from './suggestions-io.js';
 import { isNewerSlpFormatError, slpReadErrorStatus } from '../loading/slp-format-check.js';
 
 /**
@@ -1220,6 +1221,10 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         // Define Planes state — pool/planes/origin from the first session that
         // carries them, this session's per-view 2D onto this session.
         readPlaneMetadata(session, earlyVisibility);
+        // Suggestions panel: the file's suggestions on this session's videos.
+        readSuggestions(session, slpData.suggestions, function (vi) {
+            return Object.prototype.hasOwnProperty.call(videoIdxToCameraName, vi) ? videoIdxToCameraName[vi] : null;
+        });
 
         // Populate FrameGroups from worker's frames array (yield every 20K for UI)
         var BATCH = 20000;

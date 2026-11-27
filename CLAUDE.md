@@ -102,7 +102,7 @@ Per-session state, written to each session's dict by exactly four modules:
 - `import-export/plane-metadata.js` (`PLANE_METADATA_KEYS`, mapping in DOM-free `pose/plane-serialization.js`). `planeNodes`/`planes`/`meshObjects`/`planeOrigin` are project-scoped: the same in every session, read from the first one ingested. `planePlacements` is per session and must not leak.
 - `import-export/outline-flags-metadata.js` (`OUTLINE_FLAGS_METADATA_KEYS`): `outlineFlags` (`{v: 1, flags}`: the Outlines panel's flags on bad animal outlines, `pose/outline-flags.js`) and `outlineEdits` (`{v: 1, edits}`: outlines corrected with the brush, run-length label images, `pose/outline-edits.js`), each only when the session has some. See "Animal outlines" below.
 
-Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call ALL FOUR readers (visibility, outline flags, smoothing, plane), or settings, outline flags, smoothing and planes silently reset to defaults.
+Writers: `file-io.js`, `slp-streaming-write.js`, `save-load.js`. Readers: `handleLoadSlpFile`, `handleLoadProjectSlpLazy`, `handleLoadSessionFolderSingleSlp` and the `save-load.js` reader. A new setting changes only its module. A new loader that builds a Session by hand must call ALL FOUR readers (visibility, outline flags, smoothing, plane), or settings, outline flags, smoothing and planes silently reset to defaults, and `readSuggestions` too (see "Suggestions panel").
 
 `frameIdentityMap` (one entry per grouped detection after Track All: 101 MB of JSON on an 8-camera project) is written by `import-export/frame-identity-metadata.js` as only the entries the instance groups do not imply, plus `frameIdentityMapFromGroups: true` and `frameIdentityMapDropped`; the two `.slp` readers that rebuild groups call `readFrameIdentityMetadata` AFTER doing so. Never larger than the full list (falls back to it, without the marker); the project JSON keeps the full list. `Session._derivedFrameIdentity` (save) and `stampFrameIdentitiesFromGroups` (load) must keep the same rule. Test: e2e `frame-identity-compact-roundtrip`.
 
@@ -117,6 +117,14 @@ Rules:
 - Global appearance prefs stay in `localStorage.visibilitySettings`, never the `.slp`.
 
 Tests: `test-visibility-metadata.js`, `test-plane-serialization.mjs`, e2e `visibility-settings-roundtrip`, `plane-persistence-roundtrip`, `reopen-folder-session-settings`.
+
+## Suggestions panel (`suggestions_json`)
+
+The rail's Suggestions panel (`ui/suggestions-panel.js`, logic DOM-free in `pose/suggestions.js`) ports sleap-app's, grouped by camera view: each view is one video, the focused view (`interactionManager.lastInteractedView`) comes first, and Target is All videos in session / Current video (Replace swaps only the Target's views). Frames read 1-based; Prev / Next are `,` / `.` (sleap-app's Space is Play here).
+- **Stored per session** as `Session.suggestions` (`{camera, frameIdx, group}`), saved as SLEAP's `suggestions_json` through sleap-io.js `Labels.suggestions` (`import-export/suggestions-io.js`): each camera maps to its session's video via the `.slp` `RecordingSession` (`getVideo` / `getCamera`), never by position. Both writers pass them (eager `new SIO.Labels`, streaming `openProjectWriter`'s 4th argument); the three `.slp` readers call `readSuggestions` beside `readPlaneMetadata`. `window.SleapIO` (index.html, mirrored in `tests/test-runner.html`) must export `SuggestionFrame`.
+- **No suggestions writes the same empty `suggestions_json` as before** (`save-golden-digest.mjs` must not move). The project JSON (`save-load.js` v2/v3) does not carry them.
+- **Labeled** = the view has a user instance on that frame, from the resident FrameGroup or, on a lazy project, the store (`frameUserCountInView`, `ui/frame-counters.js`); never `frameGroups` alone.
+Tests: `tests/test-suggestions.mjs`, e2e `suggestions-panel` (`KEEP_DIR=` writes the saved file for `scripts/validate_slp_sleap_compat.py`).
 
 ## Animal outlines (Visibility ▸ Animal Outlines, the Outlines panel)
 

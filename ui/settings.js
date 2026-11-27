@@ -53,6 +53,10 @@ const ACTION_CATALOG = [
     { id: 'firstLastFrame', label: 'First / Last frame', category: 'Navigation', binding: 'Home / End', editable: false, dispatched: false },
     { id: 'playPause', label: 'Play / Pause', category: 'Navigation', binding: 'Space', editable: false, dispatched: false },
     { id: 'gotoFrame', label: 'Go to frame number', category: 'Navigation', binding: 'Mod+Shift+J', editable: false, dispatched: false },
+    // Suggestions panel (ui/suggestions-panel.js). sleap-app uses Space /
+    // Shift+Space, which is Play / Pause here.
+    { id: 'nextSuggestion', label: 'Next suggestion', category: 'Navigation', binding: '.', editable: true, dispatched: true },
+    { id: 'prevSuggestion', label: 'Previous suggestion', category: 'Navigation', binding: ',', editable: true, dispatched: true },
 
     // --- Editing ---
     { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+I', editable: true, dispatched: true },

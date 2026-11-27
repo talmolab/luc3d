@@ -1,7 +1,7 @@
 /**
  * ui/panel-rail.js — the right-edge icon rail and the stack of collapsible
- * panel sections it drives (Instances, Visibility, ID Switches, Videos,
- * Cameras, Skeleton, Session, Memory). It replaced the horizontal tab bar.
+ * panel sections it drives (Instances, Visibility, ID Switches, Outlines, Videos,
+ * Suggestions, Cameras, Skeleton, Session, Memory). It replaced the horizontal tab bar.
  *
  * Modelled on sleap-app's sidebar (`AppShell.tsx` `Sidebar`, rules in
  * `appStore.ts` `togglePanelOpen` / `openPanel` / `closePanel` /
@@ -52,6 +52,7 @@ export const PANEL_RAIL_PANELS = [
     { tab: 'tabIdSwitches', label: 'ID Switches', icon: 'arrow-left-right' },
     { tab: 'tabOutlines', label: 'Outlines', icon: 'lasso' },
     { tab: 'tabVideos', label: 'Videos', icon: 'film' },
+    { tab: 'tabSuggestions', label: 'Suggestions', icon: 'lightbulb' },
     { tab: 'tabCameras', label: 'Cameras', icon: 'camera' },
     { tab: 'tabSkeleton', label: 'Skeleton', icon: 'bone' },
     { tab: 'tabSession', label: 'Session', icon: 'folder-tree' },
