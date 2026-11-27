@@ -280,3 +280,28 @@ Worth noting the fallback is not free either: it copies the whole file into the
 WASM heap, which `getHeapMax()` caps at 2 GiB. For a 1.4 GB project that leaves
 very little room for anything else, so the WORKERFS path is the one you want to
 actually work.
+
+---
+
+## 8. A failed read reads as data that isn't there (data loss)
+
+**Marker:** `failed read`
+**Files:** `chunk-X76PRJK6.js` (`H5_WORKER_CODE`, `serviceRangeBridge`, `hasPath`,
+`readSlpStreaming`, the streaming readers, `StreamingHdf5VideoBackend`)
+**Severity:** a project opens with data missing, with no error, and the next save
+writes that to disk.
+
+`readStructDatasetStreaming` ended in `catch { return {}; }`, and the tracks, videos,
+suggestions, identities, video crops and frame number reads caught every error, so a
+dropped connection or a file removed mid-read looked like a file without that part.
+A failed read of one `/session_data` table dropped every session's grouping and 3D.
+A range source's failure was answered as "no bytes", which HDF5 fills in with zeros.
+
+**Fix:** written against the current reader on the fork,
+`olinesn/sleap-io.js` branches `fix/streaming-pose-read-errors` and
+`fix/streaming-silent-read-failures`: presence comes from a parent's listing
+(`hasPath`), so a failed read can be thrown, and the worker wraps `FS.read`, because
+after a failed read HDF5 is stopped mid-call and the same read tried again succeeds
+with wrong data. Not reported on talmolab yet. LUC3D's copy adds `failedRead` to the
+worker's error answer and to the Error, so a caller can tell "this file could not be
+read" from "this reader can't make sense of this file".

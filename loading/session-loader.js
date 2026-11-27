@@ -40,7 +40,7 @@ import { enumerateDirectoryHandle, pickRecordingFolder } from './recording-folde
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
-    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO, checkSlpFileFormat,
+    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpWithRawFallback, checkSlpFileFormat,
     loadCalibrationFile,
 } from '../import-export/file-io.js';
 
@@ -2306,26 +2306,16 @@ export async function handleLoadSessionFolderSingleSlp() {
         // per-instance nulledNodes/occlusion, identities, 3D points — is
         // available to restoreGroupingAndUnlink below. Loading a project .slp
         // must reflect the changes saved in THAT file, not rebuild flat poses
-        // from it. Fall back to the raw worker only if the typed reader throws.
+        // from it. Fall back to the raw worker only if the typed reader throws
+        // on a file the raw worker can read in full.
         showLoading('Reading SLP: ' + slpFile.name + '...');
         var slpData;
         try {
-            slpData = await parseSlpViaSleapIO(slpFile, function (msg) { showLoading(msg); });
-        } catch (typedErr) {
-            // Too new for this reader is too new for the raw worker as well.
-            if (isNewerSlpFormatError(typedErr)) {
-                hideLoading();
-                setStatus(typedErr.message, 'error');
-                return;
-            }
-            console.warn('[single-slp] typed SLP read failed — falling back to raw h5wasm worker:', typedErr);
-            try {
-                slpData = await parseSlpH5(slpFile, function (msg) { showLoading(msg); });
-            } catch (parseErr) {
-                hideLoading();
-                setStatus('SLP parse error: ' + parseErr.message, 'error');
-                return;
-            }
+            slpData = await parseSlpWithRawFallback(slpFile, function (msg) { showLoading(msg); });
+        } catch (parseErr) {
+            hideLoading();
+            setStatus(slpReadErrorStatus('SLP parse error', parseErr), 'error');
+            return;
         }
 
         // Load calibration

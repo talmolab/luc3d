@@ -16,7 +16,7 @@ import {
 } from '../pose/triangulation.js';
 import { hasRealCalibration } from '../pose/placeholder-cameras.js';
 import {
-    parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
+    parseSlpH5, parseSlpWithRawFallback, instanceMatchesPoints, parsePoints3dH5, pickFiles,
 } from './file-io.js';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
@@ -73,14 +73,14 @@ import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
 import { readOutlineFlagsMetadata } from './outline-flags-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
-import { isNewerSlpFormatError, slpReadErrorStatus } from '../loading/slp-format-check.js';
+import { slpReadErrorStatus } from '../loading/slp-format-check.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
- * sleap-io.js's streaming reader (`parseSlpViaSleapIO` — lands PR #196's read
+ * sleap-io.js's streaming reader (`parseSlpWithRawFallback` — lands PR #196's read
  * speedup + a typed pose transform) and keeps the raw-h5wasm worker
- * (`parseSlpH5`) for SLEAP analysis `.h5` files and as a fallback if the typed
- * reader throws (e.g. a non-standard split-field export it cannot read). Both
+ * (`parseSlpH5`) for SLEAP analysis `.h5` files and as that function's fallback if
+ * the typed reader throws (e.g. a non-standard split-field export it cannot read). Both
  * resolve to the identical `slpData` shape, so every consumer below is unchanged.
  *
  * @param {File} file
@@ -88,15 +88,7 @@ import { isNewerSlpFormatError, slpReadErrorStatus } from '../loading/slp-format
  * @returns {Promise<Object>} slpData
  */
 async function parseSlpForImport(file, onProgress) {
-    if (/\.slp$/i.test(file.name || '')) {
-        try {
-            return await parseSlpViaSleapIO(file, onProgress);
-        } catch (err) {
-            // Too new for this reader is too new for the raw worker as well.
-            if (isNewerSlpFormatError(err)) throw err;
-            console.warn('[slp-import] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
-        }
-    }
+    if (/\.slp$/i.test(file.name || '')) return await parseSlpWithRawFallback(file, onProgress);
     return await parseSlpH5(file, onProgress);
 }
 
