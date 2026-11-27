@@ -6,6 +6,7 @@
  *
  * Messages IN:
  *   { type: 'parse', file: File }              — Full eager parse (existing)
+ *   { type: 'parse', file: File, formatOnly: true } — Only refuse a file too new to read
  *   { type: 'open', file: File }               — Lazy mode: open H5, read metadata only
  *   { type: 'getFrame', frameIdx, requestId }  — Lazy mode: read single frame
  *   { type: 'getFrames', startIdx, endIdx, requestId } — Lazy mode: read frame range
@@ -17,10 +18,11 @@
  *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
  *   { type: 'frameData', frameIdx, requestId, instances }
  *   { type: 'framesData', startIdx, endIdx, requestId, frames }
- *   { type: 'error', message: string }
+ *   { type: 'error', message: string, name?: string }
  */
 
 import * as h5wasm from '../lib/h5wasm/hdf5_hl.js';   // local vendored 0.10.3 ESM
+import { checkSlpFormatAttrs, isNewerSlpFormatError } from './slp-format-check.js';
 
 var h5wasmReady = false;
 var FS = null;
@@ -32,6 +34,10 @@ var slowCompound = false;
 // typed arrays (`result.data.columnar`) instead of the nested `frames` objects —
 // see `buildColumnarFrames`. Opt-in per call; every other caller keeps `frames`.
 var wantColumnar = false;
+// `{ type: 'parse', formatOnly: true }` stops after the format check and posts an
+// empty result, for a loader that must know before it changes anything
+// (`checkSlpFileFormat` in import-export/file-io.js).
+var formatOnly = false;
 var pendingMessages = [];
 
 // --- Lazy H5 data service state ---
@@ -67,6 +73,7 @@ async function handleMessage(data) {
     if (data.type === 'parse' && data.file) {
         slowCompound = !!data.slowCompound;
         wantColumnar = !!data.columnar;
+        formatOnly = !!data.formatOnly;
         await parseSlp(data.file);
     } else if (data.type === 'open' && data.file) {
         openH5Lazy(data.file);
@@ -121,6 +128,17 @@ async function parseSlp(file) {
         }
 
         progress('Reading metadata...');
+
+        // FAIL LOUDLY on a file too new to read, before reading anything else: its
+        // tables are not where this code looks, each `f.get()` below turns that
+        // into null, and the result would be an ordinary one with 0 frames.
+        var metadataAttrs = null;
+        try { metadataAttrs = f.get('metadata').attrs; } catch (e) { /* none: see below */ }
+        checkSlpFormatAttrs(metadataAttrs, file.name);
+        if (formatOnly) {
+            postMessage({ type: 'result', data: {} });
+            return;
+        }
 
         // --- Detect analysis H5 format ---
         // Analysis H5 files have a top-level 'tracks' dataset but no 'metadata' group.
@@ -502,6 +520,12 @@ async function parseSlp(file) {
 
     } catch (err) {
         try { FS.unmount('/work'); } catch (e) { }
+        // A refusal is for the user to read as it stands, so no stack on it, and
+        // the name goes along so the caller can tell it from a failed read.
+        if (isNewerSlpFormatError(err)) {
+            postMessage({ type: 'error', message: err.message, name: err.name });
+            return;
+        }
         var errMsg = (err.message || String(err));
         if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
         postMessage({ type: 'error', message: errMsg });
