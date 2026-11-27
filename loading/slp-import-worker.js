@@ -50,12 +50,30 @@ var lazyNFrames = 0;
 var lazyTransposed = false;
 var lazyTrackOccupancy = null; // optional, full array (small: nFrames * nTracks bytes)
 var lazyTracksVal = null;      // full decompressed tracks TypedArray (loaded once, fast indexing)
+var failedRead = null;         // the first read of the file that threw (see the init below)
 
 // Initialize h5wasm, then drain any queued messages
 (async function () {
     try {
         await h5wasm.ready;
         FS = h5wasm.FS;
+        // Every read of the file passes through here. The reads below are each
+        // try/caught, to treat something the file doesn't have as absent, and a
+        // failed read lands in the same catches: without this, a file that goes
+        // away part-way through parses to a result with whatever came after it
+        // missing, for the next save to make permanent. After one, HDF5 is stopped
+        // mid-call and nothing it returns can be trusted, so `throwIfFailedRead`
+        // turns the whole parse into that error (the same rule as the `LUCID local
+        // patch (failed read)` in lib/sleap-io's worker).
+        var fsRead = FS.read;
+        FS.read = function () {
+            try {
+                return fsRead.apply(this, arguments);
+            } catch (e) {
+                failedRead = failedRead || e;
+                throw e;
+            }
+        };
         h5wasmReady = true;
         progress('h5wasm initialized');
 
@@ -96,6 +114,10 @@ onmessage = async function (e) {
 
 function progress(msg) {
     postMessage({ type: 'progress', message: msg });
+}
+
+function throwIfFailedRead() {
+    if (failedRead) throw failedRead;
 }
 
 async function parseSlp(file) {
@@ -476,6 +498,7 @@ async function parseSlp(file) {
         // A separate frame-worker.js handles on-demand frame extraction
         // using SLPPackageReader, which avoids loading all frames into memory.
 
+        throwIfFailedRead();
         f.close();
         try { FS.unmount('/work'); } catch (e) { /* ignore */ }
 
@@ -768,6 +791,7 @@ function parseAnalysisH5(f, filename) {
         var skelName = 'skeleton';
         var skeleton = { name: skelName, nodes: nodeNames, edges: edges };
 
+        throwIfFailedRead();
         f.close();
         try { FS.unmount('/work'); } catch (e) { /* ignore */ }
 
@@ -918,6 +942,7 @@ function openH5Lazy(file) {
             dataset: null,
         }];
 
+        throwIfFailedRead();
         progress('Lazy H5 ready: ' + lazyNFrames.toLocaleString('en-US') + ' frames, ' + lazyNTracks + ' tracks, ' + lazyNNodes + ' nodes');
 
         postMessage({

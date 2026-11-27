@@ -15,6 +15,7 @@ import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
 import { OnDemandVideoDecoder } from '../loading/video.js';
+import { readBlobRange } from '../loading/cold-read-guard.js';
 import { createDemoSkeleton } from '../demo-data.js';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
@@ -723,6 +724,22 @@ async function buildSlpBytes(opts) {
 
     var sessionsToExport = sessionsToSave();
 
+    // A multi-session save releases its sessions' data from memory
+    // (`commitSessionForMultiSessionSave`), and nothing reads it back until the
+    // project is opened again, so these would go on to the eager path below with no
+    // frames or groups: Save would write an EMPTY project over the file and report
+    // success, as it used to after any multi-session save, failed or not.
+    var _released = sessionsToExport.filter(function (s) { return s && s._releasedBySave && !s.lazyLoader; });
+    if (_released.length > 0) {
+        var _relMsg = 'Cannot save: the last save released ' + _released.map(function (s) {
+            return '"' + (s.name || 'session') + '"';
+        }).join(', ') + ' from memory, so saving now would write nothing for ' +
+            (_released.length > 1 ? 'them' : 'it') + '. Open the project again to keep working.';
+        console.error('[save-slp] ' + _relMsg);
+        setStatus(_relMsg, 'error');
+        throw new Error(_relMsg);
+    }
+
     // Every path below writes one video per `session.cameras` entry and picks
     // the views, videos and poses to write by that list — a view or pose whose
     // camera is missing is dropped without a word. An uncalibrated session
@@ -1082,6 +1099,7 @@ export async function commitSessionForMultiSessionSave(handle, session, onProgre
     session.lazyLoader = null;
     session.frameGroups = new Map();
     session.instanceGroups = new Map();
+    session._releasedBySave = true;   // see buildSlpBytes
     console.log('[save-slp] pass 1/2: committed ref graph for session', session.name || '(unnamed)', '- evicted its lazy loader');
     // See `encourageGC` — dereferencing doesn't force reclamation; nudge the
     // engine toward a real (mark-compact) collection before the next
@@ -1156,6 +1174,13 @@ export async function finalizeMultiSessionSave(handle, opts) {
  * whose compute alone approaches the ceiling.
  */
 export async function saveAllSessionsStreaming(sessions, opts) {
+    // Pass 1 releases each session's data and pass 2 reads it back from these files,
+    // so one that has gone away must stop the save before anything is released: then
+    // nothing is lost, and the save works once the file is back.
+    for (var si = 0; si < sessions.length; si++) {
+        if (!sessions[si].lazyLoader) continue;   // the commit below says what is wrong
+        for (var source of sessions[si].lazyLoader.sourceFiles.values()) await readBlobRange(source, 0, 1);
+    }
     var handle = beginMultiSessionSave();
     var onProgress = (opts && opts.onProgress) || undefined;
     for (var i = 0; i < sessions.length; i++) await commitSessionForMultiSessionSave(handle, sessions[i], onProgress);

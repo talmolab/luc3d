@@ -121,6 +121,13 @@ const browser = await launchBrowser();         // chromium.launch(), plus the CD
   frame — no group may keep its stale 3D, and the members must be placeholders
   again afterwards. (Fails against `moveVideosToSession` without the hydration:
   0/10 non-resident groups re-solved, all 10 kept their stale 3D.)
+- **`slp-failed-read.mjs`** — a read of a `.slp` that fails is an error, never a
+  project with data missing. Moves a real picked file away at a chosen request or
+  read (no fake readers; it starts its own server for that): every kind of read on
+  the vendored reader and the raw worker, every read in turn, File ▸ Open, a range
+  source, the h5wasm cold-read patch, a multi-session save. (Fails against the
+  unpatched reader: File ▸ Open said "SLP loaded" with every group and all the 3D
+  gone, and a Save wrote that.)
 - **`session-video-scoping.mjs`** — regression guard for the multi-session
   "second session shows both videos" bug. Verifies that loading a video into one
   session never leaks its view / camera / `videoFileIndices` into another

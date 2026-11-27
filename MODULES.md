@@ -14332,7 +14332,7 @@ filesystem enumeration, decoder rebuild.
   folder per camera too): one pick opens a saved project with its videos, where
   Load Project asks for the folder a second time (a page given one file cannot
   see the folder around it). Otherwise it reads the SLP with the **typed** reader
-  (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores
+  (`parseSlpWithRawFallback`, `import-export/file-io.js`) and restores
   grouping, `nulledNodes`/occlusion, identities and 3D via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), then the rest of
   `metadata.lucid` through `readVisibilityMetadata`, `readSmoothingMetadata`
@@ -14984,6 +14984,14 @@ code looks, so it would post a result with 0 frames. `parseSlp` runs
 `checkSlpFormatAttrs` (`loading/slp-format-check.js`) before reading anything else.
 That error goes out with its `name` and without the stack every other error gets
 appended, since it ends up in the status bar as it stands.
+
+**A failed read must reject too.** The same try/catches turned a read that failed
+(a file removed mid-parse, a dropped network share) into a table the file doesn't
+have, and HDF5 is stopped mid-call after one, so nothing it says next can be trusted.
+Init wraps `FS.read` once to keep the first thing a read throws in `failedRead`, and
+`throwIfFailedRead` turns the whole parse into that error, right before `parseSlp`,
+`parseAnalysisH5` and `openH5Lazy` post their result. A lazy read after the open is
+served from memory, so it reads nothing. Covered by `tests/e2e/slp-failed-read.mjs` §5.
 
 **Fast compound reads (`readCompoundColumnsFast`).** SLEAP-written `.slp` files
 store `frames` / `instances` / `points` / `pred_points` as HDF5 **compound**
@@ -16475,9 +16483,19 @@ session's resident/total) rather than truncate silently. Covered by
   all selected sessions share a skeleton (node count + names, in order),
   otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
   guard `buildSlpLabelsMultiSession` and to pre-flight the per-camera download.
+- SLP parse for a load: `parseSlpWithRawFallback(file, onProgress)` —
+  `parseSlpViaSleapIO`, and `parseSlpH5` only if that throws on a file the raw
+  worker can read in full. Never for a file too new to read
+  (`loading/slp-format-check.js`), after a failed read (`err.failedRead`), or
+  on a file with `/session_data`, `/identity`, `/categories` or `/embeddings`, which
+  the raw worker can't read: it would open the project with every group and all the
+  3D gone, or the labels on detections, and the next save would write that (private
+  `rawWorkerCanStandIn`, which answers no when it can't tell). Used by
+  `parseSlpForImport` and `handleLoadSessionFolderSingleSlp`. Tests:
+  `tests/e2e/slp-failed-read.mjs` §3, §4.
 - SLP parse (raw worker): `parseSlpH5(file, onProgress, opts)` — spawns
   `slp-import-worker.js`. Kept for SLEAP analysis `.h5`, as the
-  `parseSlpViaSleapIO` fallback, and for the per-camera session-folder load,
+  `parseSlpWithRawFallback` fallback, and for the per-camera session-folder load,
   which passes `{ columnar: true }` to receive the poses as flat transferred
   typed arrays (`data.columnar`) instead of nested `data.frames`. The rejection
   keeps the worker's error `name`.
@@ -16883,6 +16901,16 @@ loading-overlay/status-text UI helpers.
   N times (duplicating every frame/track).
   `commitSessionForMultiSessionSave` records the flag as `sharedStore` on
   `handle.pending`, and `finalizeMultiSessionSave` passes it through.
+  **Pass 2 reads the source files again, and pass 1 has already released the
+  sessions, so a file that can't be read must not get that far.**
+  `saveAllSessionsStreaming` first reads a byte of every source file
+  (`readBlobRange`), before anything is released: one that has gone away fails the
+  save with the project intact, and the same Save works once the file is back. Every
+  released session is marked `_releasedBySave`, and `buildSlpBytes` refuses a marked
+  session with no `lazyLoader` ("Cannot save: ..."): nothing brings its data back
+  short of opening the project again, and the eager path would write an empty project
+  over the file and report success (what a Save after any multi-session save, failed
+  or not, did). `tests/e2e/slp-failed-read.mjs` §10.
   A per-camera session reopens through parallel `open()`s in `sourceFiles`
   order; order does not matter, since `SioLazyLoader._unifyTracks` re-indexes
   every store into the union of the cameras' track names in camera-NAME order —
@@ -16953,6 +16981,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   download fallback when there is no save-file picker, says why and how to
   enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
   `../ui/app-state.js`, `../loading/session-loader.js`,
+  `../loading/cold-read-guard.js` (`readBlobRange`, the check of the source files
+  before a multi-session save releases anything),
   `../loading/sio-lazy-loader.js` (`SioLazyLoader`, for
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
@@ -17028,11 +17058,10 @@ the cameras left without one (per session). Test:
 `tests/e2e/slp-load-unmatched-video.mjs`.
 
 The `.slp` parse is dispatched by the private `parseSlpForImport(file,
-onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
-streaming reader), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
-analysis `.h5` and as a fallback on any typed-read error but a refusal of a file
-too new to read (`loading/slp-format-check.js`), which the raw worker would refuse
-too. Both yield the same `slpData` shape.
+onProgress)`: real `.slp` files go through `parseSlpWithRawFallback`
+(`import-export/file-io.js`: the sleap-io.js streaming reader, and the raw h5wasm
+worker only where that loses nothing), and `parseSlpH5` is kept for SLEAP analysis
+`.h5`. Both yield the same `slpData` shape.
 
 On load, identities are restored **per session**: each session prefers its
 own `metadata.lucid.identities` (from `sessions_json`) and only falls back to
@@ -17173,7 +17202,7 @@ first track.
   the groups are rebuilt, which rebuilds `frameIdentityMap` from them when the
   file stored it in the compact form (see `import-export/frame-identity-metadata.js`).
 - `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
-  `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
+  `parseSlpWithRawFallback`, else → `parseSlpH5`.
 
 **Private helpers (not exported).**
 - `_loadSessionVideosParallel({ sessionIdx, session, state, modal, groupId, decoderFactory })`

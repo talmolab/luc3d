@@ -45,7 +45,11 @@ LOCAL PATCH (cold-read), in hdf5_util.js AND h5wasm.iife.js:
   93 wrong blocks examined were the partly-zero block right after the run it
   had re-read. With the neighbours, 15 of 15 cold parses on three more sessions
   matched the file. Reads that THROW were never seen here (0 in ~645,000 cold
-  reads, ~10 GB), so the patch has no retry for them. Counts are kept on
+  reads, ~10 GB), so the patch has no retry for them. A read or a re-read that
+  throws goes up through FS.read, where every worker that reads a user's .slp
+  catches it (the `LUCID local patch (failed read)` in lib/sleap-io, the same
+  rule in loading/slp-import-worker.js): the bytes are not known to be right,
+  so the whole read fails. Counts are kept on
   `WORKERFS.lucidColdRead` ({rereads, recovered}); each recovery logs a
   `[h5wasm WORKERFS] … were read again` console warning.
   Grep `LUCID local patch (cold-read)`: one BEGIN/END block (the function,

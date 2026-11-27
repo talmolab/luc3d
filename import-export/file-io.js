@@ -4129,6 +4129,50 @@ export async function parseSlpViaSleapIO(file, onProgress) {
 }
 
 /**
+ * Whether the raw worker can stand in for the typed reader on `file`: not when it holds
+ * what only the typed reader can read (grouping and 3D in `/session_data`, an identity
+ * catalog or labels on detections), and not when that can't be told.
+ */
+async function rawWorkerCanStandIn(file) {
+    var h5;
+    try {
+        h5 = await window.SleapIO.openH5Worker(file, {
+            h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href,
+        });
+    } catch (e) {
+        return false;
+    }
+    var keys = h5.keys();
+    h5.close().catch(function () { /* the answer is already in */ });
+    return !['session_data', 'identity', 'categories', 'embeddings'].some(function (k) { return keys.indexOf(k) >= 0; });
+}
+
+/**
+ * Read a `.slp` for a load: `parseSlpViaSleapIO`, and the raw worker (`parseSlpH5`)
+ * only if that throws on a file the raw worker can read in full, e.g. a non-standard
+ * split-field export. Standing in for the typed reader on a saved project, the raw
+ * worker opens the 2D with every group and all the 3D gone (and the labels on
+ * detections, on a file that has them), with nothing said, and the next save writes
+ * that over the project. And when the file could not be read
+ * (`err.failedRead`, LUCID local patch (failed read)), the error is the answer: nothing
+ * is opened, and opening the file again reads it from the start.
+ *
+ * @param {File} file
+ * @param {(msg:string)=>void} [onProgress]
+ * @returns {Promise<Object>} slpData
+ */
+export async function parseSlpWithRawFallback(file, onProgress) {
+    try {
+        return await parseSlpViaSleapIO(file, onProgress);
+    } catch (err) {
+        // Too new for this reader is too new for the raw worker as well.
+        if (isNewerSlpFormatError(err) || (err && err.failedRead) || !(await rawWorkerCanStandIn(file))) throw err;
+        console.warn('[slp-read] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
+        return await parseSlpH5(file, onProgress);
+    }
+}
+
+/**
  * Adapt one typed sleap-io.js `Instance`/`PredictedInstance` into the flat
  * instance dict shape the importer expects. Reads columnar `_xy`/`_visible`
  * directly (NOT `numpy()`, which zeroes invisible points to NaN and would drop
