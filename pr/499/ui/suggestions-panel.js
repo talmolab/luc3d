@@ -37,18 +37,18 @@
  * Seeking and focusing a view are handed in by `setupSuggestionsPanel`
  * (`pose/initialization.js`), like `setupPanelRail`'s `toggleInfoPanel`.
  */
-import { state, interactionManager } from './app-state.js?v=388836b834d4';
-import { isPanelOnScreen, onPanelRailChange } from './panel-rail.js?v=388836b834d4';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=388836b834d4';
-import { formatFrameNumber } from './frame-readout.js?v=388836b834d4';
-import { frameUserCountInView } from './frame-counters.js?v=388836b834d4';
-import { showPlaneDialog } from './plane-dialog.js?v=388836b834d4';
-import { isPlaneModeActive } from './plane-definition.js?v=388836b834d4';
+import { state, interactionManager } from './app-state.js?v=d1209a99fb3e';
+import { isPanelOnScreen, onPanelRailChange } from './panel-rail.js?v=d1209a99fb3e';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=d1209a99fb3e';
+import { formatFrameNumber } from './frame-readout.js?v=d1209a99fb3e';
+import { frameUserCountInView } from './frame-counters.js?v=d1209a99fb3e';
+import { showPlaneDialog } from './plane-dialog.js?v=d1209a99fb3e';
+import { isPlaneModeActive } from './plane-definition.js?v=d1209a99fb3e';
 import {
     SUGGESTION_METHODS, DEFAULT_PER_VIDEO, mulberry32, generateSuggestions,
     mergeSuggestions, shuffleSuggestions, removeUnlabeledSuggestions, removeSuggestion,
     suggestionExists, labeledSummary, groupSuggestionsByView, stepSuggestion,
-} from '../pose/suggestions.js?v=388836b834d4';
+} from '../pose/suggestions.js?v=d1209a99fb3e';
 
 const TAB = 'tabSuggestions';
 

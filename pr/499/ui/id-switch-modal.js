@@ -28,24 +28,24 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { noteProgress } from './progress-delta.js?v=388836b834d4';
-import { state, getActiveSession } from './app-state.js?v=388836b834d4';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=388836b834d4';
-import { showPanelTab } from './panel-rail.js?v=388836b834d4';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=388836b834d4';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=388836b834d4';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=388836b834d4';
-import { getTrackingThreshold } from './settings.js?v=388836b834d4';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=388836b834d4';
-import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=388836b834d4';
+import { noteProgress } from './progress-delta.js?v=d1209a99fb3e';
+import { state, getActiveSession } from './app-state.js?v=d1209a99fb3e';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=d1209a99fb3e';
+import { showPanelTab } from './panel-rail.js?v=d1209a99fb3e';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=d1209a99fb3e';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=d1209a99fb3e';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=d1209a99fb3e';
+import { getTrackingThreshold } from './settings.js?v=d1209a99fb3e';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=d1209a99fb3e';
+import { scoreSizeGridOffThread } from '../pose/size-check-pool.js?v=d1209a99fb3e';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=388836b834d4';
-import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=388836b834d4';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=388836b834d4';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=388836b834d4';
+         inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js?v=d1209a99fb3e';
+import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js?v=d1209a99fb3e';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores, createPressureWatch } from './load-graph.js?v=d1209a99fb3e';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=d1209a99fb3e';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=388836b834d4';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=d1209a99fb3e';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -330,7 +330,7 @@ async function runImage(session, rate, inject) {
     var threshold = pkg ? pkg.threshold : getTrackingThreshold('imageChangeThreshold');
     // No GPU is not a reason to skip: the embedder then runs on the CPU, slowly, and the dialog says so
     var prog = openProgressDialog(pkg ? 'Checking ID switches (images, ' + pkg.name + ')' : 'Checking ID switches (images)');
-    var t0 = 0, ticker = null, cropTicker = null, embedder = null;
+    var t0 = 0, ticker = null, cropTicker = null, embedder = null, pressure = null;
     try {
         embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); }, imageModel: pkg,
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
@@ -339,17 +339,20 @@ async function runImage(session, rate, inject) {
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
         // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs
-        // on the main thread between progress calls (fitMs, timed below); it is shared by all the cores.
+        // on the main thread between progress calls (fitMs, timed below); it is shared by all the cores. It counts
+        // computing only, never a wait on the decoder or the GPU. The whole machine's CPU pressure (Compute Pressure
+        // API, where the browser has it) goes beside it, other apps included.
         var meter = createLoadMeter(), cpuMeter = createLoadMeter(), fitMs = 0, fitFrom = 0;
         var cores = cpuCores();
         var hasCpu = typeof embedder.cpuBusyMs === 'function';
         if (hasCpu) prog.braveHint(cores);
+        if (hasCpu) pressure = (inject.createPressureWatch || createPressureWatch)();
         var showDevice = function () {
             if (typeof embedder.device !== 'function' && !hasCpu) return;
             var now = performance.now();
             var load = ticker && typeof embedder.busyMs === 'function' ? meter(now, embedder.busyMs()) : null;
             var cpuLoad = ticker && hasCpu ? cpuMeter(now, (embedder.cpuBusyMs() + fitMs) / Math.max(1, cores)) : null;
-            var cpu = hasCpu ? formatEmbedCpu(cores, cpuLoad) : null;
+            var cpu = hasCpu ? formatEmbedCpu(cores, cpuLoad, pressure && pressure.state()) : null;
             var gpu = formatEmbedDevice(typeof embedder.device === 'function' ? embedder.device() : null, load);
             prog.hardware(cpu, gpu);
             if (ticker) prog.sample(cpu && cpu.load, gpu.load);
@@ -418,6 +421,7 @@ async function runImage(session, rate, inject) {
         throw e;
     } finally {
         clearInterval(ticker); clearInterval(cropTicker);
+        if (pressure) pressure.stop();
         // checkImageSwitches releases it too, but not when it fails before its first frame — and the CPU
         // workers hold ~600 MB each. Releasing twice is harmless.
         if (embedder && typeof embedder.releaseFrames === 'function') { try { embedder.releaseFrames(); } catch (e) { /* ignore */ } }

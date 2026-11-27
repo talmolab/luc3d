@@ -13,11 +13,11 @@
 // so this works from every deployed channel. It does NOT work offline (the
 // files are not in the offline bundle); it then fails with a status message.
 
-import { state } from '../ui/app-state.js?v=388836b834d4';
-import { handleLoadSessionFolderPerCamera } from './session-loader.js?v=388836b834d4';
-import { newProject, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=388836b834d4';
-import { showLoadingProgress } from '../ui/loading-overlay.js?v=388836b834d4';
-import { setPageProject } from '../ui/page-title.js?v=388836b834d4';
+import { state } from '../ui/app-state.js?v=d1209a99fb3e';
+import { handleLoadSessionFolderPerCamera } from './session-loader.js?v=d1209a99fb3e';
+import { newProject, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=d1209a99fb3e';
+import { showLoadingProgress } from '../ui/loading-overlay.js?v=d1209a99fb3e';
+import { setPageProject } from '../ui/page-title.js?v=d1209a99fb3e';
 
 /** The Hugging Face commit of talmolab/slap-2m the demo is read from. */
 export const DEMO_REVISION = '683b01330e775cb9a7e4bf5080f2284e9e189509';

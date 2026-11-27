@@ -52,12 +52,12 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=388836b834d4';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=388836b834d4';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=388836b834d4';
-import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=388836b834d4';
-import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=388836b834d4';
-import { installModelPackageFetch, withPackageCachePolicy, modelPackageTransfer, checkCachedPackageFiles } from './image-model-package.js?v=388836b834d4';
+import { state } from './app-state.js?v=d1209a99fb3e';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=d1209a99fb3e';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=d1209a99fb3e';
+import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js?v=d1209a99fb3e';
+import { EmbeddingCache, cropKeyHash, hullsReachingCrop } from '../pose/embedding-cache.js?v=d1209a99fb3e';
+import { installModelPackageFetch, withPackageCachePolicy, modelPackageTransfer, checkCachedPackageFiles } from './image-model-package.js?v=d1209a99fb3e';
 
 // The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
 export { createLoadMeter };
@@ -338,7 +338,7 @@ export async function createCpuModelPool(count, onStatus, clock) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=388836b834d4', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=d1209a99fb3e', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -1147,13 +1147,15 @@ export function formatEmbedDevice(d, load) {
 /**
  * The progress dialog's CPU line, above the device line: `{text, title, load}`
  * (formatCpuLoad, ui/load-graph.js). "CPU: 12 cores · load 7%" — `load` (null: not
- * measured yet) is the share of ALL the cores this check kept busy over the last
- * GPU_LOAD_WINDOW_MS: its threads' busy time (`cpuBusyMs()`, plus the dialog's own
- * timing of the fit) / cores through createLoadMeter, so one saturated thread on 12
- * cores reads 8%. Video decoding is not in it, and the tooltip says so.
+ * measured yet) is the share of ALL the cores this check kept computing over the
+ * last GPU_LOAD_WINDOW_MS: its threads' compute time (`cpuBusyMs()`, plus the
+ * dialog's own timing of the fit) / cores through createLoadMeter, so one saturated
+ * thread on 12 cores reads 8%. Video decoding and waits for the GPU are not in it,
+ * and the tooltip says so. `pressure` (optional, createPressureWatch's state) adds
+ * the whole machine's CPU pressure: "· fair".
  */
-export function formatEmbedCpu(cores, load) {
-    return formatCpuLoad(cores, load, 'this check: cropping, the image model when it runs on the CPU, and fitting (not video decoding)');
+export function formatEmbedCpu(cores, load, pressure) {
+    return formatCpuLoad(cores, load, 'this check: cropping, the image model when it runs on the CPU, and fitting (not video decoding)', pressure);
 }
 
 /**
@@ -1216,7 +1218,10 @@ function formatKeyframes(k) {
  * worker, which queues it. Under the CPU cap the pool keeps the queue instead: a
  * worker takes one job at a time and, after it, idles `paceRestMs(job, maxCpuPct)`
  * before the next; a failed worker's job is rejected and the others finish the queue.
- * `clock` (createBusyClock, optional) is told while each worker holds a job, for the CPU load.
+ * `clock` (createBusyClock, optional) gets each job's compute as its worker timed it (`cpuMs`: cutting
+ * and writing the inputs), for the CPU load — not the time the job held a worker, which includes its
+ * wait in the worker's queue and for the read token (the token makes the pool's workers wait on each
+ * other: 8 workers holding jobs read as 8 busy cores while one of them cut crops).
  */
 export function createCropPool(clock, maxCpuPct) {
     const forced = typeof window !== 'undefined' ? window.LUCID_CROP_WORKERS : undefined;
@@ -1239,7 +1244,6 @@ export function createCropPool(clock, maxCpuPct) {
     const post = function (w, job) {
         const id = nextId++;
         w.load++; w.from = performance.now();
-        if (clock) clock.begin(w);
         pending.set(id, { resolve: job.resolve, reject: job.reject, w: w });
         w.worker.postMessage({ id: id, image: job.image, crops: job.crops, input: INPUT }, [job.image]);
     };
@@ -1268,7 +1272,6 @@ export function createCropPool(clock, maxCpuPct) {
             closed = true;
             const err = new Error('crop pool closed');
             workers.forEach(function (w) {
-                if (clock) clock.close(w);
                 if (w.idle) w.idle(); w.idle = null;
                 w.worker.terminate();
             });
@@ -1281,20 +1284,19 @@ export function createCropPool(clock, maxCpuPct) {
         pool.broken = true;
         w.dead = true;
         if (holder === w) { holder = null; grantNext(); }
-        if (clock) clock.close(w);
         pending.forEach(function (p, id) { if (p.w === w) { pending.delete(id); p.reject(new Error(msg)); } });
         dispatch();
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=388836b834d4', import.meta.url), { type: 'module' }),
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=d1209a99fb3e', import.meta.url), { type: 'module' }),
                         load: 0, idle: null, dead: false, from: 0 };
             w.worker.onmessage = function (e) {
                 if (e.data.want) { wanting.push(w); grantNext(); return; }
                 if (e.data.release) { if (holder === w) holder = null; grantNext(); return; }
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
-                if (clock) clock.end(w);
+                if (clock) clock.add(e.data.cpuMs);
                 if (e.data.error) p.reject(new Error(e.data.error)); else p.resolve(e.data.tensors);
                 if (!capped) return;
                 const rest = paceRestMs(performance.now() - w.from, pct);
@@ -1455,7 +1457,9 @@ export async function createImageEmbedder(session, opts) {
         : opts.device === 'cpu' ? { kind: 'cpu', adapter: null, why: 'the CPU was requested' }
         : opts.device === 'webgpu' ? { kind: 'webgpu' } : await pickImageDevice();
     let T = null, model = null, device = null, dtype = 'fp32', adapter = where.adapter, cpu = null, cpuWorkers = 0;
-    // the CPU threads' busy time (cpuBusyMs): crop workers, CPU model workers, and crops cut on the main thread
+    // the CPU threads' compute time (cpuBusyMs): crop workers (each job's cutting and input writing, timed in the
+    // worker), CPU model workers (while each has a run: pure WebAssembly compute), and crops cut on the main thread.
+    // Never the time a thread waits for the decoder, the GPU or the crop pool's read token
     const cpuClock = createBusyClock();
     // the compute caps (paceRestMs): the user's share of the GPU's time and of the CPU's
     const maxGpuPct = capPct(opts.maxGpuPct), maxCpuPct = capPct(opts.maxCpuPct);
@@ -1890,9 +1894,11 @@ export async function createImageEmbedder(session, opts) {
         sampleCrops: function () { return samples; },
         /** Milliseconds spent running the model so far, the run in flight included (feeds createLoadMeter). */
         busyMs: function () { return tm.runMs + tm.readMs + (tm.busySince ? performance.now() - tm.busySince : 0); },
-        /** Milliseconds of CPU thread time kept busy so far, SUMMED over threads (so it can grow up to cores x as fast
-         *  as the clock): crop workers, CPU model workers and inline crops, jobs in flight included. Per thread
-         *  it is the time the thread held work, waits inside it (a crop's readback) included. */
+        /** Milliseconds of CPU thread time spent computing so far, SUMMED over threads (so it can grow up to cores x
+         *  as fast as the clock): crop workers (each job's cutting and input writing, added when the job comes back),
+         *  CPU model workers (a run in flight included) and inline crops. Never a wait: a crop job queued in its
+         *  worker or waiting for the read token, the video decoder, the GPU model. (A synchronous section still
+         *  counts whole, so drawing a hardware-decoded frame includes its readback.) */
         cpuBusyMs: function () { return cpuClock.ms(); },
         views: views.map(function (v) { return v.cameraName || v.name; }),
     };
