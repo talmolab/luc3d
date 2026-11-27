@@ -22,7 +22,8 @@ import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
 } from './slp-merge.js';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder, closeEmbeddedFrames } from '../loading/video.js';
+import { embeddedVideoForEntry } from '../loading/slp-package-reader.js';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
@@ -98,6 +99,74 @@ async function parseSlpForImport(file, onProgress) {
         }
     }
     return await parseSlpH5(file, onProgress);
+}
+
+/**
+ * Start a frame worker on a `.slp` file. For a file with embedded images, the
+ * worker then stays open as long as the project does (add it to
+ * `state.frameWorkers`): it reads each frame when it is asked for.
+ *
+ * @param {File} slpFile
+ * @returns {Promise<{worker: Worker, videos: Array}>} `videos`: the file's embedded
+ *   videos (`SLPPackageReader.getVideos`), empty when it has none
+ */
+function openEmbeddedFrames(slpFile) {
+    var frameWorker = new Worker(new URL('../loading/frame-worker.js', import.meta.url), { type: 'module' });
+    return new Promise(function (resolve, reject) {
+        var fail = function (message) {
+            frameWorker.terminate();
+            reject(new Error(message));
+        };
+        frameWorker.onmessage = function (e) {
+            var msg = e.data;
+            if (msg.type === 'ready') {
+                frameWorker.postMessage({ type: 'loadFile', file: slpFile });
+            } else if (msg.type === 'loaded') {
+                resolve({ worker: frameWorker, videos: msg.videos || [] });
+            } else if (msg.type === 'error') {
+                fail(msg.error || 'Frame worker error');
+            }
+        };
+        frameWorker.onerror = function (err) {
+            fail('Frame worker failed: ' + (err.message || 'unknown'));
+        };
+    });
+}
+
+/**
+ * Whether a `.slp` file holds embedded images. Costs one worker start and a
+ * metadata read. A file that cannot be read says no: the real read reports it.
+ *
+ * @param {File} slpFile
+ * @returns {Promise<boolean>}
+ */
+export async function slpHasEmbeddedImages(slpFile) {
+    try {
+        var opened = await openEmbeddedFrames(slpFile);
+        opened.worker.terminate();
+        return opened.videos.length > 0;
+    } catch (err) {
+        return false;
+    }
+}
+
+/**
+ * The frame to open a session of embedded images on: its first labeled frame with
+ * an image, else its first image. A `.slp` holds images of only some frames, so
+ * its first labeled frame, or frame 0, can leave every view empty.
+ *
+ * @param {number[]} frameIndices - the session's labeled frames, sorted
+ * @param {EmbeddedVideoDecoder[]} decoders - its videos
+ * @returns {number}
+ */
+function embeddedFrameToOpenOn(frameIndices, decoders) {
+    for (var fi = 0; fi < frameIndices.length; fi++) {
+        var labeled = frameIndices[fi];
+        if (decoders.some(function (d) { return d.hasFrame(labeled); })) return labeled;
+    }
+    var firsts = decoders.map(function (d) { return d.firstFrame; })
+        .filter(function (f) { return f !== null; });
+    return firsts.length > 0 ? Math.min.apply(null, firsts) : 0;
 }
 
 /**
@@ -1019,6 +1088,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
             if (state.isPlaying) videoController.pause();
             setVideoController(null);
         }
+        closeEmbeddedFrames(state);
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
@@ -1079,6 +1149,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
             });
         }
 
+        var embeddedFrames = null;   // this file's frame worker, once a session needs it
         // Whether the session loaded last — the one left active — has 3D.
         var lastSessionHas3d = false;
         // Picked videos that matched no camera, per session, for the status.
@@ -1320,28 +1391,23 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js', import.meta.url), { type: 'module' });
-            var embeddedVideoInfos = await new Promise(function (resolve, reject) {
-                frameWorker.onmessage = function (e) {
-                    var msg = e.data;
-                    if (msg.type === 'ready') {
-                        frameWorker.postMessage({ type: 'loadFile', file: slpFile });
-                    } else if (msg.type === 'loaded') {
-                        resolve(msg.videos || []);
-                    } else if (msg.type === 'error') {
-                        reject(new Error(msg.error || 'Frame worker error'));
-                    }
-                };
-                frameWorker.onerror = function (err) {
-                    reject(new Error('Frame worker failed: ' + (err.message || 'unknown')));
-                };
-            });
+            // One worker for the load: every session's images are in this file.
+            if (!embeddedFrames) {
+                embeddedFrames = await openEmbeddedFrames(slpFile);
+                state.frameWorkers.push(embeddedFrames.worker);
+            }
+            var frameWorker = embeddedFrames.worker;
+            var sessEmbeddedDecoders = [];
 
-            console.log('[load-slp] Frame worker loaded, embedded videos:', embeddedVideoInfos.length);
+            console.log('[load-slp] Frame worker loaded, embedded videos:', embeddedFrames.videos.length);
 
-            for (var evi = 0; evi < embeddedVideoInfos.length; evi++) {
-                var evInfo = embeddedVideoInfos[evi];
-                var evCamName = videoIdxToCameraName[evInfo.idx] || ('cam_' + evInfo.idx);
+            for (var evi = 0; evi < slpData.videos.length; evi++) {
+                // This session's videos, each on the camera its frames went to above.
+                if (sessVideoIndices.size > 0 && !sessVideoIndices.has(evi)) continue;
+                var evInfo = embeddedVideoForEntry(embeddedFrames.videos, slpData.videos[evi], evi);
+                if (!evInfo) continue;
+                var evCamName = videoIdxToCameraName[evi]
+                    || (cameras.length > 0 ? cameras[evi % cameras.length].name : 'cam_' + evi);
                 var evWidth = evInfo.width || 0;
                 var evHeight = evInfo.height || 0;
 
@@ -1372,17 +1438,20 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
                     }
                 }
 
+                var evLabeled = session.frameIndices;
                 var decoder = new EmbeddedVideoDecoder({
                     worker: frameWorker,
                     videoInfo: evInfo,
                     cacheSize: 60,
+                    minFrames: evLabeled.length > 0 ? evLabeled[evLabeled.length - 1] + 1 : 0,
                 });
                 if (evWidth && evHeight) {
                     decoder.videoTrack.video.width = evWidth;
                     decoder.videoTrack.video.height = evHeight;
                 }
+                sessEmbeddedDecoders.push(decoder);
 
-                var evSlpVideo = slpData.videos[evInfo.idx];
+                var evSlpVideo = slpData.videos[evi];
                 var evVideoPath = evSlpVideo
                     ? (evSlpVideo.sourceFilename || evSlpVideo.filename || null)
                     : null;
@@ -1401,14 +1470,12 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
                     // case).
                     slpFilename: null,
                     videoPath: evVideoPath || (evCamName + '.mp4'),
+                    sessionIdx: slpSessIdx,
                 });
             }
 
-            state._frameWorker = frameWorker;
-
-            for (var evi2 = 0; evi2 < state.videoFiles.length; evi2++) {
-                createViewForVideoFile(state.videoFiles[evi2]);
-            }
+            // Views are created after the session loop, for the active session only.
+            session.lastFrame = embeddedFrameToOpenOn(session.frameIndices, sessEmbeddedDecoders);
         } else {
             // --- No embedded videos: prompt for session folder ---
             hideLoading();
@@ -1758,7 +1825,8 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
         if (videoController && state.views.length > 0 && state.session) {
             var firstFrame = 0;
             var sortedFrames = state.session.frameIndices;
-            if (sortedFrames.length > 0) firstFrame = sortedFrames[0];
+            if (hasEmbedded) firstFrame = state.session.lastFrame;
+            else if (sortedFrames.length > 0) firstFrame = sortedFrames[0];
             state.currentFrame = firstFrame;
             await videoController.seekToFrame(firstFrame);
         }
@@ -2041,26 +2109,20 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js', import.meta.url), { type: 'module' });
-            var embeddedVideoInfos = await new Promise(function (resolve, reject) {
-                frameWorker.onmessage = function (e) {
-                    var msg = e.data;
-                    if (msg.type === 'ready') {
-                        frameWorker.postMessage({ type: 'loadFile', file: slpFile });
-                    } else if (msg.type === 'loaded') {
-                        resolve(msg.videos || []);
-                    } else if (msg.type === 'error') {
-                        reject(new Error(msg.error || 'Frame worker error'));
-                    }
-                };
-                frameWorker.onerror = function (err) {
-                    reject(new Error('Frame worker failed: ' + (err.message || 'unknown')));
-                };
-            });
+            var addedFrames = await openEmbeddedFrames(slpFile);
+            state.frameWorkers.push(addedFrames.worker);
+            var frameWorker = addedFrames.worker;
+            var addCamerasMapped = Object.keys(videoIdxToCameraName).length > 0;
 
-            for (var mevi = 0; mevi < embeddedVideoInfos.length; mevi++) {
-                var mevInfo = embeddedVideoInfos[mevi];
-                var mevCamName = videoIdxToCameraName[mevInfo.idx] || ('cam_' + mevInfo.idx);
+            for (var mevi = 0; mevi < slpData.videos.length; mevi++) {
+                // Each on the camera its frames were merged onto (`mergeSlpFramesIntoSession`).
+                // With a session's camera map, that session's videos only: an
+                // added file brings its first session's cameras.
+                if (addCamerasMapped && !videoIdxToCameraName[mevi]) continue;
+                var mevInfo = embeddedVideoForEntry(addedFrames.videos, slpData.videos[mevi], mevi);
+                if (!mevInfo) continue;
+                var mevCamName = videoIdxToCameraName[mevi]
+                    || (cameras.length > 0 ? cameras[mevi % cameras.length].name : 'cam_' + mevi);
                 var mevWidth = mevInfo.width || 0;
                 var mevHeight = mevInfo.height || 0;
 
@@ -2090,17 +2152,19 @@ export async function handleAddSlp() {
                     }
                 }
 
+                var mLabeled = state.session.frameIndices;
                 var mDecoder = new EmbeddedVideoDecoder({
                     worker: frameWorker,
                     videoInfo: mevInfo,
                     cacheSize: 60,
+                    minFrames: mLabeled.length > 0 ? mLabeled[mLabeled.length - 1] + 1 : 0,
                 });
                 if (mevWidth && mevHeight) {
                     mDecoder.videoTrack.video.width = mevWidth;
                     mDecoder.videoTrack.video.height = mevHeight;
                 }
 
-                var mevSlpVideo = slpData.videos[mevInfo.idx];
+                var mevSlpVideo = slpData.videos[mevi];
                 var mevVideoPath = mevSlpVideo
                     ? (mevSlpVideo.sourceFilename || mevSlpVideo.filename || null)
                     : null;

@@ -4697,6 +4697,8 @@ Calibration and `envSkeleton` remain per-session.
   it follows the frame rate with no caller recomputing it. Setting it (tests and
   benches pin a frame count) stores `frames / fps` in `trailSeconds`. The
   pickers set `trailSeconds`.
+  `state.frameWorkers` — the workers reading embedded images from the open `.slp`,
+  stopped by `closeEmbeddedFrames` (`loading/video.js`).
   `state.trailShade` — the node-trail shade, a `TRAIL_SHADES` key
   (`ui/overlays.js`), starting at `DEFAULT_TRAIL_SHADE` ('dark'); `ui/ui-wiring.js`
   replaces it at startup with the one remembered in `localStorage`.
@@ -9517,7 +9519,11 @@ multi-video docking layout.
   non-CSS counterpart of `applyVideoFilters` (see below).
 - `populateViewStrip`, `populateSessionsPanel`, `populateSessionStrip`.
 - `showMoveVideoModal`.
-- `removeSession`, `switchSession` (async).
+- `removeSession`, `switchSession` (async). A video embedded in the `.slp` (no `file`)
+  has no file to reopen and its decoder is not pooled, so both keep its decoder: a
+  switch only drops its decoded frames. `switchSession` sets `state.currentFrame` before
+  `refreshPaneInteractions`, which seeks to it: at the old session's frame number, that
+  seek could finish last and leave that picture up.
 
 **Imports from project modules.**
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
@@ -12271,6 +12277,10 @@ are `tests/e2e/contrast-slider-roundtrip.mjs` and
 
 ### ui/ui-wiring.js
 
+**A file with embedded images is never the save target** (`hasEmbeddedVideos` clears
+the handle after the load): a save writes no images, so it would destroy them, and the
+next Save asks where to save instead.
+
 **Purpose.** Top-level UI wiring. Builds the menu bar, transport controls,
 keyboard handlers, visibility tab, view-mode (grid/single) switching,
 playback rate, and re-exports popular helpers like `unlinkGroup`,
@@ -13924,10 +13934,11 @@ else cut; hidden under three characters).
 
 ### loading/frame-worker.js
 
-**Purpose.** Worker that uses `SLPPackageReader` + h5wasm-lazy-files to
-extract embedded video frames from `.pkg.slp` files via HTTP range
-requests. Spawned by `import-export/slp-import.js` (twice — for two
-loading paths). Module-typed worker.
+**Purpose.** Worker that uses `SLPPackageReader` + h5wasm to extract embedded
+video frames from a `.slp` file, one at a time. Spawned by
+`import-export/slp-import.js`, once per file; one worker serves all of a file's
+sessions, and stays open as long as the project does (`state.frameWorkers`,
+`closeEmbeddedFrames`, `loading/video.js`). Module-typed worker.
 
 **Message protocol.**
 - IN: `{type: 'loadUrl', url}` / `{type: 'loadFile', file}` — open SLP
@@ -13938,8 +13949,11 @@ loading paths). Module-typed worker.
   index for a display frame.
 - IN: `{type: 'close'}`.
 - OUT: `{type: 'ready'}`, `{type: 'log', message, level}`,
-  `{type: 'videos', videos}`, `{type: 'frame', bytes, format, ...}`,
-  `{type: 'error', error}`.
+  `{type: 'videos', videos}`, `{type: 'frame', videoKey, embeddedIdx, pngBytes,
+  format, ...}`, `{type: 'error', error}`.
+- A `getFrame` that fails still answers: `{type: 'frame', videoKey, embeddedIdx,
+  error}`. Whoever asked is waiting (`seekToFrame`, a load's size probe), and a plain
+  `error` reaches none of them, which left the load stuck behind its overlay.
 
 **Imports from project modules.**
 - `./slp-package-reader.js` — `SLPPackageReader`.
@@ -13950,8 +13964,8 @@ import.meta.url), {type: 'module'})` from `import-export/slp-import.js`
 (two call sites). Its `Worker` is driven by `EmbeddedVideoDecoder`
 (`loading/video.js`).
 
-**User-facing features.** Loading `.pkg.slp` projects with embedded video
-frames (off-main-thread to keep UI responsive).
+**User-facing features.** Loading `.slp` files with embedded video frames
+(off-main-thread to keep UI responsive).
 
 ---
 
@@ -14582,6 +14596,10 @@ diagnosis when there is one). The per-camera path collects them in
 status (one line per distinct diagnosis), like `slpFailures`. Lazy reopen's
 attach step lists the reason per file too.
 
+A file with embedded images never takes the lazy route below, which does not show
+them (`slpHasEmbeddedImages`, `handleLoadProject`), and that route closes any that are
+open (`closeEmbeddedFrames`).
+
 **Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
 Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
 `import-export/save-load.js` via `shouldUseLazySlp`, and by
@@ -14965,6 +14983,7 @@ open-and-stream-frames.
   an empty `data.frames`) — see below. `formatOnly: true` stops after the format
   check and posts an empty result (`checkSlpFileFormat`).
 - IN: `{type: 'open', file}` — lazy open, return metadata only.
+- A video's names come out as one string: an image sequence's is a list of its images.
 - IN: `{type: 'getFrame', frameIdx, requestId}` — read one frame lazily.
 - IN: `{type: 'getFrames', startIdx, endIdx, requestId}` — read range.
 - IN: `{type: 'close'}` — close lazy file.
@@ -15042,10 +15061,31 @@ lazy frame loading for very large SLP files.
 
 ### loading/slp-package-reader.js
 
-**Purpose.** HDF5 helper class for reading frame-extracted `.pkg.slp`
-files. Knows how to enumerate `videoN` groups, read PNG/JPG byte
-strings, and translate display frames ↔ embedded indices. Designed to
-run inside a worker context with h5wasm available.
+**Purpose.** HDF5 helper class for reading `.slp` files with embedded images.
+Knows how to enumerate `videoN` groups, read PNG/JPG byte strings, and translate
+display frames ↔ embedded indices. Designed to run inside a worker context with
+h5wasm available. Everything past it gets plain numbers: h5wasm returns HDF5's
+int64 as BigInt, which is what SLEAP and sleap-io write `width`, `height`,
+`channels` and `frame_numbers` in, and a canvas size or frame arithmetic throws on
+one.
+
+**Reads one frame's bytes at a time**, never `dataset.value`: that reads every frame
+of the video for each one asked for, and on a variable-length dataset never frees
+them. Three layouts, as sleap-io.js tells them apart:
+- variable-length rows (SLEAP, older Python): `dataset.slice` gives one array a row;
+- fixed-width rows, frames x longest image (Python): the row's bytes, zero-padded;
+- all images in one run of bytes (the JS writer): `frame_sizes` says where each ends.
+  Before March 2026 sleap-io.js wrote no sizes, so the images are found by their
+  signature, reading the whole run once, on the first frame asked for (`frameOffsets`).
+
+**Red and blue:** `channelOrder` is the `channel_order` attribute, else BGR before
+format 1.4 (SLEAP stored BGR and did not say so), as sleap-io.js and Python read it.
+`EmbeddedVideoDecoder` swaps them.
+
+**Uncompressed pixels** (format `hdf5`, frames x height x width x channels): the
+size comes from the shape when the attributes are absent, and nothing is trimmed, as
+a dark last pixel is not padding. The decoder shows them as stored, as Python does,
+whatever `channel_order` says (sleap-io.js swaps BGR here; Python is the reference).
 
 **Key exports.**
 - `SLPPackageReader` — class. Methods: `open(url)` (range-request
@@ -15054,14 +15094,21 @@ run inside a worker context with h5wasm available.
   `findEmbeddedIndex(videoKey, displayFrame)`,
   `findClosestFrame(videoKey, displayFrame)`,
   `hasFrame(videoKey, displayFrame)`, `getFrameRange(videoKey)`.
+- `embeddedVideoForEntry(videos, entry, listIdx)` — the embedded video holding the
+  images of one entry of the file's video list, or null for an external video. By
+  the group the entry names (`dataset`), the only link: a package's groups need not
+  follow list order, and their numbers can run past the list.
 
 **Imports from project modules.** None (uses h5wasm passed in via
-options bag).
+options bag), so the main thread and Node tests can load it too.
 
-**Imported by.** `loading/frame-worker.js`.
+**Imported by.** `loading/frame-worker.js`, `import-export/slp-import.js`
+(`embeddedVideoForEntry`).
 
-**User-facing features.** Backs frame extraction for `.pkg.slp` files
-loaded over the network or from disk.
+**User-facing features.** Backs frame extraction for `.slp` files with embedded
+images, loaded over the network or from disk.
+
+Tests: `tests/test-slp-package-reader.mjs`, `tests/e2e/slp-embedded-images.mjs`.
 
 ---
 
@@ -15703,9 +15750,24 @@ How it behaves:
   next callback confirms it (Firefox sometimes reports a frame ~10 ahead that
   is never painted).
 - `EmbeddedVideoDecoder` — class for SLP-embedded frames. `getFrame`,
-  `hasFrame`, `close`.
-- `VideoController` — class. Selected methods: `seekToFrame`,
-  `scrubToFrame`, `togglePlayback`, `startPlayback`, `stopPlayback`,
+  `hasFrame`, `peekFrame`, `releaseFrames`, `setCacheSize`, `close`, `firstFrame` (the
+  first frame with an image, null with none). Most frames of a package have no image:
+  `getFrame` is then null, and `seekToFrame` clears that view, or the last picture
+  would stay up under this frame's poses. It counts frames up to `minFrames` (the
+  labeled ones) past its last image, and shows a frame that fails to read as none.
+  An encoded image stored BGR is swapped per frame, except a grey one; uncompressed
+  pixels are drawn as stored (`rawPixelsBitmap`).
+- `hasEmbeddedVideos(state)` — whether any of the project's videos is embedded in
+  its `.slp`, which is what tells a save it writes no images (`import-export/save-load.js`).
+- `closeEmbeddedFrames(state)` — close those decoders and stop `state.frameWorkers`.
+  They are not in the decoder pool, and a worker's listener keeps each decoder and
+  its frames alive, so every loader that replaces the project calls it.
+- `VideoController` — class. Selected methods: `seekToFrame` (a seek that finishes
+  after a newer one has painted does not paint: an uncached frame requested first must
+  not cover a cached one requested second; seeks finishing in order all paint),
+  `scrubToFrame`, `togglePlayback`, `startPlayback` (with an embedded view shown,
+  `_startEmbeddedPlayback`: seeks at the frame rate, as they have no `<video>`),
+  `stopPlayback`,
   `pausePlayback` (user-pause: stop + frame-accurate re-decode — mediabunny,
   or the mid-frame `<video>` seek where WebCodecs cannot decode — of the
   CURRENT frame, so every camera rests exactly on-frame with the pose overlay;
@@ -16488,7 +16550,8 @@ session's resident/total) rather than truncate silently. Covered by
   the loaders that change nothing before they read don't use it.
 - SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` —
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` and adapts
-  the typed `Labels` into the `slpData` shape via the private
+  the typed `Labels` into the `slpData` shape (a video's names as one string: an
+  image sequence's is a list of its images, of which it takes the first) via the private
   `_typedInstanceToSlpData` pose transform (columnar `_xy`/`_visible` →
   `points[]` + parallel `occluded[]`, NOT `numpy()`; a prediction's per-node
   scores as `pointScores`, the typed instance's own `_score` column by reference,
@@ -16755,6 +16818,12 @@ same reason).
 saveAs, saveCompactCopy, saveProjectSlp, saveProject), load dispatcher
 (`handleLoadProject`), session-frame serialization helpers, the
 loading-overlay/status-text UI helpers.
+
+**Embedded images.** A save writes poses and video names, not images, so a save of a
+project with images embedded in its `.slp` has the labels only, and its status says so
+(`embeddedImagesSaveNote`). `handleLoadProject` keeps a large file with embedded images
+off the lazy route (`slpHasEmbeddedImages`): they are what makes it large, and only the
+eager path shows them.
 
 **Key exports.**
 - **Save Compact Copy.** `saveCompactCopy({pickFile?})` (File menu): the warning
@@ -17027,6 +17096,15 @@ no view, and the final status becomes a warning naming the unused videos and
 the cameras left without one (per session). Test:
 `tests/e2e/slp-load-unmatched-video.mjs`.
 
+**Embedded images.** One frame worker per file (`openEmbeddedFrames`). Each session
+takes the videos its frames went to, in list order, each matched to its images by
+the group the list entry names (`embeddedVideoForEntry`), never by the group's
+number. The views are made after the session loop, for the active session only, as
+for external videos. `session.lastFrame` starts on the first labeled frame with an
+image, else the first image (`embeddedFrameToOpenOn`), which is where the load opens
+and `switchSession` first goes: frame 0, or the first labeled frame, can leave every
+view empty. `handleAddSlp` does the same for the file it adds. Rules: `CLAUDE.md`.
+
 The `.slp` parse is dispatched by the private `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
 streaming reader), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
@@ -17074,6 +17152,9 @@ first track.
   `resetPlaneState()` up front, then `readVisibilityMetadata` /
   `readPlaneMetadata` per session. Skip-and-continue on per-session video-load
   failure (the failed session is dropped from `state.sessions`).
+- `slpHasEmbeddedImages(file)` — whether a `.slp` holds embedded images (one worker
+  start and a metadata read; no for a file that cannot be read). File ▸ Open asks it
+  for a large file.
 - `restoreGroupingAndUnlink(session, slpData, slpSessIdx, opts)` — restores a
   session's LUCID project state from the SLP's `sessions_json`: identities,
   `InstanceGroup` grouping, per-instance `nulledNodes`/occlusion, and 3D points
@@ -17244,8 +17325,9 @@ Covered by `tests/e2e/load-export-move-bounded-derived-state.mjs` (L).
   `../ui/loading-progress-modal.js` (`getLoadingProgressModal`),
   `../loading/cold-read-guard.js`
   (`readBlobArrayBuffer`: Load 3D Points reads its `.h5` into memory, outside
-  h5wasm's guarded WORKERFS). Also spawns
-  `../loading/frame-worker.js` (twice) via `new Worker(new URL(...))`.
+  h5wasm's guarded WORKERFS), `../loading/slp-package-reader.js`
+  (`embeddedVideoForEntry`). Also spawns
+  `../loading/frame-worker.js` via `new Worker(new URL(...))` (`openEmbeddedFrames`).
 
 **Imported by.** `import-export/save-load.js`, `ui/ui-wiring.js`,
 `loading/session-loader.js` (`restoreGroupingAndUnlink`,

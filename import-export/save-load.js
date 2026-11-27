@@ -14,7 +14,7 @@ import { ensurePlaceholderCameras } from '../pose/placeholder-cameras.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
-import { OnDemandVideoDecoder } from '../loading/video.js';
+import { OnDemandVideoDecoder, hasEmbeddedVideos, closeEmbeddedFrames } from '../loading/video.js';
 import { createDemoSkeleton } from '../demo-data.js';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
@@ -37,6 +37,7 @@ import {
 } from '../pose/initialization.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
+import { slpHasEmbeddedImages } from './slp-import.js';
 import { handleLoadSlpFile } from './slp-import.js';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
@@ -173,6 +174,7 @@ export function newProject(force) {
 
     // Clear views and video files
     state.views = [];
+    closeEmbeddedFrames(state);
     state.videoFiles = [];
 
     // Define Planes state is project-scoped and lives on a module singleton,
@@ -1162,6 +1164,17 @@ export async function saveAllSessionsStreaming(sessions, opts) {
     return await finalizeMultiSessionSave(handle, opts);
 }
 
+/**
+ * What a save leaves out of a project with images embedded in its `.slp`. A save
+ * writes the poses and each video's name, not the images, so the menus never make
+ * that `.slp` the save target (`ui/ui-wiring.js`), and the status says so here.
+ */
+function embeddedImagesSaveNote() {
+    return hasEmbeddedVideos(state)
+        ? '. Labels only: the images are still in the file you opened, not in this one'
+        : '';
+}
+
 export async function quickSave(previousFile) {
     if (!state.session) {
         setStatus('No session to save', 'error');
@@ -1216,7 +1229,7 @@ export async function quickSave(previousFile) {
         // The project is now the file it was saved to (Save As retitles the tab).
         if (state.slpFileHandle && state.slpFileHandle.name) setPageProject(state.slpFileHandle.name);
         var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
-        setStatus('Saved (' + sizeMB + ' MB)', 'success');
+        setStatus('Saved (' + sizeMB + ' MB)' + embeddedImagesSaveNote(), hasEmbeddedVideos(state) ? 'warning' : 'success');
     } catch (err) {
         state.isSaving = false;
         hideLoading();
@@ -1379,7 +1392,8 @@ export async function saveProjectSlp() {
         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
         setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)' +
-            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : ''), 'success');
+            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : '') + embeddedImagesSaveNote(),
+            hasEmbeddedVideos(state) ? 'warning' : 'success');
     } catch (err) {
         if (err && err.name === 'SaveCancelledError') {
             setStatus('Save cancelled', 'warning');
@@ -1636,7 +1650,9 @@ export async function handleLoadProject(prePickedFile, fileHandle) {
             // lazy path keeps 2D on-demand and rebuilds grouping with lightweight
             // members; videos are attached afterward via File → Load Videos.
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
-            if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
+            // Not for a file with embedded images: those are what makes it large,
+            // and only the eager path shows them.
+            if (ext === 'slp' && file.size > LARGE_SLP_BYTES && !(await slpHasEmbeddedImages(file))) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
                 var _sl = await import('../loading/session-loader.js');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {

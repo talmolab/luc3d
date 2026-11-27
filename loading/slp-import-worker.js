@@ -287,10 +287,13 @@ async function parseSlp(file) {
                         if (isEmbedded && vj.source_video) {
                             sourceFilename = vj.source_video.filename ||
                                 (vj.source_video.backend && vj.source_video.backend.filename) || null;
+                            // An image sequence's name is a list of its images.
+                            if (Array.isArray(sourceFilename)) sourceFilename = sourceFilename[0];
                         }
+                        var videoFilename = backend.filename || vj.filename || null;
                         videos.push({
                             index: vi,
-                            filename: backend.filename || vj.filename || null,
+                            filename: Array.isArray(videoFilename) ? videoFilename[0] : videoFilename,
                             sourceFilename: sourceFilename,
                             backendType: isEmbedded ? 'HDF5Video' : 'MediaVideo',
                             shape: backend.shape || null,

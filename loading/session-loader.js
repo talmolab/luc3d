@@ -32,7 +32,7 @@ import {
     makePlaceholderCamera, hasRealCalibration, ensurePlaceholderCameras,
 } from '../pose/placeholder-cameras.js';
 
-import { OnDemandVideoDecoder, VideoController, releaseViewsFrames } from './video.js';
+import { OnDemandVideoDecoder, VideoController, releaseViewsFrames, closeEmbeddedFrames } from './video.js';
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 import { confirmFolderPick } from '../ui/folder-confirm-tip.js';
@@ -3033,6 +3033,7 @@ export async function handleLoadProjectSlpLazy(slpFile, opts) {
         state.slpFileHandle = (opts && opts.fileHandle) || null;
         state.session = null;
         state.views = [];
+        closeEmbeddedFrames(state);
         state.videoFiles = [];
         // The tab: the folder it was picked from (opts.projectName), else the file.
         setPageProject((opts && opts.projectName) || slpFile.name);

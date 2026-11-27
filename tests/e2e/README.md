@@ -230,3 +230,12 @@ const browser = await launchBrowser();         // chromium.launch(), plus the CD
   its swap), `(none)` on a group and `(+) New Track` still work. Confirmed to
   fail on the eager build (43,387 options, ~228 ms per update, against 421 and
   ~7 ms); the behaviour checks pass on both, so they pin equivalence.
+- **`slp-embedded-images.mjs`** — a `.slp` with images inside it opens and shows
+  them. Every such file used to fail ("SLP load error", a BigInt from h5wasm), and
+  behind that error each image is checked exactly, by pixel value, per camera and
+  frame: images on the right camera with video groups out of list order, every way
+  they can be stored (variable-length and fixed-width rows, the JS writer's one run
+  of bytes, uncompressed pixels), several sessions, frames with no image, playing,
+  colour order. Save must never write over the file holding the images. Fixtures:
+  `tests/fixtures/slp-embedded/`. Confirmed to fail on the code before the fix, and
+  each fix on its own was undone to see this test notice.
