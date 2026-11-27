@@ -32,7 +32,9 @@
  *      reports no progress), painted before close() runs.
  *   4. An eager (non-lazy) project: "Writing the file", step 1 of 2; through
  *      a picker, the same MB bar (no steps line: one step) and close spinner.
- *   5. A failing save takes the card down and clears `isSaving`.
+ *   5. A failing save takes the card down and clears `isSaving`. Through a
+ *      picker it also discards the file's write (abort, never close), so the
+ *      file stays as it was and no swap file is left behind.
  *   6. File ▸ Export ▸ Labels (JSON) (`exportLabels`, ui/export-modals.js):
  *      "Exporting labels: x/6,000 frames…" bar that only rises to 6,000/6,000,
  *      then "Closing the file…" before the picked file's close().
@@ -317,6 +319,26 @@ try {
     });
     check(/Save failed: disk on fire/.test(failed.status) && !failed.after.visible && failed.savingAfter === false && failed.clicks === 0,
         'a failing save reports the error, takes the card down and clears isSaving', failed);
+
+    const failedPicked = await page.evaluate(async () => {
+        const saveLoad = await import('/import-export/save-load.js');
+        const AS = await import('/ui/app-state.js');
+        let writes = 0, closed = 0, aborted = 0;
+        const keepPicker = window.showSaveFilePicker, keepOpen = window.SleapIO.openSlpWriter;
+        window.showSaveFilePicker = async () => ({ createWritable: async () => ({
+            write: async () => { writes++; },
+            close: async () => { closed++; },
+            abort: async () => { aborted++; },
+        }) });
+        window.SleapIO.openSlpWriter = async () => { throw new Error('disk on fire'); };
+        try { await saveLoad.saveAs(); }
+        finally { window.SleapIO.openSlpWriter = keepOpen; window.showSaveFilePicker = keepPicker; }
+        return { writes, closed, aborted, after: window.__rec.snap(), savingAfter: AS.state.isSaving,
+            status: (document.getElementById('statusText') || {}).textContent || '' };
+    });
+    check(/Save failed: disk on fire/.test(failedPicked.status) && failedPicked.aborted === 1 && failedPicked.closed === 0 &&
+        failedPicked.writes === 0 && !failedPicked.after.visible && failedPicked.savingAfter === false,
+        'a failing save through the picker discards its write (aborted, not closed) and reports the error', failedPicked);
 
     // ---- 6. JSON labels export ----
     await page.evaluate(() => window.__fx.use('lazy'));
