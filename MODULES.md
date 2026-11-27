@@ -17105,6 +17105,11 @@ image, else the first image (`embeddedFrameToOpenOn`), which is where the load o
 and `switchSession` first goes: frame 0, or the first labeled frame, can leave every
 view empty. `handleAddSlp` does the same for the file it adds. Rules: `CLAUDE.md`.
 
+**Camera names, for a file with no sessions,** come from each video's source file
+(`makeCameraNamesUnique`), its list position added when two have the same one: every
+embedded video with no source is named after the `.slp`, and two videos on one camera
+would put both's poses on it and leave one with no view.
+
 The `.slp` parse is dispatched by the private `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
 streaming reader), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP

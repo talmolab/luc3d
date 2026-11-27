@@ -97,6 +97,25 @@ async function parseSlpForImport(file, onProgress) {
             if (isNewerSlpFormatError(err)) throw err;
             console.warn('[slp-import] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
         }
+
+/**
+ * Give a file's videos a camera each, for a file with no sessions: each camera, one
+ * per video in list order, has its list position added when an earlier one has its
+ * name. Every video with no source file is named after the `.slp`, and campy names
+ * every video `0.mp4`. Two videos on one camera would put both's poses on it, and
+ * leave one with no view.
+ *
+ * @param {Camera[]} cameras
+ * @param {Object} videoIdxToCameraName - list position to camera name
+ */
+function makeCameraNamesUnique(cameras, videoIdxToCameraName) {
+    cameras.forEach(function (camera, listIdx) {
+        var taken = cameras.slice(0, listIdx).some(function (c) { return c.name === camera.name; });
+        if (!taken) return;
+        camera.name = camera.name + '_' + listIdx;
+        videoIdxToCameraName[listIdx] = camera.name;
+    });
+}
     }
     return await parseSlpH5(file, onProgress);
 }
@@ -1216,6 +1235,7 @@ export async function handleLoadSlpFile(slpFile, fileHandle) {
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
                 videoIdxToCameraName[dvi] = dName;
             }
+            makeCameraNamesUnique(cameras, videoIdxToCameraName);
         }
 
         // Use per-session skeleton/tracks from lucid metadata if available,
@@ -2045,6 +2065,7 @@ export async function handleAddSlp() {
                     [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
                 videoIdxToCameraName[dvi] = dName;
             }
+            makeCameraNamesUnique(cameras, videoIdxToCameraName);
         }
 
         var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
