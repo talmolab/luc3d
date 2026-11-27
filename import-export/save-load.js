@@ -1617,7 +1617,7 @@ export async function handleLoadProject(prePickedFile, fileHandle) {
         // Warn + reset if 3D points were imported into a skeleton-only project.
         if (!(await ensureNo3dImportBlockingLoad())) {
             setStatus('Load cancelled', 'warning');
-            return;
+            return false;
         }
         var file;
         if (prePickedFile) {

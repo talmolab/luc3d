@@ -46,6 +46,7 @@ import { PLANE_VIS_IDS } from './plane-visibility.js';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveCompactCopy, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
+import { isNewerSlpFormatError } from '../loading/slp-format-check.js';
 import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
          loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
@@ -58,6 +59,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 import { wireAnimalCountField } from './animal-count-field.js';
 import { wireTailMarkField } from './tail-mark-field.js';
 import { wireReprojThresholdField } from './reproj-threshold-field.js';
+import { wireSkeletonCheckField } from './skeleton-check-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -1357,6 +1359,7 @@ export function setupMenus() {
 
         // 1. Parse all env files, collecting instances per frame per camera
         var envSkeleton = null;
+        var envRefusal = null;
         var envFrames = new Map();
         var totalInstances = 0;
 
@@ -1383,8 +1386,16 @@ export function setupMenus() {
                     }
                 } catch (err) {
                     console.error('[set-env] Failed to parse', files[fi].name, err);
+                    if (isNewerSlpFormatError(err)) envRefusal = err;
                 }
             }
+        }
+
+        // Not triangulated from whichever cameras' files happened to be readable.
+        if (envRefusal) {
+            hideLoading();
+            setStatus(envRefusal.message, 'error');
+            return;
         }
 
         if (totalInstances === 0) {
@@ -3234,6 +3245,7 @@ export function setupUI() {
     wireAnimalCountField();
     wireTailMarkField();
     wireReprojThresholdField();
+    wireSkeletonCheckField();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {

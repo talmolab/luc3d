@@ -3025,7 +3025,8 @@ and used by EVERY operation that must touch every frame. Hydrate a 2,000-frame
 window (`batchLoadLazyFrames`) → run the callback → drop the window's non-user
 `frameGroups` (pinning the on-screen frame and any user-edited frame) →
 `releaseWindow` → force a real collection every 5 windows. `opts.start`/`opts.end`
-restrict it to a range. Contract points:
+restrict it to a range; `opts.frames` (sorted) to just those frames, hydrating only the windows that hold them
+(the skeleton check's pass). Contract points:
 - **Playback eviction is HELD for the whole sweep** (`holdLazyResidency`,
   released in a `finally` by the exported wrapper around
   `_sweepLazyFrameWindowsHeld`): eviction protects windows around the on-screen
@@ -3768,6 +3769,16 @@ numbers are identical (Object.is) — except, with a reprojection-error
 threshold, the UNDISTORTED errors: the solve leaves out the observations it
 dropped, which the stored 3D does not record. ~20x cheaper than re-solving
 Refined. Used by `ui/rendering.js`'s reprojection fill.
+**`options.skeleton`** (measured chains from `pose/skeleton-check-run.js`) runs Triangulate's skeleton check after
+the reprojection-threshold rule (`pose/skeleton-check.js` `checkChains`): a chain whose bones leave their usual
+ranges gets the fewest point changes that make it plausible, each to a candidate from `subsetCandidates` — every
+pair of the cameras that see the point is triangulated, the cameras within `subsetPx` (12) of that point's
+reprojection form a group, each group of 2+ is re-solved (DLT) from its own detections, the `maxCandidates` (3)
+largest offered — or, only with a matched volume, dropped (NaN; `checkChains`' `allowDrop`: without one nothing
+independent says a point is wrong, and July 13 frame 105,413 lost a right nose). A point seen by 3+ cameras that all
+agree with it is locked. Candidates use
+every detection, from a copy taken before the threshold rule. The result then carries `skeleton: {chainsRepaired,
+nodesResolved, nodesDropped}`; without the option it is exactly the old one (no `skeleton` key).
 **`triangulationSummary(result)`** — `{points3d, meanError,
 meanErrorUndistorted, method}`, what a pool reply carries under `summaryOnly`.
 Covered by `tests/test-reproject-stored-3d.mjs` (incl. the threshold negative
@@ -3862,6 +3873,87 @@ only on `./pose-data.js`, so a worker can still load this module.
 **Imported by.** `pose/triangulation.js` (re-exports), `pose/triangulation-pool.js`,
 `pose/triangulation-worker.js`, `pose/cross-view-tracker.js` (and so
 `pose/tracker-worker.js`).
+
+---
+
+### pose/skeleton-check.js
+
+**Purpose.** Triangulate's skeleton check, import-free and DOM-free (the core runs it in the page or a worker):
+find body parts whose 3D breaks the skeleton's usual bone lengths and repair only the points that need it.
+- **Chains from the skeleton** (`skeletonChains(nodeCount, edges)`): hubs are the nodes with 3+ edges (on
+  DoublePoke's star skeleton TTI and the Head; a connected part without one is held at its centre); every group of
+  the other nodes that hangs together once the hubs are removed is a chain, anchored at the hubs it touches; its
+  bones are every edge with an end in it. On the star skeleton each tail point is its own chain (judged by its
+  distance to TTI), the ears are one chain, the shoulders one, the haunches one.
+- **Usual lengths** (`measureBones(chains, forEachPose)`): each bone's median and range
+  `[min(0.5, p2 × 0.85), max(1.5, p98 × 1.15)]` of the median, from up to 20,000 lengths per bone (reservoir,
+  fixed hash); fewer than `MIN_BONE_SAMPLES` (20) → the chain is skipped, with why. A steady bone gets exactly ±50 %;
+  TTI–TailTip (short whenever the tail curls; 19 % of July 13's poses are under half its median) gets a wider lower
+  bound and the same upper one.
+- **The repair** (`checkChains(points3d, chains, candidatesFor, opts)`): the trigger `chainBadness` (bones with both
+  ends present, outside their ranges; a missing point is absent, not implausible); every combination of keep / a
+  candidate / drop per chain point (≤ 4,096; drop only while `opts.allowDrop` is not false — the core passes false,
+  so a point is re-solved or kept, never dropped); the result must be plausible (`chainRepairBadness` 0: judged bones
+  inside their ranges and every kept point linked to an anchor through present bones, so a drop cannot cut a wrong
+  piece loose); fewest changes, then fewest drops, then most support, then smallest move; none plausible = the chain
+  is left, except its **out-of-reach points** (a chain of 2+ points): `chainReach(chain)` gives each point the
+  farthest it can be from its anchor (shortest path along the chain's bones, each at median × hi); a point beyond
+  that is impossible whatever its neighbours are, so it still takes an option within reach (a candidate, or a drop
+  where allowed), the one lowering `chainRepairBadness` most, everything else kept (`out.partial`; the core reports
+  it as `chainsPartial` and counts the chain as repaired). On SLAP's 22 proofread sessions with the tail linked in
+  order, this brought back 3 tail points up to 28,016 units off that a linked tail had left (the star's one-point
+  chains already fixed them). A one-point chain is judged by its one bone as before. A `locked` point is keep-only.
+  **Never swap a whole chain**: one wrong point among right ones is the common case (the volfuse study's July 13
+  frames 105,416 and 105,372, judged by eye).
+
+**Key exports.** `skeletonChains`, `measureBones`, `chainBadness`, `chainRepairBadness`, `chainReach`, `checkChains`,
+`SKELETON_CHECK_DEFAULTS`, `MIN_BONE_SAMPLES`.
+
+**Imports.** None. **Imported by** `pose/triangulation-core.js`, `pose/skeleton-check-run.js`. Tests:
+`tests/test-skeleton-check.mjs` (chains of a star, a chain-shaped and a hub-less skeleton; ranges; the repair; the
+solve on SLAP's 8 cameras; real data `fixtures/skeleton-check-real.json`: 84 animal-frames of two DoublePoke clips,
+production 2D, no volume — every flagged chain repaired to plausible or left, no plausible chain touched;
+`fixtures/skeleton-check-slap-far.json`: the 3 SLAP animal-frames the out-of-reach rule repairs, against their
+proofread 3D), `tests/e2e/skeleton-check.mjs`.
+
+---
+
+### pose/skeleton-check-run.js
+
+**Purpose.** The project side of the skeleton check: the browser-local setting (`localStorage.lucidSkeletonCheck`,
+`enabled`, off by default, and `chains`, the custom parts as text; never in the `.slp`), the session skeleton's
+chains named by their nodes (`sessionSkeletonChains(session, text?)`, cached per skeleton and parts text), their
+bones measured on every group's stored 3D in the session
+(`session.instanceGroups`, never evicted, so a lazy project is measured whole; cached until
+`invalidateSkeletonCheck`), and which groups a pass re-solves.
+- **Custom parts** (built from node tiles in Settings ▸ Triangulation Wizard ▸ Skeleton check,
+  `ui/skeleton-chain-editor.js`), stored as text: one part per line, node names in order along the body.
+  `parseChainText` splits them (lines or `;`, names by `,` or `→`); `resolveChainText(names, text)` matches names
+  (exactly, else ignoring case when only one node does) → `{ paths, problems }`, leaving out a part with an unknown
+  name, a repeated node or a single node; `checkLinks(edges, paths)` keeps the skeleton's links except those between
+  two nodes of one part and adds each part's consecutive pairs (direction does not matter). The chains come from those
+  links, so a star skeleton's tail in order is judged bone by bone, not by each point's distance from TTI (and a whole
+  spine, Nose to TailTip, makes Neck+Trunk a chain between the Head and TTI). A custom part's chain is named in the
+  part's order and marked `custom`; the chains array carries `problems`, and `skeletonCheckForRun`'s `skipped` lists
+  them too.
+- `skeletonCheckForRun(session)` → `options.skeleton` or null (off, no skeleton, no chain, nothing measurable).
+- Where it runs (`pose/triangulation.js`): This frame (`triangulateCurrentFrame`) and Range
+  (`triangulateMultiFrameInstances`, `_triangulateGroupStep`) inline with the bones measured from the 3D already
+  there; **Triangulate All in a pass after its solve** (`skeletonCheckPass`): measure on the run's own 3D, find the
+  frames with a flagged group (`framesNeedingSkeletonCheck`), re-solve only those groups with the check on the main
+  thread (`sweepLazyFrameWindows`' `frames`), drop those frames' derived reprojections. An edit's re-solve
+  (`reTriangulateGroup`) does not check: the user's points are authoritative.
+- A repaired group carries `group.skeletonRepaired` (in memory), so `ui/rendering.js`'s fill reprojects its stored
+  3D instead of re-solving it without the check; a re-solve without the check clears it. A dropped point is saved
+  as missing 3D.
+
+**Key exports.** `getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `parseChainText`, `resolveChainText`,
+`checkLinks`, `sessionSkeletonChains`, `invalidateSkeletonCheck`, `skeletonCheckForRun`, `groupNeedsSkeletonCheck`,
+`framesNeedingSkeletonCheck`.
+
+**Imports.** `./skeleton-check.js`. **Imported by** `pose/triangulation.js`, `ui/skeleton-check-field.js`,
+`ui/settings-modal.js`, `ui/skeleton-chain-editor.js`. Tests:
+`tests/test-skeleton-check.mjs`, `tests/e2e/skeleton-check.mjs`.
 
 ---
 
@@ -6370,21 +6462,41 @@ the image check's progress dialog (`ui/id-switch-modal.js`: CPU and GPU lines,
 both series) and the loading overlay (`ui/loading-overlay.js` `setLoadingCpu`:
 the CPU alone — Triangulate All and Track All). No browser API reports the CPU's or a GPU's
 utilisation, so every load is the operation's OWN busy time as a share of the
-hardware, and each line's tooltip says other apps are not in it.
+hardware, and each line's tooltip says other apps are not in it. Busy means
+COMPUTING: a lane must not stay open across an await on the decoder, the GPU, a
+queue or a lock (the image check's crop workers once read 8 of 32 cores where the
+OS saw Chrome use 1.3-2.3); a worker that also waits times its own synchronous
+sections and reports them. The machine's own CPU pressure (Compute Pressure API)
+can go beside the load where the browser has it.
 
 **Key exports.**
 - `LOAD_WINDOW_MS` (5000); `createLoadMeter(windowMs)` -> `(now, busyMs) ->
   pct|null` (moved here from `ui/image-embedder.js`, which re-exports it) — the
   share of the window spent busy; for the CPU, feed thread-ms / cores.
-- `createBusyClock(now?)` -> `{begin(lane), end(lane), close(lane?), ms()}` —
-  busy time summed over lanes (threads); nested per lane (a crop worker holds
-  several queued jobs; a pool's `'main'` is reopened by a reply handled while it
-  waits); open spans count up to now; `close()` with no argument closes every lane.
-- `formatCpuLoad(cores, load, counts)` -> `{text, title, load}` — "CPU: 12 cores ·
-  load 7%" (`cores` = `navigator.hardwareConcurrency`, logical processors; one
-  saturated thread on 12 cores reads 8%); the tooltip is "The share of the CPU's
-  12 cores kept busy over the last 5 s by " + `counts` + ". Browsers do not report
-  the CPU's total load, so other apps are not included." `cpuCores()`.
+- `createBusyClock(now?)` -> `{begin(lane), end(lane), close(lane?), add(ms), ms()}` —
+  busy time summed over lanes (threads); nested per lane (a CPU model worker holds
+  several queued runs, all pure compute; a pool's `'main'` is reopened by a reply
+  handled while it waits); open spans count up to now; `close()` with no argument
+  closes every lane; `add(ms)` adds compute a thread timed itself (ignores
+  negative/NaN). Open a lane only around work that keeps the thread computing.
+- `createSyncTimer(now?)` -> `{time(fn), take()}` — a worker's own compute:
+  `time` runs a SYNCHRONOUS `fn` and adds its duration (also when it throws),
+  `take` returns the sum since the last take. Used by `ui/image-crop-worker.js`,
+  which waits for the read token between its sections.
+- `PRESSURE_STATES` (`nominal`, `fair`, `serious`, `critical`);
+  `createPressureWatch(onChange?, Observer?)` -> `{state(), stop()}` — the
+  Compute Pressure API's `'cpu'` source (once a second): the latest state, or null
+  with no `PressureObserver` (Firefox, Safari), when `observe` is refused, or
+  before the first reading. Never throws.
+- `formatCpuLoad(cores, load, counts, pressure?)` -> `{text, title, load}` —
+  "CPU: 12 cores · load 7%" (`cores` = `navigator.hardwareConcurrency`, logical
+  processors; one saturated thread on 12 cores reads 8%), plus " · fair"
+  when `pressure` is a known state; the tooltip is "The share of the CPU's 12
+  cores kept busy over the last 5 s by " + `counts` + ". Busy means computing:
+  time a thread spends waiting (for the video decoder, the GPU or another thread)
+  is not counted. Browsers do not report the CPU's total load, so other apps are
+  not included." and, with a pressure, a sentence saying the system state is the
+  whole machine's, other apps included. `cpuCores()`.
 - `LOAD_GRAPH_SPAN_MS` (60 s); `loadGraphPath(samples, now, spanMs, w, h)` -> SVG
   path data, placed by TIME (ticks are uneven: long work blocks the 1 s timer),
   broken at nulls, a lone point as a zero-length segment (a dot under the round cap).
@@ -6414,7 +6526,7 @@ against the plot's `#1a1a1a` (CVD dE 26.8).
 `ui/image-embedder.js` imports it and is also loaded by the crop and model workers.
 
 **Imported by.** `ui/image-embedder.js`, `ui/id-switch-modal.js`,
-`ui/loading-overlay.js`, `pose/triangulation-pool.js`, `pose/tracker-pool.js`.
+`ui/loading-overlay.js`, `pose/triangulation-pool.js`, `pose/tracker-pool.js`, `ui/image-crop-worker.js` (`createSyncTimer`).
 
 **Coverage.** `tests/test-load-graph.mjs`;
 `tests/e2e/fixtures/load-graph-axes.js` (labels and ticks, in all three places
@@ -7636,6 +7748,39 @@ an action.
 `updateTrackingThresholds`, `onTrackingThresholdsChange`),
 `../import-export/save-load.js` (`setStatus`). **Imported by** `ui/ui-wiring.js`.
 Test: `tests/e2e/toolbar-reproj-threshold.mjs`.
+
+### ui/skeleton-chain-editor.js
+
+**Purpose.** Settings ▸ Triangulation Wizard ▸ Skeleton check's node-tile editor for the check's custom parts
+(`pose/skeleton-check-run.js`, `settings.chains`). A bank holds a tile per skeleton node; each part is a row of tiles
+in order along the body. A tile dragged from the bank into a row is a copy (the bank keeps it), placed before the tile
+it is dropped on or at the row's end; dragged within a row it moves, into another row it moves there (a row already
+holding that node refuses it), onto "New part" it starts a part, back onto the bank it comes out. Without dragging, a
+click (or Enter, Space) on a bank tile adds it to the end of the selected part (a row's number selects it; "New part"
+starts one), and a tile's × takes it out. Every control is a `<button>`: the Settings modal stops keydown in the
+capture phase, so nothing here listens for keys. A stored name the skeleton lacks shows as a warning tile
+(`.sk-chain-tile-unknown`), never dropped silently. HTML5 drag and drop, with the dragged tile kept in a closure
+(`dragging`), since `dataTransfer` cannot be read during dragover.
+
+**Key exports.** `buildSkeletonChainEditor({ nodes, text, onChange })` → `{ el, getText() }`; the pure, DOM-free model:
+`textToParts`, `partsToText`, `dropTile(parts, from, to)`, `appendTile(parts, name, part)`, `removeTile(parts, part,
+index)` (an emptied part goes).
+
+**Imports.** `../pose/skeleton-check-run.js` (`parseChainText`). **Imported by** `ui/settings-modal.js`. Tests:
+`tests/test-skeleton-chain-editor.mjs` (the model, Node), `tests/e2e/skeleton-check.mjs` §7 (dragging in the page).
+
+### ui/skeleton-check-field.js
+
+**Purpose.** The Triangulate menu's **Skeleton check** checkbox (`#tbSkeletonCheck`), below Reprojection error:
+edits `pose/skeleton-check-run.js`'s browser-local `enabled` (off by default), which every Triangulate run reads
+when it starts. Its tooltip explains the check and names the parts it judges (custom ones marked "(custom)", and any
+custom part it left out), refreshed when the menu opens. Not in Defining Plane Mode's toolbar lock: a setting, not an
+action.
+
+**Key exports.** `wireSkeletonCheckField()`.
+
+**Imports.** `./app-state.js`, `../pose/skeleton-check-run.js`, `../import-export/save-load.js` (`setStatus`).
+**Imported by** `ui/ui-wiring.js`. Test: `tests/e2e/skeleton-check.mjs`.
 
 ### ui/animal-count-field.js
 
@@ -9682,8 +9827,14 @@ and a graph of both loads to their right (`hardware(cpu, gpu)` /
   The fit is timed HERE: it runs synchronously between `progress('fit', …)`
   calls, so the time from the end of one callback's `yieldToPaint` to the start
   of the next is fitting (`fitMs`; the first camera's interval is the wait for
-  the last embeddings and is not counted). Video decoding is not in it, and its
-  tooltip says so.
+  the last embeddings and is not counted). `cpuBusyMs()` counts compute only
+  (no waits on the decoder, the GPU or the crop workers' read token), so on a
+  GPU machine the line follows the OS's CPU reading for Chrome; video decoding
+  is not in it, and its tooltip says so. Where the browser has the Compute
+  Pressure API, the line ends with the whole machine's state ("· fair";
+  `createPressureWatch`, started with the dialog and stopped when it closes;
+  `inject.createPressureWatch` stands in for it in tests); without it, nothing
+  is shown.
 - **The device line**: GPU name, backend and dtype, with a load refreshed every
   second (`createLoadMeter` over `busyMs()`); with no GPU, "No GPU: running on
   the CPU (N workers) — slow" in the warning colour and no load.
@@ -9810,7 +9961,7 @@ one — and refuses, with the reason, when the session's model is a folder packa
 loaded on the page; the result carries `imageModel: {key, name, threshold}` (null for
 the built-in model), named in "About these flags"; the tab shows the model with
 Change…; the progress dialog's sample crop resizes to the model's input side),
-`ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`),
+`ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`, `createPressureWatch`),
 `ui/browser-hints.js` (`renderBraveFingerprintingHint`: in Brave with its fingerprinting
 protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
@@ -10211,8 +10362,14 @@ and precision that ran ("· WebGPU fp16" — fp32 where the GPU lacks
 **Live, in the progress dialog** (`device()` / `busyMs()` -> `formatEmbedDevice`
 + `createLoadMeter`; `cpuBusyMs()` -> `formatEmbedCpu`). `cpuBusyMs()` is one
 `createBusyClock` (`ui/load-graph.js`) shared by the crop pool, the CPU model
-pool and inline crops (a lane per worker, busy while it HOLDS a job); it
-outlives the pools (the crop pool is re-made after `releaseFrames`).
+pool and inline crops, counting COMPUTE only: each crop job adds the `cpuMs` its
+worker timed (cutting + writing the inputs; not its wait in the worker's queue or
+for the read token, which made 8 workers holding jobs read as 8 busy cores while
+one cut), a CPU model worker is a lane while it has a run (WebAssembly, pure
+compute), inline crops a `'main'` span; the GPU model's runs and the decoder are
+never in it. It outlives the pools (the crop pool is re-made after `releaseFrames`).
+`formatEmbedCpu(cores, load, pressure?)` passes the dialog's Compute Pressure
+state through to `formatCpuLoad`.
 `gpuAdapterInfo(device, adapter)` names the GPU from the model's own
 `GPUDevice.adapterInfo` (onnxruntime's `env.webgpu.adapter` is undefined in this
 build) and reads `isFallbackAdapter`: a SOFTWARE adapter is WebGPU on the CPU,
@@ -10352,7 +10509,7 @@ because on the CPU frames arrive in bursts); `opts.device` ('auto' | 'webgpu' |
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
 Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?, maxCpuPct?)` -> `{broken, run(image, crops), terminate()}` | null
-(`clock`: a `createBusyClock`, ui/load-graph.js; `maxCpuPct`: the CPU cap, each worker's duty cycle);
+(`clock`: a `createBusyClock`, ui/load-graph.js, given each job's `cpuMs` via `add`; `maxCpuPct`: the CPU cap, each worker's duty cycle);
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
 `importTransformers()` (the runtime, imported once; re-imported under a new fragment
 after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
@@ -10370,8 +10527,8 @@ the compute caps `capPct(pct)`, `paceRestMs(runMs, pct)`, `restTimer(ms, fn)` ->
 `LOAD_WINDOW_MS`; the CPU line's window too),
 `formatEmbedDevice(device, load)` -> `{text, warn, title, metered, load}` (`metered`: the line has a series in
 the load graph — not for the CPU workers or a software adapter; `load`: what it shows, null when none),
-`formatEmbedCpu(cores, load)` -> `{text, title, load}` (`formatCpuLoad` with this check's "counts": cropping,
-the CPU model, fitting — not video decoding); `inputTensorToPixels(tensor, rgba)`
+`formatEmbedCpu(cores, load, pressure?)` -> `{text, title, load}` (`formatCpuLoad` with this check's "counts": cropping,
+the CPU model, fitting — not video decoding; `pressure` the Compute Pressure state, " · fair"); `inputTensorToPixels(tensor, rgba)`
 (a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
 `SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` also
 records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
@@ -10511,8 +10668,8 @@ importmap). Spawns `ui/image-crop-worker.js` and `ui/image-model-worker.js`.
 `formatEmbedTiming`'s keyframe line and the dialog's lines in
 `tests/test-id-switch-check.mjs` (the shared load helpers:
 `tests/test-load-graph.mjs`); `frameCropGeometry` on a released member in
-`tests/test-lazy-residency.mjs`; the crop pool and its busy clock in
-`tests/e2e/image-crop-worker.mjs`; `cpuBusyMs()` over the real CPU model workers
+`tests/test-lazy-residency.mjs`; the crop pool and its busy clock (= the jobs' reported
+compute, less than the time they held a worker) in `tests/e2e/image-crop-worker.mjs`; `cpuBusyMs()` over the real CPU model workers
 in `tests/e2e/image-check-cpu.mjs`; keyframe sampling on generated H.264 and AV1
 in `tests/e2e/image-keyframe-sampling.mjs`; a failed download in
 `tests/test-image-model-download.mjs` and `tests/e2e/image-check-offline.mjs`
@@ -10540,8 +10697,10 @@ bit-identical (asserted).
 **Messages.** IN `{id, image: VideoFrame|ImageBitmap (transferred), crops:
 [{g: cropGeometry, others: [hull]}], input}` — one camera view of one frame, `input`
 the active model's input side (default `BUILTIN_INPUT`); OUT `{id,
-tensors: [Float32Array(3 x input x input)]}` (transferred, one per crop, in order) or
-`{id, error}`. The worker owns the image and closes it.
+tensors: [Float32Array(3 x input x input)], cpuMs}` (transferred, one per crop, in order) or
+`{id, error, cpuMs}`. The worker owns the image and closes it. `cpuMs` is the job's
+compute (`createSyncTimer`: the cut under the token and the input writes), never its
+wait in the queue or for the token; the pool adds it to the CPU load's busy clock.
 
 **Read token.** Cutting is serialised across the pool; turning crops into model inputs
 is not. A job posts `{want: id}`, waits for the pool's `{grant: true}`, cuts all its
@@ -10560,7 +10719,7 @@ vs anti-aliased edge), and for a software-made VideoFrame every pixel can differ
 `writeInputTensor`, `CROP`, `BUILTIN_INPUT`; that module's static imports —
 `ui/app-state.js`, `pose/id-switch-check.js`, `pose/lazy-residency.js`,
 `ui/load-graph.js` — must stay worker-safe, which is why it imports
-`mediabunny` lazily).
+`mediabunny` lazily); `ui/load-graph.js` (`createSyncTimer`).
 
 **Spawned by.** `ui/image-embedder.js` (`createCropPool`).
 
@@ -10924,6 +11083,14 @@ The same panel's footer also says what will be used (`.settings-tri-readout`): t
 reprojection error threshold, from `working`, so it holds wherever the panel is scrolled and follows
 an edit made on the Tracking Wizard. A value not yet applied is lit, with what it was (`paintFooter`).
 
+**Skeleton check's custom parts.** Below the methods figure, a "Skeleton check" section (`buildSection`) holds the
+node-tile editor (`buildSkeletonChainEditor`, `ui/skeleton-chain-editor.js`) for the custom parts Triangulate's
+skeleton check judges. Below it, the parts the check would judge with them
+(`sessionSkeletonChains(activeSession, working.skeletonChains)`, custom ones marked) and each part it leaves out
+(`.settings-chains-problem`). The parts are `working.skeletonChains` (the setting's text), stored by Apply through
+`setSkeletonCheckSettings({ chains })` like every other edit; the check is still turned on in the Triangulate menu.
+Test: `tests/e2e/skeleton-check.mjs` §7.
+
 **The threshold card's examples.** It builds `buildThresholdExamples`
 (`ui/threshold-examples-panel.js`), hands it to the figure as `opts.examples`, starts it
 when the Triangulation Wizard panel is first shown, re-solves it when a Camera Views
@@ -11032,7 +11199,9 @@ background shortcuts from firing while it is open, and is removed on teardown.
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
 `./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply);
-`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf).
+`./track-setup-modal.js` (`NODE_WEIGHT_TIP`, a leaf); `../pose/skeleton-check-run.js`
+(`getSkeletonCheckSettings`, `setSkeletonCheckSettings`, `sessionSkeletonChains`: the skeleton check's custom
+parts); `./skeleton-chain-editor.js` (`buildSkeletonChainEditor`).
 
 **Imported by.** `ui/ui-wiring.js`.
 
@@ -12167,6 +12336,12 @@ drive a private timer-based stepper (`startNoVideoPlayback` /
 `stopNoVideoPlayback` / `toggleNoVideoPlayback`) that advances frames at
 `state.fps` over `[0, totalFrames-1]`, rendering each via `navigateToFrame` and
 stopping at the last frame; the step transport buttons/keys stop it first.
+
+**The save handle is recorded after the load.** File ▸ Open and File ▸ Load SLP
+set `state.slpFileHandle` only once the loader has not returned `false`. Save writes
+to that handle, so a file that did not open (refused as too new, say) would otherwise
+be overwritten with whatever project is open. Set Env refuses as a whole if any
+environment file is too new, rather than triangulating from the readable cameras.
 
 **Key exports.**
 - Menu / setup: `setupMenus`, `setupUI`. The menu bar ends with a **Help**
@@ -14036,6 +14211,36 @@ download on the progress card (MB), loads the folder and names the project.
 
 **Tests.** `tests/e2e/demo-project.mjs`.
 
+### loading/slp-format-check.js
+
+**Purpose.** The rule for refusing a `.slp` newer than LUC3D can read. Python
+sleap-io 0.10 writes SLP format 3.0 by default, where every table is a group of
+columns; LUC3D's two readers know the 2.x layout only, and without this read such
+a file as 0 frames with no error, under a success message. Same rule as Python's
+`_check_format_id`: refuse at or above the limit, and let a file with no
+`format_id` through.
+
+**No imports, deliberately.** The raw worker and a Node test load it. The vendored
+reader cannot (`lib/` stays self-contained), so it has its own copy of the rule and
+the wording (`LUCID local patch (luc3d newer-format)`), and
+`tests/e2e/slp-newer-format.mjs` fails if the two messages differ.
+
+**Key exports.**
+- `SLP_FORMAT_ID_LIMIT` — `3.0`.
+- `newerSlpFormatMessage(formatId, fileName)` — what a refused file tells the user.
+- `checkSlpFormatAttrs(metadataAttrs, fileName)` — throws an `Error` named
+  `UnsupportedSlpFormatError` (with `formatId`). Takes h5wasm's `{value}` wrappers
+  or bare values; no attributes pass.
+- `isNewerSlpFormatError(err)` — by name, so it holds for the vendored class and
+  for what `parseSlpH5` rebuilds from the worker's message.
+- `slpReadErrorStatus(prefix, err)` — status text for a failed read: a refusal
+  stands alone, anything else gets `prefix: message`.
+
+**Imported by.** `loading/slp-import-worker.js`, `import-export/file-io.js`,
+`import-export/slp-import.js`, `loading/session-loader.js`, `ui/ui-wiring.js`.
+
+**Tests.** `tests/test-slp-format-check.mjs`, `tests/e2e/slp-newer-format.mjs`.
+
 ### loading/campy-session.js
 
 **Purpose.** What a campy recording folder says about itself. campy (2.1.1+)
@@ -14460,6 +14665,10 @@ are collected per camera (`slpFailures`) and named in the status line, which
 downgrades to `error`, rather than leaving an empty view under a success-styled
 "Loaded N camera(s)". The worker's `f.keys()` check (see
 `loading/slp-import-worker.js`) is what turns a non-HDF5 file into a rejection.
+A file too new to read (`loading/slp-format-check.js`) is treated the same on both
+routes, so a lazy camera refused this way no longer stops the folder, and the
+status (`slpFailuresStatus`) leads with the reason, because the way past it is the
+user's to take. The function returns `{slpFailures}` for `handleLoadMultiSession`.
 
 **Video load failures are surfaced, with the reason.** Every loader reports a
 video the browser couldn't play via `videoLoadFailureText` (the decoder's codec
@@ -14475,7 +14684,11 @@ Project" path for a large saved project `.slp` (routed by `handleLoadProject` in
 `{folderFiles}` so `attachVideosForLazyReopen` takes the videos from that pick
 instead of prompting). `opts.fileHandle` (the picked `.slp`'s handle, from Load
 Project) becomes `state.slpFileHandle` when the old project is freed; without it
-the handle is cleared. **It shows the progress
+the handle is cleared. **It frees the open project
+before it reads the new one**, for the memory, so it runs `checkSlpFileFormat`
+first: refusing a file too new to read must not cost the user that project. It
+resolves `false` for that (and for a cancelled load), like `handleLoadSlpFile`.
+**It shows the progress
 card, titled "Open project"** (`createOpenProgress(fileName)`, exported for the
 test), one step per stage, the file name on the detail line: 1. Reading the
 project file — counted in MB, from `openProjectSlp`'s `onReadBytes` (one decimal
@@ -14520,7 +14733,10 @@ neither step (`tests/e2e/lazy-reopen-group-identities.mjs`).
 **`handleLoadMultiSession` ends with a calibration cross-check.** The tail calls
 `noteSessionCalibrationDivergence(state.sessions)` LAST, once every session is
 in, and queued behind the skeleton prompt (as its `onDone`) so two modals never
-stack. See `ui/calibration-notice.js`.
+stack. See `ui/calibration-notice.js`. **It also ends on the annotation files that
+could not be read** (`slpFailuresStatus`, every session's): each session's own status
+only lasts until the next one's, and the skeleton steps set theirs after this one's,
+so that same tail sets it again last.
 
 **No calibration → placeholder cameras, so the folder can be saved.** A folder
 loaded with no `calibration.toml` (and nothing embedded) gets one PLACEHOLDER
@@ -14844,18 +15060,19 @@ zero-copy access. Two modes: full eager parse, or lazy
 open-and-stream-frames.
 
 **Message protocol.**
-- IN: `{type: 'parse', file, slowCompound?, columnar?}` — full eager parse.
-  `slowCompound: true` forces h5wasm's `Dataset.value` for the compound tables
-  (the equivalence test's reference path; also a kill switch). `columnar: true`
-  returns the poses as flat TRANSFERRED typed arrays in `data.columnar` (and an
-  empty `data.frames`) — see below.
+- IN: `{type: 'parse', file, slowCompound?, columnar?, formatOnly?}` — full eager
+  parse. `slowCompound: true` forces h5wasm's `Dataset.value` for the compound
+  tables (the equivalence test's reference path; also a kill switch). `columnar:
+  true` returns the poses as flat TRANSFERRED typed arrays in `data.columnar` (and
+  an empty `data.frames`) — see below. `formatOnly: true` stops after the format
+  check and posts an empty result (`checkSlpFileFormat`).
 - IN: `{type: 'open', file}` — lazy open, return metadata only.
 - IN: `{type: 'getFrame', frameIdx, requestId}` — read one frame lazily.
 - IN: `{type: 'getFrames', startIdx, endIdx, requestId}` — read range.
 - IN: `{type: 'close'}` — close lazy file.
 - OUT: `{type: 'progress', message}`, `{type: 'result', data: {...}}`,
   `{type: 'metadata', data: {...}}`, `{type: 'frameData', ...}`,
-  `{type: 'framesData', ...}`, `{type: 'error', message}`.
+  `{type: 'framesData', ...}`, `{type: 'error', message, name?}`.
 
 **An unopenable file must reject, not resolve empty.** `new h5wasm.File(path,
 'r')` does **not** throw on non-HDF5 bytes, and every `f.get()` in `parseSlp` is
@@ -14863,6 +15080,12 @@ try/caught to null (right for optional datasets), so a non-SLP file would post
 an ordinary `result` with 0 frames. `parseSlp` therefore checks `f.keys()` right
 after the open and throws `Not a readable HDF5/SLP file (no root datasets)`.
 Covered by `tests/e2e/percam-slp-choice-and-failure.mjs`.
+
+**So must a file too new to read.** The tables of SLP format 3.0 are not where this
+code looks, so it would post a result with 0 frames. `parseSlp` runs
+`checkSlpFormatAttrs` (`loading/slp-format-check.js`) before reading anything else.
+That error goes out with its `name` and without the stack every other error gets
+appended, since it ends up in the status bar as it stands.
 
 **Fast compound reads (`readCompoundColumnsFast`).** SLEAP-written `.slp` files
 store `frames` / `instances` / `points` / `pred_points` as HDF5 **compound**
@@ -16385,7 +16608,13 @@ session's resident/total) rather than truncate silently. Covered by
   `slp-import-worker.js`. Kept for SLEAP analysis `.h5`, as the
   `parseSlpViaSleapIO` fallback, and for the per-camera session-folder load,
   which passes `{ columnar: true }` to receive the poses as flat transferred
-  typed arrays (`data.columnar`) instead of nested `data.frames`.
+  typed arrays (`data.columnar`) instead of nested `data.frames`. The rejection
+  keeps the worker's error `name`.
+- `checkSlpFileFormat(file)` — rejects only if the file is too new to read
+  (`loading/slp-format-check.js`), reading nothing but its metadata; any other
+  failure resolves and is left to the real read. For a loader that clears the open
+  project before its read (`handleLoadProjectSlpLazy`). Costs a worker start, so
+  the loaders that change nothing before they read don't use it.
 - SLP parse (sleap-io.js): `parseSlpViaSleapIO(file, onProgress)` (its `slpData`
   also carries `suggestions`, the file's `suggestions_json` by video index, via
   `suggestionEntriesFromLabels`) —
@@ -16723,7 +16952,8 @@ loading-overlay/status-text UI helpers.
   the loader; a `.json` leaves none; routes a
   large `.slp` — over 200 MB, `LARGE_SLP_BYTES` — to the memory-bounded
   `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
-  eager parse, freeing any previously loaded project first). A `.json` loaded
+  eager parse, freeing any previously loaded project first). Resolves `false` when
+  a `.slp` did not open and the project is as it was (see `handleLoadSlpFile`). A `.json` loaded
   WITHOUT video (Continue Without Video / `Esc` on `forceVideoSelection`) has no
   decoder to size it, so `state.totalFrames` comes from the last labeled frame
   (`adoptLabeledFrameCount`), the view opens on the first, and the status line
@@ -16938,8 +17168,9 @@ the cameras left without one (per session). Test:
 The `.slp` parse is dispatched by the private `parseSlpForImport(file,
 onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
 streaming reader), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
-analysis `.h5` and as a fallback on any typed-read error. Both yield the same
-`slpData` shape.
+analysis `.h5` and as a fallback on any typed-read error but a refusal of a file
+too new to read (`loading/slp-format-check.js`), which the raw worker would refuse
+too. Both yield the same `slpData` shape.
 
 On load, identities are restored **per session**: each session prefers its
 own `metadata.lucid.identities` (from `sessions_json`) and only falls back to
@@ -16972,7 +17203,9 @@ first track.
 - `handleLoadSlpFile(slpFile, fileHandle)` — replace-current-state load. Sets
   `state.slpFileHandle` (File ▸ Save's target) to `fileHandle` or null at the
   point it clears the old project, never before, so a load cancelled at its
-  first prompt leaves the open project's file alone. Pre-allocates all
+  first prompt leaves the open project's file alone. Resolves `false` when the
+  file did not open and the project is as it was (cancelled, refused as too new,
+  unreadable). Pre-allocates all
   N session groups in the LoadingProgressModal before the per-session loop so
   the header reads the true "Session n of N"; re-engages `showLoading` after the
   non-embedded folder picker so the overlay stays up during video decode. Calls

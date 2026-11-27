@@ -41,7 +41,7 @@ import { scoreSizeGridOffThread } from '../pose/size-check-pool.js';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
          inputTensorToPixels, INPUT, setActiveImageModel } from './image-embedder.js';
 import { resolveSessionImageModel, imageModelLineHtml, wireImageModelLine } from './image-model-dialog.js';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores, createPressureWatch } from './load-graph.js';
 import { renderBraveFingerprintingHint } from './browser-hints.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
@@ -330,7 +330,7 @@ async function runImage(session, rate, inject) {
     var threshold = pkg ? pkg.threshold : getTrackingThreshold('imageChangeThreshold');
     // No GPU is not a reason to skip: the embedder then runs on the CPU, slowly, and the dialog says so
     var prog = openProgressDialog(pkg ? 'Checking ID switches (images, ' + pkg.name + ')' : 'Checking ID switches (images)');
-    var t0 = 0, ticker = null, cropTicker = null, embedder = null;
+    var t0 = 0, ticker = null, cropTicker = null, embedder = null, pressure = null;
     try {
         embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); }, imageModel: pkg,
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
@@ -339,17 +339,20 @@ async function runImage(session, rate, inject) {
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
         // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs
-        // on the main thread between progress calls (fitMs, timed below); it is shared by all the cores.
+        // on the main thread between progress calls (fitMs, timed below); it is shared by all the cores. It counts
+        // computing only, never a wait on the decoder or the GPU. The whole machine's CPU pressure (Compute Pressure
+        // API, where the browser has it) goes beside it, other apps included.
         var meter = createLoadMeter(), cpuMeter = createLoadMeter(), fitMs = 0, fitFrom = 0;
         var cores = cpuCores();
         var hasCpu = typeof embedder.cpuBusyMs === 'function';
         if (hasCpu) prog.braveHint(cores);
+        if (hasCpu) pressure = (inject.createPressureWatch || createPressureWatch)();
         var showDevice = function () {
             if (typeof embedder.device !== 'function' && !hasCpu) return;
             var now = performance.now();
             var load = ticker && typeof embedder.busyMs === 'function' ? meter(now, embedder.busyMs()) : null;
             var cpuLoad = ticker && hasCpu ? cpuMeter(now, (embedder.cpuBusyMs() + fitMs) / Math.max(1, cores)) : null;
-            var cpu = hasCpu ? formatEmbedCpu(cores, cpuLoad) : null;
+            var cpu = hasCpu ? formatEmbedCpu(cores, cpuLoad, pressure && pressure.state()) : null;
             var gpu = formatEmbedDevice(typeof embedder.device === 'function' ? embedder.device() : null, load);
             prog.hardware(cpu, gpu);
             if (ticker) prog.sample(cpu && cpu.load, gpu.load);
@@ -418,6 +421,7 @@ async function runImage(session, rate, inject) {
         throw e;
     } finally {
         clearInterval(ticker); clearInterval(cropTicker);
+        if (pressure) pressure.stop();
         // checkImageSwitches releases it too, but not when it fails before its first frame — and the CPU
         // workers hold ~600 MB each. Releasing twice is harmless.
         if (embedder && typeof embedder.releaseFrames === 'function') { try { embedder.releaseFrames(); } catch (e) { /* ignore */ } }

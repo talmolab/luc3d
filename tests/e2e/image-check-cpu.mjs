@@ -233,7 +233,7 @@ try {
           `…showing a real sample crop, "${dlg.caption}" (${dlg.greys} grey levels, ${dlg.litPct.toFixed(0)}% inside the mask)`);
     check(dlg.coloured > 50, `…with the skeleton drawn over it (${dlg.coloured} coloured pixels on the grey crop)`);
     {
-        const load = +((dlg.cpu.match(/^CPU: \d+ cores? · load (\d+)%$/) || [])[1]);
+        const load = +((dlg.cpu.match(/^CPU: \d+ cores? · load (\d+)%( · (nominal|fair|serious|critical))?$/) || [])[1]);
         check(load > 0 && dlg.cpuPath && !dlg.gpuPath, `…a measured CPU line ("${dlg.cpu}"), the CPU alone in the load graph`);
     }
     await page.keyboard.press('Escape');
