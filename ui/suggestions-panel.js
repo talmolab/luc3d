@@ -44,6 +44,7 @@ import { formatFrameNumber } from './frame-readout.js';
 import { frameUserCountInView } from './frame-counters.js';
 import { showPlaneDialog } from './plane-dialog.js';
 import { isPlaneModeActive } from './plane-definition.js';
+import { refreshSuggestedFrameMarks } from './suggested-frame-nav.js';
 import {
     SUGGESTION_METHODS, DEFAULT_PER_VIDEO, mulberry32, generateSuggestions,
     mergeSuggestions, shuffleSuggestions, removeUnlabeledSuggestions, removeSuggestion,
@@ -95,6 +96,8 @@ function setSuggestions(list) {
     if (!s) return;
     s.suggestions = list;
     markDirty();
+    // The suggested frames' ticks on the seekbar (ui/suggested-frame-nav.js).
+    refreshSuggestedFrameMarks();
 }
 
 /** The session's view names, in the view strip's order. */
@@ -210,6 +213,18 @@ function displayedRows() {
     const out = [];
     groups.forEach(function (g) { g.rows.forEach(function (r) { out.push(r); }); });
     return out;
+}
+
+/**
+ * Previous / Next suggested frame (Opt+Shift+← / →, ui/suggested-frame-nav.js) has put
+ * `frameIdx` on screen: select the focused view's row there, if it has one, so Prev /
+ * Next go on from it; else none is selected and they go on from the row on screen.
+ */
+export function selectSuggestionOnScreen(frameIdx) {
+    const cur = currentViewName();
+    _selected = suggestionExists(suggestions(), cur, frameIdx) ? { camera: cur, frameIdx: frameIdx } : null;
+    if (_selected) _open.add(cur);
+    refreshSuggestionsPanel({ force: true });
 }
 
 /** Prev (-1) / Next (+1) suggestion (also the `,` / `.` shortcuts). */

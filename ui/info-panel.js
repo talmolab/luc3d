@@ -16,6 +16,7 @@ import { buildLazySelect } from './lazy-select.js';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
          setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
+import { refreshSuggestedFrameMarks } from './suggested-frame-nav.js';
 import { refreshOutlinePanel } from './outline-flags-panel.js';
 import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
 import { createVideoTableCounter } from './video-table-counts.js';
@@ -1097,6 +1098,10 @@ export function exportSkeletonJSON(skeleton) {
 // ============================================
 
 export function updateInfoPanel() {
+    // The suggested frames' ticks on the seekbar are not part of the panel, so they
+    // refresh before the collapsed-panel return: nothing else tells them of a load, a
+    // session switch or a closed project (a no-op when they are the ones shown).
+    refreshSuggestedFrameMarks();
     // Collapsed panel: skip the whole rebuild. This is not a cheap refresh —
     // `populateVideosTable` walks every frame and group member (while the
     // Videos section is open),

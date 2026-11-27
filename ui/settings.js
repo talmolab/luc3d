@@ -57,6 +57,9 @@ const ACTION_CATALOG = [
     // Shift+Space, which is Play / Pause here.
     { id: 'nextSuggestion', label: 'Next suggestion', category: 'Navigation', binding: '.', editable: true, dispatched: true },
     { id: 'prevSuggestion', label: 'Previous suggestion', category: 'Navigation', binding: ',', editable: true, dispatched: true },
+    // Suggested FRAMES, every view at once, in the list's order (ui/suggested-frame-nav.js).
+    { id: 'prevSuggestedFrame', label: 'Previous suggested frame (all views)', category: 'Navigation', binding: 'Alt+Shift+ArrowLeft', editable: true, dispatched: true },
+    { id: 'nextSuggestedFrame', label: 'Next suggested frame (all views)', category: 'Navigation', binding: 'Alt+Shift+ArrowRight', editable: true, dispatched: true },
 
     // --- Editing ---
     { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+I', editable: true, dispatched: true },
